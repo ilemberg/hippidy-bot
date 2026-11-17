@@ -73,12 +73,11 @@ Scope:
 Exit criteria:
 
 - A request with a bad Slack signature is rejected.
-- A Slack retry of the same event does not produce a second reaction or a second API call
-  with side effects.
+- A Slack retry of the same event is dropped. Deduplication with storage arrives in slice 2.
 - The API contract is written down as a schema that the future UI can use.
 - Lint, typecheck and tests run in CI and block merge.
 
-Decide before starting: questions A1 to A7 in `open-questions.md`.
+Full specification, manual steps and working method: `slice-1.md`. Nothing is left to decide.
 
 Known hard parts: Slack sends events to one public URL per app. With a single Slack app,
 trying new code against Slack means deploying it to the real bot. Accepted for now; the

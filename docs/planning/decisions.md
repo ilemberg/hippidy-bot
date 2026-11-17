@@ -30,6 +30,12 @@ entries are not edited.
 | 21 | 2026-11-17 | API framework is Hono | Thinnest plumbing, official Bolt adapter on Vercel, easy to move off Vercel later |
 | 22 | 2026-11-17 | The UI will be a separate app in the same repo (`apps/web`), expected to be Next.js, and it talks only to the API | Keeps the "API is the only door" rule structural. Framework confirmed when the UI slice starts |
 | 23 | 2026-11-17 | Reverses 19: no second Slack app for now | Not solving it yet. The problem it addressed stays open, see "Deferred on purpose" |
+| 24 | 2026-11-17 | Browser testing: try Playwright with headless Chromium inside the agent sandbox first | Free and closest to how the agent already works. Needs an experiment when there is a UI |
+| 25 | 2026-11-17 | Tooling: pnpm workspace, ESLint (typescript-eslint strict, type-checked) with Prettier, Vitest, Zod at every boundary | Recommended picks accepted |
+| 26 | 2026-11-17 | Every client of the API authenticates with a service token, starting with the Slack adapter | The API endpoint is on the public internet |
+| 27 | 2026-11-17 | One Vercel deployment holds the Slack adapter and the API as separate modules. The adapter calls the API through its public route and contract | One thing to deploy, with the boundary still enforced |
+| 28 | 2026-11-17 | Hosting is Vercel | Fits the acknowledge-now, update-later design; free tier covers wave 1 |
+| 29 | 2026-11-17 | Slice 1 is specified in `slice-1.md` and has not started | Planning only until told to begin |
 
 ## Deferred on purpose
 
@@ -38,15 +44,15 @@ entries are not edited.
 | Protecting the bot from breaking itself (rollback, paths that never auto-merge) | Before slice 4 ships |
 | Evals | Slice 6, or earlier if a prompt change causes a regression |
 | Testing new code against Slack without taking the real bot offline. One Slack app sends events to one URL, so trying a change means repointing the real bot. Becomes painful at slice 4, when the bot is used to build the bot | When it first hurts, slice 4 at the latest |
-| Giving the agent a browser for testing. Options recorded in `stack-and-tools.md` | When there is a UI to test |
+| The experiment for decision 24 (does Chromium run in the sandbox) | When there is a UI to test |
 | Details of the testing split (decision 17) | Before implementing; starting point recorded in `wave-1.md` |
 
 ## Assumed, awaiting confirmation
 
 | # | Assumption | Question |
 |---|---|---|
-| b | API is hosted on Vercel | A5 |
-| c | One Slack workspace, one user, one channel to start | - |
+| a | One Slack workspace, one user, one channel to start | - |
+| b | MIT license for the public repo | Say so if you want another or none |
 
 ## Recommended, not yet decided
 

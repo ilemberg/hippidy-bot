@@ -30,41 +30,11 @@ Z3 (personas), Z4 (success measure) and Z5 (budget) are answered: see `decisions
 
 ## A. Blocks slice 1
 
-**A1. Repo and bot name.** You wrote `hippidy-boy` for the repo and `hippidy-bot` for the
-project. Assumed `hippidy-bot` everywhere. Confirm, and say which GitHub account owns it.
+Nothing is open. All of group A is decided (`decisions.md` 12, 16, 18 and 21 to 28) and
+slice 1 is specified in `slice-1.md`.
 
-**A2. Is the Slack adapter the same deployment as the API?**
-On Vercel a Slack bot is just an HTTP endpoint, so "bot calls API" can be an internal function
-call or a real HTTP hop.
-*Recommendation:* one deployment, two modules with a hard boundary. The adapter calls the
-same HTTP endpoint the UI will use, so the contract is exercised from day one, but there is
-only one thing to deploy.
-
-A3 (API framework) is answered: Hono, see `decisions.md` 21 and 22.
-
-A4 (Slack library) is answered: see `decisions.md` 18.
-
-**A5. Is Vercel right?**
-Yes for slices 1 to 3, given the webhook return path. The thing to watch: scheduled jobs on
-the free plan are limited, and the reconcile job wants to run every minute or two.
-*Recommendation:* Vercel for the API, and run the reconcile schedule from Supabase (pg_cron
-calling the API) when it is needed. Check current plan limits at slice 2.
-
-**A6. How is new code tested against Slack without taking the real bot offline?** Not being
-solved now (`decisions.md` 23). For slices 1 to 3 the answer is "deploy and try it on the real
-bot". Options when it hurts: a second Slack app pointed at a tunnel or at preview deployments,
-or sending recorded, signed Slack events at a preview URL without involving Slack at all.
-
-**A7. Tooling choices.** Package manager, linter, test runner.
-*Recommendation:* pnpm, ESLint with typescript-eslint (strict, type-checked) plus Prettier,
-Vitest, Zod for every boundary. Biome is the faster single-tool alternative if preferred.
-
-A8 (who may talk to the bot) is answered: see `decisions.md` 12.
-
-**A9. What does the API authenticate?**
-The adapter-to-API call needs a credential even inside one deployment, or the API endpoint is
-open to the internet.
-*Recommendation:* a service token per client (Slack adapter now, UI later), checked by the API.
+One item from this group is deferred, not solved: how to test new code against Slack without
+taking the real bot offline. See `decisions.md`, "Deferred on purpose".
 
 ## B. Blocks slice 2
 
@@ -175,10 +145,8 @@ before slice 4 ships.
 is documented in the repo; the bot's deploy and the agent's config are in the "human review
 always" tier.
 
-**D10. How does the agent get a browser to test with?** Not needed until there is a UI.
-Options are in `stack-and-tools.md`, "Browser access for the agent".
-*Recommendation:* try Playwright with headless Chromium inside the sandbox first; keep
-browser tests in GitHub Actions against the preview URL as the gate either way.
+D10 (browser for the agent) is answered: try Playwright in the sandbox first, see
+`decisions.md` 24.
 
 ## E. Blocks slice 5
 

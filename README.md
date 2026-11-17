@@ -5,13 +5,14 @@ explore how an AI teammate fits into a SaaS product engineering team: engineers 
 team lead, senior, mid, junior), product manager, designer, QA, engineering manager and other
 stakeholders.
 
-**Status: planning only. No code yet.**
+**Status: planning only. No code yet. Slice 1 is specified and has not started.**
 
 ## Planning docs
 
 | Doc | What it is |
 |---|---|
 | [docs/planning/wave-1.md](docs/planning/wave-1.md) | The wave 1 plan: six slices, each with a demo, exit criteria, and what is known to be hard |
+| [docs/planning/slice-1.md](docs/planning/slice-1.md) | The next slice in full: what gets built, the manual steps, how the work is done |
 | [docs/planning/open-questions.md](docs/planning/open-questions.md) | The grill: decisions that are open, grouped by when they block |
 | [docs/planning/decisions.md](docs/planning/decisions.md) | Decision log. Things move here from open-questions once decided |
 | [docs/planning/stack-and-tools.md](docs/planning/stack-and-tools.md) | Stack options, MCP servers, and off-the-shelf pieces that make this cheaper or better |

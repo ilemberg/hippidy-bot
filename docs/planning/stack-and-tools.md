@@ -11,7 +11,7 @@ be checked when the slice that needs them starts.
 | Repo layout | pnpm workspace: `apps/api`, later `apps/web`, `packages/*` | UI and API share types without sharing a runtime | Single package until the UI exists |
 | API | Hono on Vercel (decided) | Small, testable without a server, portable, typed client for React | Next.js; NestJS |
 | Validation and contract | Zod schemas, OpenAPI generated from them | One definition for API, Slack adapter and UI | tRPC |
-| Lint and format | ESLint (typescript-eslint, type-checked) + Prettier | Largest rule ecosystem | Biome: one tool, much faster |
+| Lint and format | ESLint (typescript-eslint, strict type-checked) + Prettier (decided) | Largest rule ecosystem | Biome: one tool, much faster |
 | Tests | Vitest | Fast, TypeScript-native | - |
 | Database | Supabase Postgres, SQL migrations via Supabase CLI, generated types | Stated; least tooling | Drizzle ORM |
 | Database tests | PGlite | Postgres without Docker, so tests run in the agent sandbox | Local Supabase in CI only |
@@ -48,8 +48,8 @@ browser, so each option below needs a short experiment before relying on it.
 | **Hosted browser over remote MCP** | A browser service the agent drives through an MCP server reached by URL | Paid, some free tiers (*verify*) | Managed Agents connects to MCP servers by URL only, so the local Playwright MCP that Claude Code uses does not carry over as is |
 | **Agent runs where a browser exists** | Self-hosted sandbox, or the Agent SDK inside GitHub Actions | Free to low | A runtime swap behind `AgentRuntime` |
 
-Recommended order: try the first; keep the second as the merge gate regardless; reach for the
-others only if the first fails.
+Decided: try the first. Keep the second as the merge gate regardless; reach for the others
+only if the first fails.
 
 Slack itself is not browser-tested. The bot's Slack behavior is tested by sending signed,
 recorded Slack events to the API.
