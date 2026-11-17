@@ -30,11 +30,12 @@ Z3 (personas), Z4 (success measure) and Z5 (budget) are answered: see `decisions
 
 ## A. Blocks slice 1
 
-Nothing is open. All of group A is decided (`decisions.md` 12, 16, 18 and 21 to 28) and
-slice 1 is specified in `slice-1.md`.
+Nothing is open. All of group A is decided (`decisions.md` 12, 16, 18, 21 to 28 and 30 to
+46) and slice 1 is finalized in `slice-1.md`.
 
 One item from this group is deferred, not solved: how to test new code against Slack without
-taking the real bot offline. See `decisions.md`, "Deferred on purpose".
+taking the real bot offline. A leading candidate is recorded with it in `decisions.md`,
+"Deferred on purpose", to be decided before slice 4.
 
 ## B. Blocks slice 2
 
@@ -181,7 +182,8 @@ you are paged in Slack.
 ## Things not yet mentioned at all
 
 - **Secrets.** Where each one lives (Vercel env, Anthropic vault, GitHub App key) and how it
-  is rotated. Public repo, so secret scanning and push protection on from the first commit.
+  is rotated. Public repo, so secret scanning and push protection on before any code lands
+  (decided, `decisions.md` 45), and no production secrets in preview deployments (39).
 - **Observability.** One correlation id from Slack event to API request to session to PR.
   Structured logs from slice 1; error tracking by slice 2.
 - **Prompt injection.** Slack messages, tickets and web pages are untrusted input to an agent
@@ -194,4 +196,4 @@ you are paged in Slack.
 - **Rate limits and concurrency.** What happens when five requests arrive at once.
 - **The UI slice.** Supabase Realtime makes a live view cheap if slice 3's model is right,
   which is another reason to get `messages` and `agent_events` right.
-- **License** for a public repo.
+- **License** for a public repo. Answered: MIT, `decisions.md` 31.

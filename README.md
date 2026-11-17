@@ -5,7 +5,7 @@ explore how an AI teammate fits into a SaaS product engineering team: engineers 
 team lead, senior, mid, junior), product manager, designer, QA, engineering manager and other
 stakeholders.
 
-**Status: planning only. No code yet. Slice 1 is specified and has not started.**
+**Status: planning only. No code yet. Slice 1 is finalized and has not started.**
 
 ## Planning docs
 

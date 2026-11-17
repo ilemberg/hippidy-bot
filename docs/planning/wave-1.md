@@ -62,18 +62,21 @@ Scope:
 - Slack app defined by a manifest file in the repo. Scopes: `app_mentions:read`,
   `reactions:write`, `chat:write`.
 - Slack adapter built on Bolt for JavaScript with the `@vercel/slack-bolt` adapter (decided).
-  Bolt handles signature checks, the URL verification challenge and retries. Our code:
-  receive `app_mention`, call the Core API, add the reaction when the API returns 200.
+  Bolt handles signature checks, the URL verification challenge and acknowledging Slack in
+  time. Our code: receive `app_mention`, call the Core API, add the reaction when the API
+  accepts the message, and drop Slack's retries after a timeout.
 - The adapter passes full sender details to the API (user, channel, thread, timestamp,
   workspace), even though nothing stores them yet.
 - Core API built with Hono (decided): one endpoint that accepts a channel-agnostic inbound
-  message and returns 200.
+  message and returns 202.
 - Deployed on Vercel, with a preview deployment per pull request.
 
 Exit criteria:
 
 - A request with a bad Slack signature is rejected.
-- A Slack retry of the same event is dropped. Deduplication with storage arrives in slice 2.
+- A Slack retry after a timeout is dropped. Deduplication with storage arrives in slice 2.
+- The app starts and `/health` works with no Slack configuration, and the API rejects every
+  call when its token is not configured.
 - The API contract is written down as a schema that the future UI can use.
 - Lint, typecheck and tests run in CI and block merge.
 
@@ -94,6 +97,8 @@ Scope:
 - Top-level mention starts a session. A message in an existing bot thread continues it.
 - Return path: webhook on session idle, fetch new agent messages, post to the Slack thread.
 - Reaction lifecycle on the user's message: 👀 received, ✅ answered, ❌ failed.
+- Look up the sender's name from their Slack ID so the agent knows who it is talking to
+  (adds the `users:read` scope; `decisions.md` 34).
 - Per-session budget cap.
 - Slack formatting: convert the agent's Markdown to Slack's format, split long replies.
 
@@ -163,6 +168,11 @@ Risks to design for:
   rollback (Vercel instant rollback).
 - Single user in a personal workspace, so no allowlist (decided). Revisit if others join.
 - The repo is public. Skills and instructions in it are part of the trust boundary.
+- Preview deployments run agent-written code, so they hold no production secrets
+  (`decisions.md` 39).
+- Trying changes in real Slack without touching the real bot: per-preview Slack apps are the
+  leading candidate, but they put a Vercel token into preview builds. Decide before this
+  slice (`decisions.md`, "Deferred on purpose").
 
 Decide before starting: questions D1 to D9.
 
@@ -213,8 +223,9 @@ What makes this work for an agent:
 - The agent runs tier 1 itself before pushing, so most mistakes never reach a PR.
 - Tier 2 and 3 results come back to the same agent session (GitHub tells the API, the API
   tells the agent), so it fixes failures it could not see in its sandbox.
-- Recorded payloads from real Slack events and real agent sessions are the fixtures. They are
-  collected from slice 1 onward at no extra cost.
+- Recorded payloads from real Slack events and real agent sessions are the fixtures. Slice 1
+  captures one real Slack event by hand from the log, since Vercel keeps logs only briefly;
+  from slice 2, storage keeps them at no extra cost.
 - If tier 1 proves too thin, the fallback is running the agent where Docker exists (a
   self-hosted sandbox, or the Agent SDK inside GitHub Actions). That is a runtime swap behind
   the `AgentRuntime` interface, not a redesign.

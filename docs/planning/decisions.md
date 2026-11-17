@@ -36,6 +36,23 @@ entries are not edited.
 | 27 | 2026-11-17 | One Vercel deployment holds the Slack adapter and the API as separate modules. The adapter calls the API through its public route and contract | One thing to deploy, with the boundary still enforced |
 | 28 | 2026-11-17 | Hosting is Vercel | Fits the acknowledge-now, update-later design; free tier covers wave 1 |
 | 29 | 2026-11-17 | Slice 1 is specified in `slice-1.md` and has not started | Planning only until told to begin |
+| 30 | 2026-11-17 | Refines 27: the adapter reaches the API inside the process, through the API's own route, auth check and validation. The entry file (`apps/api/src/index.ts`) hands the API's request handler to the adapter as a small client. Switching to a network call means changing that client only | No second network hop, and the contract is still exercised on every call |
+| 31 | 2026-11-17 | Confirms assumption b: MIT license | Confirmed in conversation |
+| 32 | 2026-11-17 | Node is the newest LTS version Vercel supports when work starts (24 is known to work; 26 if Vercel lists it), pinned in `engines`, `.nvmrc` and CI. pnpm is pinned in the `packageManager` field | Your machine, CI, Vercel and later the agent's sandbox run the same versions. `@vercel/slack-bolt` needs Node 22 or later |
+| 33 | 2026-11-17 | If the two-package workspace will not deploy cleanly on Vercel in the first pull request, collapse to one package and split `packages/contracts` out when the UI arrives | Slice 1 proves the path, not the layout. Agreed in advance so it cannot stall the slice |
+| 34 | 2026-11-17 | Sender identity is the Slack user ID plus the workspace ID, and slice 1 sends only those. Names, and roles when personas need them, are looked up from the ID from slice 2 | The ID never changes and is unique; names change. Needed later for addressing people, recording who asked and who approved, and deleting by person (C6) |
+| 35 | 2026-11-17 | The adapter removes the bot's own mention from the message text. Other Slack markup is passed as is | The API should not need to know Slack's mention syntax |
+| 36 | 2026-11-17 | Direct messages to the bot come later, not in slice 1. They need the `message.im` event, the `im:history` scope and a reinstall | Wanted, not urgent. `app_mention` does not fire in direct messages |
+| 37 | 2026-11-17 | The app starts without Slack configuration. The Bolt app is created on the first `/slack/events` request, and that route returns 503 until the Slack variables are set. Configuration is validated with Zod, each part checking only what it needs | `@vercel/slack-bolt`'s receiver throws when it is created without a signing secret, which would take down `/health` and every preview |
+| 38 | 2026-11-17 | The service token check fails closed: with no token configured, every request is rejected. Tokens are compared in constant time. The token is set in Vercel right after the first pull request merges | A missing variable must never let a request through, and `/v1/messages` ships before the Slack work |
+| 39 | 2026-11-17 | Secrets (Slack bot token, signing secret, service token) are set for Vercel's Production environment only, never Preview | Previews get no Slack traffic. From slice 4 the agent writes the code that previews run |
+| 40 | 2026-11-17 | Slack retries with reason `http_timeout` are dropped; other retries are processed. Slack's `already_reacted` error counts as success | After a timeout the first attempt is very likely still running; after a crash it did nothing, and dropping the retry would lose the message. Reacting twice is harmless |
+| 41 | 2026-11-17 | The mention handling is a plain function that receives the API client, the Slack client and the logger, and is tested directly. One set of tests goes through the Slack route for the signature check, URL verification and the 503. The first fixture is Slack's documented example event, replaced after the demo by a real event with personal details removed | The receiver acknowledges Slack before the handler runs, so tests through the route alone would be racy. No real event exists until the app is live |
+| 42 | 2026-11-17 | Message contract: the thread id is always present (Slack's `thread_ts`, or the message's own timestamp for a top-level message); the message carries both the source event id and its own identity (channel plus timestamp); the source event id is the correlation id and reaches the API in a header; `/v1/messages` returns 202 with an id for the message; all errors share one shape defined in `packages/contracts` | Cheap now, a breaking change later. Slice 2 maps threads to conversations and deduplicates from these fields, and listening to all channel messages (B3) would deliver one message as two events |
+| 43 | 2026-11-17 | The Slack adapter is kept apart from the API by a lint rule or by being its own package, so it can import only the shared contract | The boundary should be enforced by tooling, as in decision 22, so the agent cannot break it by accident from slice 4 |
+| 44 | 2026-11-17 | The CI check is required before merging to `main`, set right after the first pull request's CI has run | Wave 1 says CI blocks merge, and slice 4 depends on it. GitHub only offers checks that have run once |
+| 45 | 2026-11-17 | Secret scanning and push protection are turned on before any code lands | The repo is public |
+| 46 | 2026-11-17 | Slice 1 plan is finalized after review (decisions 30 to 45). Not started | Planning only until told to begin |
 
 ## Deferred on purpose
 
@@ -43,7 +60,7 @@ entries are not edited.
 |---|---|
 | Protecting the bot from breaking itself (rollback, paths that never auto-merge) | Before slice 4 ships |
 | Evals | Slice 6, or earlier if a prompt change causes a regression |
-| Testing new code against Slack without taking the real bot offline. One Slack app sends events to one URL, so trying a change means repointing the real bot. Becomes painful at slice 4, when the bot is used to build the bot | When it first hurts, slice 4 at the latest |
+| Testing new code against Slack without taking the real bot offline. One Slack app sends events to one URL, so trying a change means repointing the real bot. Becomes painful at slice 4, when the bot is used to build the bot. Leading candidate (found 2026-11-17): `@vercel/slack-bolt`'s `vercel-slack build` command, which creates a separate Slack app for each preview branch from the manifest and points it at that preview. Costs: a Slack configuration token that expires every 12 hours (renewed with a refresh token), a Vercel API token that can change the project, and a project setting that exposes system variables. The Vercel token is present in preview builds, which run agent-written code from slice 4. The manifest would also need the events URL in it | Decide before slice 4 |
 | The experiment for decision 24 (does Chromium run in the sandbox) | When there is a UI to test |
 | Details of the testing split (decision 17) | Before implementing; starting point recorded in `wave-1.md` |
 
@@ -52,7 +69,7 @@ entries are not edited.
 | # | Assumption | Question |
 |---|---|---|
 | a | One Slack workspace, one user, one channel to start | - |
-| b | MIT license for the public repo | Say so if you want another or none |
+| b | MIT license for the public repo | Confirmed: decision 31 |
 
 ## Recommended, not yet decided
 
