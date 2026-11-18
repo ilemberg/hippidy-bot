@@ -146,10 +146,9 @@ Decide before starting: questions C1 to C6.
 Re-planned 2026-11-18 from what slice 2 built: see `slice-3.md`. The sketch above is kept as
 it was; what was built is a raw event log (`agent_events`), usage on `conversations`, a
 transcript view instead of `messages` and `agent_sessions` tables, and three read routes
-(`decisions.md` 75 to 96).
+(`decisions.md` 75 to 97).
 
-Built and deployed 2026-11-18; it closes when one live check passes. See `slice-3.md` and the
-retro below.
+Done 2026-11-18: see `slice-3.md` and the retro below.
 
 ## Slice 4: the agent gets a development environment
 
@@ -186,7 +185,8 @@ Decide before starting: questions D1 to D9.
 
 Carried into this slice from slice 3:
 
-- Confirm the reconcile job is running in production before anything depends on it again.
+- Give the build session a way to see production (see the slice 3 retro): slice 3 found
+  the reconcile job had been rejected for a whole slice without anyone noticing.
 - Move the CI secrets into the `release` environment and delete the repository ones
   (decision 94). Until then a pull request, including the agent's, can add a workflow that
   reads them.
@@ -349,12 +349,12 @@ deployed; their live check (a stop mid-answer, the bot using your name) is still
 **Carried forward:** check names and stop live; read only new agent events instead of the
 whole list on every sync; a long reply that fails partway is re-posted from the start.
 
-### Slice 3 (built 2026-11-18, one live check open)
+### Slice 3 (finished 2026-11-18)
 
 **Shipped:** ilemberg/hippidy-bot pull requests 10 (plan, decisions, schema), 11 (write path),
 12 (read path) and 13 (pinned actions, CI secrets kept to `main`). Checked live: a new
-conversation's events, usage and cost are stored, and its transcript reads back. Not yet: the
-slice 2 conversation was never backfilled (see below), so the slice is not closed.
+conversation's events, usage and cost are stored, its transcript reads back, reconcile
+answers 200 every minute, and no conversation with a session is left unstored.
 
 **What was learned:**
 
@@ -376,12 +376,16 @@ slice 2 conversation was never backfilled (see below), so the slice is not close
   migration shipped with code, safely, because both old and new code read both forms.
 - **One session carried four pull requests** by restarting its branch from `main` after each
   merge (decision 88). The friction of slice 2 did not come back.
-- **The build session cannot see production.** It took four screenshots from you to learn
-  that the write path worked and the backfill did not. The cause was a slice 2 leftover
-  nobody had noticed: Supabase has called `/v1/reconcile` every minute since slice 2 and
-  been answered 401 every time, because the token in Vault is not the one the API has. The
-  safety net for lost webhooks was never on. A second leftover: the bot does not get the
-  sender's name. "Merged and green" had been standing in for "works".
+- **The build session cannot see production.** It took eight screenshots from you to learn
+  that the write path worked and the backfill did not, and why. The cause was a slice 2
+  leftover nobody had noticed: Supabase had called `/v1/reconcile` every minute since slice
+  2 and been answered 401 every time, because in Vercel the token had been saved under the
+  wrong name. The safety net for lost webhooks was never on. The API said so in its log at
+  every cold start (`config.reconcile_token_missing`), where nobody was looking. "Merged and
+  green" had been standing in for "works".
+- **Secrets end up in chat when the steps leave room for it.** Two tokens were pasted here
+  while debugging and had to be replaced. The steps that worked kept the token in a shell
+  variable, copied it without printing it, and compared fingerprints instead of values.
 - **A repository secret is open to any workflow a pull request adds.** Protecting the agent
   sync's dry run, as planned, would not have closed that. The secrets now belong in an
   environment only `main` may use, which needs your hands to finish.
@@ -398,31 +402,10 @@ slice 2 conversation was never backfilled (see below), so the slice is not close
 **Carried forward:** read only new events (decision 95); the sync lease owner check; a long
 reply that fails partway is re-posted from the start; lazy-load Bolt; Dependabot alerts.
 
-**To do by hand before the slice closes:**
+**Done by hand to close the slice:** a new reconcile token, saved as `RECONCILE_TOKEN` in
+Vercel (Production) and as `hippidy_reconcile_token` in Supabase Vault, then checked three
+ways: the API called directly with the token, Supabase's own record of its calls, and the
+count of conversations left unstored.
 
-1. Give the reconcile job a token the API accepts. Make a new one (`openssl rand -hex 32`)
-   and set the same value in both places, with no space or line break around it:
-   - Vercel: Settings, Environment Variables, `RECONCILE_TOKEN`, Production only. Then
-     redeploy: a changed variable only reaches new deployments.
-   - Supabase: Project Settings, Vault, `hippidy_reconcile_token`.
-
-   If you want to know what was wrong first, search Vercel's logs for `auth.rejected` and
-   read the `reason`: `service_token_not_configured` (the variable is missing in Production
-   or shorter than 32 characters), `wrong_token` (the two differ) or `malformed_header` (the
-   Vault value has a space or line break in it).
-
-2. Two minutes later, this should show `http response` rows starting with 200:
-
-   ```sql
-   select coalesce(status_code::text, 'no status') || ' '
-            || left(coalesce(content, error_msg, ''), 80) as response,
-          created
-   from net._http_response order by created desc limit 3;
-   ```
-
-3. A few minutes after that, this should be 0:
-
-   ```sql
-   select count(*) from conversations
-   where agent_session_id is not null and agent_events_synced_at is null;
-   ```
+**Still to do by hand:** move the CI secrets into the `release` environment before slice 4;
+update and reinstall the Slack app so the bot gets the sender's name (both in the README).

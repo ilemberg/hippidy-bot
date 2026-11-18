@@ -1,9 +1,9 @@
 # Slice 3: Supabase as the record
 
-Status: **built and deployed 2026-11-18; not closed yet.** Pull requests A to D are merged
-(ilemberg/hippidy-bot 10 to 13). Two live checks are open, both yours: see "Open before the
-slice closes" below. Reading only new events (pull request E) is carried forward to slice 4
-(decision 95). Retro in `wave-1.md`.
+Status: **done 2026-11-18.** Pull requests A to D are merged (ilemberg/hippidy-bot 10 to 13)
+and the live checks passed (decision 97). Reading only new events (pull request E) is carried
+forward to slice 4 (decision 95). Retro in `wave-1.md`. The plan below is kept as it was
+built.
 
 **Demo:** ask `@hippidy-bot` a question and get an answer, as in slice 2. Then read the whole
 conversation back from the API with Anthropic out of the picture: who wrote what, what the
@@ -197,26 +197,27 @@ All answered on 2026-11-18 ("go with your picks").
   restrict it to `main`, add the four secrets, delete the repository ones. The protection only
   holds once the repository secrets are deleted.
 
-## Open before the slice closes
+## How the slice closed
 
-Checked live on 2026-11-18, after the write path deployed: events, usage and cost are stored
-for a new conversation, the transcript reads correctly, and no note has an empty text. Two
-things were not right, and neither is in this slice's code:
+Checked live on 2026-11-18:
 
-- **The slice 2 conversation was not backfilled.** The backfill runs from `/v1/reconcile`.
-  Supabase does call it every minute, and every call is answered 401: the token in Supabase
-  Vault (`hippidy_reconcile_token`) is not the `RECONCILE_TOKEN` the API has. Confirmed
-  2026-11-18 from Supabase's own record of the calls. So the safety net for lost webhooks
-  has not been running since slice 2. The fix is by hand: one new token, set in both places
-  (retro, "to do by hand").
+- After the write path deployed: a new conversation's events, usage and cost are stored, its
+  transcript reads correctly, and no note has an empty text.
+- The slice 2 conversation had not been backfilled. The backfill runs from `/v1/reconcile`,
+  which Supabase had called every minute since slice 2 and which had answered 401 every
+  time: in Vercel the token was saved under the name `HIPPIDY_RECONCILE_TOKEN`, not
+  `RECONCILE_TOKEN`, so the API had no reconcile token at all. The safety net for lost
+  webhooks had never been on.
+- After a new token was set under the right name in Vercel and in Supabase Vault
+  (`hippidy_reconcile_token`): reconcile answers 200 every minute, and no conversation with
+  a session is left unstored.
+
+Still open, neither holding the slice:
+
 - **The bot does not know the sender's name** (`actor_name` is null). Most likely the Slack
   app was not updated and reinstalled after slice 2's "names and stop" (README).
-
-The slice closes when the first is fixed and the backfill has run (`not_yet_stored` is 0).
-The second is slice 2's and does not hold the slice.
-
-Also yours, any time before slice 4: move the CI secrets into the `release` environment
-(README, "Slice 3 setup: keep the CI secrets to `main`").
+- **Before slice 4:** move the CI secrets into the `release` environment (README, "Slice 3
+  setup: keep the CI secrets to `main`").
 
 ## Risks
 
