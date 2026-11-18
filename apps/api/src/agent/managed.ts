@@ -48,9 +48,10 @@ export function createManagedAgentRuntime(
     },
 
     async sendMessage(sessionId, text) {
-      await client.beta.sessions.events.send(sessionId, {
+      const sent = await client.beta.sessions.events.send(sessionId, {
         events: [{ type: "user.message", content: [{ type: "text", text }] }],
       });
+      return sent.data?.[0]?.id;
     },
 
     async interrupt(sessionId) {
@@ -92,7 +93,11 @@ async function lookUpIds(client: Anthropic, config: AgentConfig): Promise<Ids> {
 export function toAgentEvent(event: BetaManagedAgentsSessionEvent): AgentEvent | undefined {
   switch (event.type) {
     case "user.message":
-      return { kind: "user_message", id: event.id };
+      return {
+        kind: "user_message",
+        id: event.id,
+        processed: event.processed_at !== null && event.processed_at !== undefined,
+      };
     case "agent.message": {
       const text = event.content
         .flatMap((block) => (block.type === "text" ? [block.text] : []))

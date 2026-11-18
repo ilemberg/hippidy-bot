@@ -3,15 +3,25 @@ import type { AgentEvent, AgentRuntime, AgentSession, IdleReason } from "./runti
 interface FakeSession {
   metadata: Record<string, string>;
   sent: string[];
+  /** Processed events, in the order the runtime lists them. */
   events: AgentEvent[];
+  /** User messages still waiting in the session's queue; listed after everything else. */
+  queued: { id: string }[];
   interrupted: number;
 }
 
-/** An in-memory agent runtime for tests. The test plays the agent with `reply` and `idle`. */
+/**
+ * An in-memory agent runtime for tests. The test plays the agent: `reply` answers the oldest
+ * queued message in one turn, `idle` and `terminate` end a session's work other ways. Queued
+ * messages are listed last with `processed: false`, as Managed Agents orders events by when
+ * they were processed.
+ */
 export class FakeAgentRuntime implements AgentRuntime {
   readonly sessions = new Map<string, FakeSession>();
   /** Set to make the next call of that kind fail once. */
   failNext: Partial<Record<"startSession" | "sendMessage" | "listEvents", Error>> = {};
+  /** Set to make every send fail, as for a session paused at its budget. */
+  rejectAllSends: Error | undefined;
   private nextId = 1;
 
   private id(prefix: string): string {
@@ -39,17 +49,20 @@ export class FakeAgentRuntime implements AgentRuntime {
       metadata: input.metadata,
       sent: [],
       events: [],
+      queued: [],
       interrupted: 0,
     });
     return Promise.resolve({ sessionId, agentId: "agent_fake", agentVersion: 1 });
   }
 
-  sendMessage(sessionId: string, text: string): Promise<void> {
+  sendMessage(sessionId: string, text: string): Promise<string | undefined> {
     this.takeFailure("sendMessage");
+    if (this.rejectAllSends !== undefined) return Promise.reject(this.rejectAllSends);
     const session = this.session(sessionId);
     session.sent.push(text);
-    session.events.push({ kind: "user_message", id: this.id("sevt") });
-    return Promise.resolve();
+    const id = this.id("sevt");
+    session.queued.push({ id });
+    return Promise.resolve(id);
   }
 
   interrupt(sessionId: string): Promise<void> {
@@ -59,20 +72,35 @@ export class FakeAgentRuntime implements AgentRuntime {
 
   listEvents(sessionId: string): Promise<AgentEvent[]> {
     this.takeFailure("listEvents");
-    return Promise.resolve([...this.session(sessionId).events]);
+    const session = this.session(sessionId);
+    return Promise.resolve([
+      ...session.events,
+      ...session.queued.map(({ id }) => ({ kind: "user_message" as const, id, processed: false })),
+    ]);
   }
 
-  /** The agent answers: it runs, says each text, and goes idle with end_turn. */
+  /** One turn: the oldest queued message is processed, the agent says each text, then idles. */
   reply(sessionId: string, ...texts: string[]): void {
-    const { events } = this.session(sessionId);
-    events.push({ kind: "running", id: this.id("sevt") });
-    for (const text of texts) events.push({ kind: "agent_message", id: this.id("sevt"), text });
-    events.push({ kind: "idle", id: this.id("sevt"), reason: "end_turn" });
+    const session = this.session(sessionId);
+    const next = session.queued.shift();
+    if (next !== undefined) {
+      session.events.push({ kind: "user_message", id: next.id, processed: true });
+    }
+    session.events.push({ kind: "running", id: this.id("sevt") });
+    for (const text of texts) {
+      session.events.push({ kind: "agent_message", id: this.id("sevt"), text });
+    }
+    session.events.push({ kind: "idle", id: this.id("sevt"), reason: "end_turn" });
   }
 
-  /** The agent stops without finishing, for the given reason. */
+  /** The agent stops for the given reason after processing the oldest queued message. */
   idle(sessionId: string, reason: IdleReason): void {
-    this.session(sessionId).events.push({ kind: "idle", id: this.id("sevt"), reason });
+    const session = this.session(sessionId);
+    const next = session.queued.shift();
+    if (next !== undefined) {
+      session.events.push({ kind: "user_message", id: next.id, processed: true });
+    }
+    session.events.push({ kind: "idle", id: this.id("sevt"), reason });
   }
 
   terminate(sessionId: string): void {

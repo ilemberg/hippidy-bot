@@ -25,8 +25,20 @@ function convertText(text: string): string {
     .join("");
 }
 
+/** Marks where a protected link goes back in; a control character never typed by people. */
+const LINK_PLACEHOLDER = new RegExp(String.raw`\u0001(\d+)\u0001`, "g");
+
 function convertInline(text: string): string {
-  const lines = escapeHtml(text).split("\n");
+  // Links become placeholders first, so emphasis rules never touch a URL.
+  const links: string[] = [];
+  const protectedText = text.replace(
+    /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    (_match, label: string, url: string) => {
+      links.push(`<${escapeHtml(url)}|${escapeHtml(label)}>`);
+      return `\u0001${links.length - 1}\u0001`;
+    },
+  );
+  const lines = escapeHtml(protectedText).split("\n");
   return lines
     .map((line) => {
       const heading = /^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/.exec(line);
@@ -35,11 +47,11 @@ function convertInline(text: string): string {
       return line.replace(/^(\s*)[-*+]\s+/, "$1• ");
     })
     .join("\n")
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, "<$2|$1>")
     .replace(/(\*\*|__)(?=\S)(.+?)(?<=\S)\1/g, "\u0000$2\u0000")
     .replace(/(^|[^*\w])\*(?=\S)([^*\n]+?)(?<=\S)\*(?![*\w])/g, "$1_$2_")
     .replace(/~~(?=\S)(.+?)(?<=\S)~~/g, "~$1~")
-    .replaceAll("\u0000", "*");
+    .replaceAll("\u0000", "*")
+    .replace(LINK_PLACEHOLDER, (_match, index: string) => links[Number(index)] ?? "");
 }
 
 function stripEmphasis(text: string): string {
@@ -48,6 +60,16 @@ function stripEmphasis(text: string): string {
 
 function escapeHtml(text: string): string {
   return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+/** A cut at `limit` that does not fall inside an escape (`&amp;`) or a link (`<url|text>`). */
+function safeHardCut(text: string, limit: number): number {
+  const head = text.slice(0, limit);
+  const openLink = head.lastIndexOf("<");
+  if (openLink > head.lastIndexOf(">") && openLink > 0) return openLink;
+  const amp = head.lastIndexOf("&");
+  if (amp > head.length - 6 && !head.slice(amp).includes(";") && amp > 0) return amp;
+  return limit;
 }
 
 /** Slack accepts long messages, but they read badly; replies are split well below the limit. */
@@ -63,7 +85,7 @@ export function splitForSlack(text: string, limit = SLACK_CHUNK_CHARS): string[]
   while (rest.length > limit) {
     let cut = rest.lastIndexOf("\n\n", limit);
     if (cut < limit / 2) cut = rest.lastIndexOf("\n", limit);
-    if (cut < limit / 2) cut = limit;
+    if (cut < limit / 2) cut = safeHardCut(rest, limit);
     let chunk = rest.slice(0, cut).trimEnd();
     rest = rest.slice(cut).replace(/^\n+/, "");
     if ((chunk.match(/```/g) ?? []).length % 2 === 1) {

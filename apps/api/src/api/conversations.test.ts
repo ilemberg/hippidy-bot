@@ -1,11 +1,13 @@
 import type { InboundMessage } from "@hippidy/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FakeAgentRuntime } from "../agent/fake.ts";
-import { getConversation } from "../store/conversations.ts";
+import { getConversation, MAX_DELIVERY_ATTEMPTS } from "../store/conversations.ts";
 import { createTestDb } from "../store/testing.ts";
 import { memoryLogger } from "../testing.ts";
 import {
   formatForAgent,
+  MAX_FORWARD_ATTEMPTS,
+  notes,
   reconcile,
   receiveMessage,
   syncConversation,
@@ -55,18 +57,25 @@ async function conversationOf(sessionId: string) {
   return getConversation(db, String(rows[0]?.id));
 }
 
+async function onlyConversation() {
+  const rows = await db.query(`select id from conversations`);
+  expect(rows).toHaveLength(1);
+  return getConversation(db, String(rows[0]?.id));
+}
+
 async function sync(sessionId: string) {
   await syncConversation(deps, await conversationOf(sessionId), log);
 }
 
-/** Makes every waiting conversation and message look old enough for reconcile. */
+/** Makes every waiting conversation and recorded message look `seconds` older. */
 async function age(seconds: number) {
   await db.query(
     `update conversations set waiting_since = waiting_since - make_interval(secs => $1)`,
     [seconds],
   );
   await db.query(
-    `update inbound_messages set created_at = created_at - make_interval(secs => $1)`,
+    `update inbound_messages set created_at = created_at - make_interval(secs => $1),
+       forwarded_at = forwarded_at - make_interval(secs => $1)`,
     [seconds],
   );
 }
@@ -89,8 +98,7 @@ describe("receiveMessage", () => {
   it("continues the same session for a later message in the thread", async () => {
     await receiveMessage(deps, message(1), log);
     await receiveMessage(deps, message(2), log);
-    const sessionId = runtime.onlySessionId();
-    expect(runtime.sessions.get(sessionId)?.sent).toHaveLength(2);
+    expect(runtime.sessions.get(runtime.onlySessionId())?.sent).toHaveLength(2);
   });
 
   it("starts a separate session for a different thread", async () => {
@@ -145,18 +153,10 @@ describe("syncConversation", () => {
 
     await sync(sessionId);
 
+    const target = { source: "slack", workspaceId: "T1", channelId: "C1", threadId: "100.000001" };
     expect(slack.delivered).toEqual([
-      {
-        kind: "reply",
-        target: { source: "slack", workspaceId: "T1", channelId: "C1", threadId: "100.000001" },
-        text: "Here's the answer.",
-      },
-      {
-        kind: "status",
-        target: { source: "slack", workspaceId: "T1", channelId: "C1", threadId: "100.000001" },
-        messageIds: ["100.000001"],
-        status: "answered",
-      },
+      { kind: "reply", target, text: "Here's the answer." },
+      { kind: "status", target, messageIds: ["100.000001"], status: "answered" },
     ]);
     expect(await conversationOf(sessionId)).toMatchObject({
       status: "answered",
@@ -164,14 +164,32 @@ describe("syncConversation", () => {
     });
   });
 
-  it("posts a reply once when the webhook and reconcile both sync", async () => {
+  it("posts a reply once however many times it syncs", async () => {
     await receiveMessage(deps, message(1), log);
     const sessionId = runtime.onlySessionId();
     runtime.reply(sessionId, "Once.");
-    await Promise.all([sync(sessionId), sync(sessionId)]);
     await sync(sessionId);
+    await sync(sessionId);
+    await reconcile(deps, log);
     expect(slack.replies()).toEqual(["Once."]);
     expect(slack.statuses()).toHaveLength(1);
+  });
+
+  it("lets only one sync run at a time, so replies keep their order", async () => {
+    await receiveMessage(deps, message(1), log);
+    const sessionId = runtime.onlySessionId();
+    runtime.reply(sessionId, "First.", "Second.");
+    const stalled = slack.stallNext();
+
+    const first = sync(sessionId); // stalls while posting "First."
+    await stalled;
+    await sync(sessionId); // finds the first sync running and leaves the work to it
+    expect(slack.replies()).toEqual([]);
+
+    slack.release();
+    await first;
+    expect(slack.replies()).toEqual(["First.", "Second."]);
+    expect(lines).toContainEqual(expect.objectContaining({ msg: "conversation.sync_skipped" }));
   });
 
   it("posts several messages of one turn in order", async () => {
@@ -182,27 +200,25 @@ describe("syncConversation", () => {
     expect(slack.replies()).toEqual(["First.", "Second.", "Third."]);
   });
 
-  it("answers two quick messages in order, settling each only when its turn is done", async () => {
+  it("does not mark a queued message answered when the turn before it ends", async () => {
     await receiveMessage(deps, message(1), log);
     await receiveMessage(deps, message(2), log);
     const sessionId = runtime.onlySessionId();
 
-    // The agent has answered the first message but not yet started on the second.
-    runtime.reply(sessionId, "Answer 1.");
-    const events = runtime.sessions.get(sessionId)?.events ?? [];
-    // Move the second user message after the first answer, as the session queue does.
-    const second = events.splice(1, 1);
-    events.push(...second);
+    runtime.reply(sessionId, "Answer 1."); // the session answered message 1; 2 is still queued
     await sync(sessionId);
     expect(slack.replies()).toEqual(["Answer 1."]);
-    expect(slack.statuses()).toEqual([]); // a user message is still pending after the idle
+    expect(slack.statuses()).toEqual([{ messageIds: ["100.000001"], status: "answered" }]);
+    expect((await conversationOf(sessionId)).status).toBe("waiting");
 
     runtime.reply(sessionId, "Answer 2.");
     await sync(sessionId);
     expect(slack.replies()).toEqual(["Answer 1.", "Answer 2."]);
     expect(slack.statuses()).toEqual([
-      { messageIds: ["100.000001", "100.000002"], status: "answered" },
+      { messageIds: ["100.000001"], status: "answered" },
+      { messageIds: ["100.000002"], status: "answered" },
     ]);
+    expect((await conversationOf(sessionId)).status).toBe("answered");
   });
 
   it("retries a failed reply on the next sync, without skipping ahead", async () => {
@@ -212,40 +228,102 @@ describe("syncConversation", () => {
     slack.failures = 1;
 
     await sync(sessionId);
-    expect(slack.replies()).toEqual([]);
-    expect((await conversationOf(sessionId)).status).toBe("waiting");
+    expect(slack.delivered).toEqual([]);
 
     await sync(sessionId);
     expect(slack.replies()).toEqual(["First.", "Second."]);
-    expect((await conversationOf(sessionId)).status).toBe("answered");
+    expect(slack.statuses()).toHaveLength(1);
+  });
+
+  it("retries a failed status (reaction), not just replies", async () => {
+    await receiveMessage(deps, message(1), log);
+    const sessionId = runtime.onlySessionId();
+    runtime.reply(sessionId, "Done.");
+    slack.failures = 0;
+    // Let the reply through, then fail the status once.
+    const deliver = slack.deliver.bind(slack);
+    let calls = 0;
+    slack.deliver = (delivery) => {
+      calls++;
+      if (calls === 2) return Promise.reject(new Error("reactions down"));
+      return deliver(delivery);
+    };
+    await sync(sessionId);
+    expect(slack.statuses()).toEqual([]);
+
+    await reconcile(deps, log);
+    expect(slack.statuses()).toEqual([{ messageIds: ["100.000001"], status: "answered" }]);
+  });
+
+  it("gives up on a delivery that keeps failing, logs it, and sends what comes after", async () => {
+    await receiveMessage(deps, message(1), log);
+    const sessionId = runtime.onlySessionId();
+    runtime.reply(sessionId, "Doomed.");
+    slack.failures = MAX_DELIVERY_ATTEMPTS;
+    for (let attempt = 0; attempt < MAX_DELIVERY_ATTEMPTS; attempt++) await sync(sessionId);
+
+    expect(slack.replies()).toEqual([]);
+    expect(slack.statuses()).toEqual([{ messageIds: ["100.000001"], status: "answered" }]);
+    expect(lines).toContainEqual(
+      expect.objectContaining({ msg: "conversation.delivery_abandoned", level: "error" }),
+    );
   });
 
   it.each([
-    ["budget_reached", "spending limit"],
-    ["retries_exhausted", "went wrong"],
-    ["refusal", "can't help"],
-  ] as const)("reports %s as a failure", async (reason, words) => {
+    ["retries_exhausted", notes.retries_exhausted],
+    ["refusal", notes.refusal],
+  ] as const)("reports %s as a failure of that turn", async (reason, note) => {
     await receiveMessage(deps, message(1), log);
     const sessionId = runtime.onlySessionId();
     runtime.idle(sessionId, reason);
     await sync(sessionId);
-    expect(slack.replies()).toEqual([expect.stringContaining(words) as string]);
+    expect(slack.replies()).toEqual([note]);
     expect(slack.statuses()).toEqual([{ messageIds: ["100.000001"], status: "failed" }]);
-  });
-
-  it("reports a terminated session as a failure", async () => {
-    await receiveMessage(deps, message(1), log);
-    const sessionId = runtime.onlySessionId();
-    runtime.terminate(sessionId);
-    await sync(sessionId);
-    expect(slack.statuses()).toEqual([{ messageIds: ["100.000001"], status: "failed" }]);
+    expect((await conversationOf(sessionId)).sessionState).toBe("active");
   });
 
   it("does nothing while the agent is still working", async () => {
     await receiveMessage(deps, message(1), log);
-    const sessionId = runtime.onlySessionId();
-    await sync(sessionId);
+    await sync(runtime.onlySessionId());
     expect(slack.delivered).toEqual([]);
+  });
+});
+
+describe("a thread whose session can take no more", () => {
+  it("reports reaching the budget, and answers later messages there with a note", async () => {
+    await receiveMessage(deps, message(1), log);
+    const sessionId = runtime.onlySessionId();
+    runtime.idle(sessionId, "budget_reached");
+    await sync(sessionId);
+    expect(slack.replies()).toEqual([notes.budget_reached]);
+    expect(slack.statuses()).toEqual([{ messageIds: ["100.000001"], status: "failed" }]);
+
+    runtime.rejectAllSends = new Error("400: session is paused at its budget");
+    const later = await receiveMessage(deps, message(2), log);
+    expect(later.duplicate).toBe(false);
+    await reconcile(deps, log);
+    expect(slack.replies()).toEqual([notes.budget_reached, notes.closed_budget]);
+    expect(slack.statuses()).toEqual([
+      { messageIds: ["100.000001"], status: "failed" },
+      { messageIds: ["100.000002"], status: "failed" },
+    ]);
+    expect(runtime.sessions.get(sessionId)?.sent).toHaveLength(1);
+  });
+
+  it("reports a terminated session, including messages still queued in it", async () => {
+    await receiveMessage(deps, message(1), log);
+    await receiveMessage(deps, message(2), log);
+    const sessionId = runtime.onlySessionId();
+    runtime.terminate(sessionId);
+    await sync(sessionId);
+    expect(slack.replies()).toEqual([notes.terminated]);
+    expect(slack.statuses()).toEqual([
+      { messageIds: ["100.000001", "100.000002"], status: "failed" },
+    ]);
+
+    await receiveMessage(deps, message(3), log);
+    await reconcile(deps, log);
+    expect(slack.replies()).toEqual([notes.terminated, notes.closed_terminated]);
   });
 });
 
@@ -277,16 +355,18 @@ describe("reconcile", () => {
     ]);
   });
 
-  it("retries a failed delivery", async () => {
-    await receiveMessage(deps, message(1), log);
-    const sessionId = runtime.onlySessionId();
-    runtime.reply(sessionId, "Eventually.");
-    slack.failures = 1;
-    await sync(sessionId);
-    expect(slack.replies()).toEqual([]);
-
-    await reconcile(deps, log);
-    expect(slack.replies()).toEqual(["Eventually."]);
+  it("reports a message as failed after it could not be handed over several times", async () => {
+    runtime.failNext.startSession = new Error("agent not synced");
+    await expect(receiveMessage(deps, message(1), log)).rejects.toThrow();
+    for (let attempt = 1; attempt < MAX_FORWARD_ATTEMPTS; attempt++) {
+      runtime.failNext.startSession = new Error("agent not synced");
+      await age(120);
+      await reconcile(deps, log);
+    }
+    expect(slack.replies()).toEqual([notes.undeliverable]);
+    expect(slack.statuses()).toEqual([{ messageIds: ["100.000001"], status: "failed" }]);
+    await age(120);
+    expect(await reconcile(deps, log)).toEqual({ checked: 0, failed: 0 });
   });
 
   it("stops a turn that has run for half an hour and says so", async () => {
@@ -296,7 +376,7 @@ describe("reconcile", () => {
 
     await reconcile(deps, log);
     expect(runtime.sessions.get(sessionId)?.interrupted).toBe(1);
-    expect(slack.replies()).toEqual([expect.stringContaining("took too long") as string]);
+    expect(slack.replies()).toEqual([notes.timeout]);
     expect(slack.statuses()).toEqual([{ messageIds: ["100.000001"], status: "failed" }]);
   });
 
@@ -305,5 +385,6 @@ describe("reconcile", () => {
     await age(120);
     runtime.failNext.listEvents = new Error("anthropic down");
     expect(await reconcile(deps, log)).toEqual({ checked: 1, failed: 1 });
+    expect((await onlyConversation()).status).toBe("waiting");
   });
 });

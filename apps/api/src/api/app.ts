@@ -122,8 +122,9 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
     return c.body(null, 204);
   });
 
-  // The safety net, called about every minute by Supabase pg_cron (decision 54).
-  api.post("/v1/reconcile", requireServiceToken(deps.config.serviceToken), async (c) => {
+  // The safety net, called about every minute by Supabase pg_cron (decision 54). It has its
+  // own token: the database holds it, and it must not be able to post messages.
+  api.post("/v1/reconcile", requireServiceToken(deps.config.reconcileToken), async (c) => {
     if (deps.conversations === undefined) {
       return errorResponse(c, 503, "not_configured", "Conversations are not configured");
     }

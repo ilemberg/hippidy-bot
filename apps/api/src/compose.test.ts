@@ -17,6 +17,7 @@ import { createTestDb } from "./store/testing.ts";
 import { memoryLogger } from "./testing.ts";
 
 const token = "t".repeat(48);
+const reconcileToken = "r".repeat(48);
 
 const message: InboundMessage = {
   source: "slack",
@@ -58,7 +59,10 @@ const verifyAgentWebhook: VerifyAgentWebhook = (body) => {
   return { id: event.id, type: event.type, resourceId: event.sessionId };
 };
 
-function setup(env: Env = { API_SERVICE_TOKEN: token }, options: { configured?: boolean } = {}) {
+function setup(
+  env: Env = { API_SERVICE_TOKEN: token, RECONCILE_TOKEN: reconcileToken },
+  options: { configured?: boolean } = {},
+) {
   const { log, lines } = memoryLogger();
   const conversations: ConversationDeps = {
     db,
@@ -308,9 +312,19 @@ describe("POST /v1/webhooks/agent", () => {
 });
 
 describe("POST /v1/reconcile", () => {
-  it("requires the service token", async () => {
+  it("requires the reconcile token, and refuses the service token", async () => {
     const { app } = setup();
-    const res = await app.request("/v1/reconcile", { method: "POST" });
+    await expectError(await app.request("/v1/reconcile", { method: "POST" }), 401, "unauthorized");
+    const withServiceToken = await app.request("/v1/reconcile", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    await expectError(withServiceToken, 401, "unauthorized");
+  });
+
+  it("does not accept the reconcile token for messages", async () => {
+    const { app } = setup();
+    const res = await postMessage(app, message, { authorization: `Bearer ${reconcileToken}` });
     await expectError(res, 401, "unauthorized");
   });
 
@@ -322,7 +336,7 @@ describe("POST /v1/reconcile", () => {
 
     const res = await app.request("/v1/reconcile", {
       method: "POST",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { authorization: `Bearer ${reconcileToken}` },
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ checked: 1, failed: 0 });

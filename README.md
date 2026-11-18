@@ -50,7 +50,7 @@ Vercel does and checks it starts (`pnpm build && pnpm smoke`).
 | `GET /health`             | none                | Returns `{"status":"ok"}`. Works with no configuration at all                                                                         |
 | `POST /v1/messages`       | service token       | Accepts one inbound message, hands it to the thread's agent session, returns 202                                                      |
 | `POST /v1/webhooks/agent` | Anthropic signature | Anthropic says a session went idle or ended; the API posts any new replies                                                            |
-| `POST /v1/reconcile`      | service token       | The safety net: delivers replies whose webhook was lost, retries failed posts. Called every minute                                    |
+| `POST /v1/reconcile`      | reconcile token     | The safety net: delivers replies whose webhook was lost, retries failed posts. Called every minute                                    |
 | `POST /slack/events`      | Slack signature     | Slack's Events API. On `app_mention`: sends the message through `/v1/messages`, then reacts 👀. Answers 503 until Slack is configured |
 
 The request and response shapes are in `packages/contracts`. Every error from the API has the
@@ -183,18 +183,17 @@ Do steps 1 to 4 **before merging** the agent loop pull request: once it is deplo
    - Copy the signing secret (`whsec_...`, shown once) into Vercel as
      `ANTHROPIC_WEBHOOK_SIGNING_KEY`, Production only.
 3. **Database.** If not done yet, add `DATABASE_URL` to Vercel (storage setup, step 4).
-4. **Safety net.** In Supabase, open the SQL Editor and run these two lines, with your
-   service token (the same value as `API_SERVICE_TOKEN` in Vercel) in the second:
+4. **Safety net.** Make a second token, the same way as the service token
+   (`openssl rand -hex 32`). It only lets its holder run `/v1/reconcile`, so the database
+   never holds a token that can post messages.
+   - In Vercel, add it as `RECONCILE_TOKEN`, Production only.
+   - In Supabase, open **Project Settings**, then **Vault** (or search the dashboard for
+     "Vault"), and add two secrets:
+     - name `hippidy_api_url`, value `https://hippidy-bot.vercel.app`
+     - name `hippidy_reconcile_token`, value: the token you just made
 
-   ```sql
-   select vault.create_secret('https://hippidy-bot.vercel.app', 'hippidy_api_url');
-   ```
-
-   ```sql
-   select vault.create_secret('PASTE-THE-SERVICE-TOKEN', 'hippidy_api_token');
-   ```
-
-   Supabase then calls `/v1/reconcile` every minute. Until both exist the job does nothing.
+   Use the Vault page rather than the SQL editor, which keeps a history of what you typed.
+   Supabase then calls `/v1/reconcile` every minute; until both secrets exist it does nothing.
 
 5. **Merge.** On merge, GitHub's **Agent sync** workflow creates the agent and its
    environment in your Anthropic workspace (check the run is green), the **Database

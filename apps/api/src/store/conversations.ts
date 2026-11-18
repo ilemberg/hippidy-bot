@@ -1,4 +1,10 @@
-import { messageSourceSchema, type InboundMessage, type MessageSource } from "@hippidy/contracts";
+import {
+  messageSourceSchema,
+  outboundDeliverySchema,
+  type InboundMessage,
+  type MessageSource,
+  type OutboundDelivery,
+} from "@hippidy/contracts";
 import { z } from "zod";
 import type { Db, Row } from "./db.ts";
 
@@ -12,8 +18,12 @@ export interface ConversationKey {
 export const conversationStatusSchema = z.enum(["new", "waiting", "answered", "failed", "stopped"]);
 export type ConversationStatus = z.infer<typeof conversationStatusSchema>;
 
-/** Final states a conversation's pending messages can be settled into. */
+/** Final states a message can be settled into. */
 export type SettledStatus = Exclude<ConversationStatus, "new" | "waiting">;
+
+export const sessionStateSchema = z.enum(["active", "budget_reached", "terminated"]);
+/** Whether the thread's agent session can still take messages. */
+export type SessionState = z.infer<typeof sessionStateSchema>;
 
 const conversationRow = z.object({
   id: z.string(),
@@ -25,6 +35,7 @@ const conversationRow = z.object({
   agent_id: z.string().nullable(),
   agent_version: z.number().int().nullable(),
   status: conversationStatusSchema,
+  session_state: sessionStateSchema,
   waiting_since: z.date().nullable(),
   agent_event_cursor: z.string().nullable(),
 });
@@ -36,6 +47,7 @@ export interface Conversation {
   agentId: string | null;
   agentVersion: number | null;
   status: ConversationStatus;
+  sessionState: SessionState;
   waitingSince: Date | null;
   /** The last agent runtime event already handled. */
   agentEventCursor: string | null;
@@ -55,6 +67,7 @@ function toConversation(row: Row): Conversation {
     agentId: r.agent_id,
     agentVersion: r.agent_version,
     status: r.status,
+    sessionState: r.session_state,
     waitingSince: r.waiting_since,
     agentEventCursor: r.agent_event_cursor,
   };
@@ -67,12 +80,15 @@ function one(rows: Row[]): Row {
 }
 
 const conversationColumns =
-  "id, source, workspace_id, channel_id, thread_id, agent_session_id, agent_id, agent_version, status, waiting_since, agent_event_cursor";
+  "id, source, workspace_id, channel_id, thread_id, agent_session_id, agent_id, agent_version, status, session_state, waiting_since, agent_event_cursor";
 
 /** The database's clock. Cutoffs are taken from it so they compare with stored timestamps. */
 export async function databaseNow(db: Db): Promise<Date> {
   return z.object({ now: z.date() }).parse(one(await db.query("select now() as now"))).now;
 }
+
+// ---------------------------------------------------------------------------------------
+// Conversations
 
 /** Returns the conversation for a thread, creating it on first use. Safe to race. */
 export async function findOrCreateConversation(
@@ -87,6 +103,13 @@ export async function findOrCreateConversation(
      returning ${conversationColumns}`,
     [key.source, key.workspaceId, key.channelId, key.threadId],
   );
+  return toConversation(one(rows));
+}
+
+export async function getConversation(db: Db, id: string): Promise<Conversation> {
+  const rows = await db.query(`select ${conversationColumns} from conversations where id = $1`, [
+    id,
+  ]);
   return toConversation(one(rows));
 }
 
@@ -110,22 +133,30 @@ export async function findConversationBySession(
   return rows[0] === undefined ? undefined : toConversation(rows[0]);
 }
 
-export interface RecordedInbound {
-  id: string;
-  /** True when this message was already recorded (a retry, or the same message twice). */
-  duplicate: boolean;
-  /** True when the message has already been handed to the agent. */
-  forwarded: boolean;
-}
-
-/** Marks an inbound message as handed to the agent. */
-export async function markForwarded(db: Db, inboundId: string): Promise<void> {
+/** Marks a conversation as waiting on the agent, keeping the time it first started waiting. */
+export async function markWaiting(db: Db, conversationId: string): Promise<void> {
   await db.query(
-    `update inbound_messages set forwarded_at = coalesce(forwarded_at, now()) where id = $1`,
-    [inboundId],
+    `update conversations
+     set status = 'waiting',
+         waiting_since = case when status = 'waiting' then waiting_since else now() end,
+         updated_at = now()
+     where id = $1`,
+    [conversationId],
   );
 }
 
+export async function setSessionState(
+  db: Db,
+  conversationId: string,
+  state: SessionState,
+): Promise<void> {
+  await db.query(`update conversations set session_state = $2, updated_at = now() where id = $1`, [
+    conversationId,
+    state,
+  ]);
+}
+
+/** Records the last agent event handled. Only the sync lease holder writes it. */
 export async function setAgentEventCursor(
   db: Db,
   conversationId: string,
@@ -135,6 +166,109 @@ export async function setAgentEventCursor(
     `update conversations set agent_event_cursor = $2, updated_at = now() where id = $1`,
     [conversationId, eventId],
   );
+}
+
+/** A sync that has not finished after this long is assumed dead; another may take over. */
+export const SYNC_LEASE_SECONDS = 120;
+
+/**
+ * Takes the right to sync a conversation, so a webhook and reconcile never sync the same
+ * conversation at once. Returns false if someone else holds it.
+ */
+export async function claimSyncLease(db: Db, conversationId: string): Promise<boolean> {
+  const rows = await db.query(
+    `update conversations set sync_lease_until = now() + make_interval(secs => $2)
+     where id = $1 and (sync_lease_until is null or sync_lease_until < now())
+     returning id`,
+    [conversationId, SYNC_LEASE_SECONDS],
+  );
+  return rows.length > 0;
+}
+
+export async function releaseSyncLease(db: Db, conversationId: string): Promise<void> {
+  await db.query(`update conversations set sync_lease_until = null where id = $1`, [
+    conversationId,
+  ]);
+}
+
+// ---------------------------------------------------------------------------------------
+// Agent sessions
+
+/** Marks a session as being started; never a real session id. */
+const STARTING_PREFIX = "starting:";
+/** A session start not finished after this long is assumed lost (above the runtime's retries). */
+const STALE_START_SECONDS = 180;
+
+/** The conversation's agent session id, or undefined if none has started yet. */
+export function sessionIdOf(conversation: Conversation): string | undefined {
+  const id = conversation.agentSessionId;
+  return id === null || id.startsWith(STARTING_PREFIX) ? undefined : id;
+}
+
+/**
+ * Claims the right to start the conversation's agent session, so two first messages in one
+ * thread start one session. Returns a claim token, or undefined if a session exists or another
+ * start is under way. The claim is committed before the agent is called.
+ */
+export async function claimSessionStart(
+  db: Db,
+  conversationId: string,
+): Promise<string | undefined> {
+  const rows = await db.query(
+    `update conversations
+     set agent_session_id = $2 || gen_random_uuid()::text, updated_at = now()
+     where id = $1
+       and (agent_session_id is null
+            or (agent_session_id like $3 and updated_at < now() - make_interval(secs => $4)))
+     returning agent_session_id`,
+    [conversationId, STARTING_PREFIX, `${STARTING_PREFIX}%`, STALE_START_SECONDS],
+  );
+  return rows[0] === undefined ? undefined : z.string().parse(rows[0].agent_session_id);
+}
+
+/** Gives up a claimed session start, so the next message can try again. */
+export async function releaseSessionStart(
+  db: Db,
+  conversationId: string,
+  claim: string,
+): Promise<void> {
+  await db.query(
+    `update conversations set agent_session_id = null, updated_at = now()
+     where id = $1 and agent_session_id = $2`,
+    [conversationId, claim],
+  );
+}
+
+/**
+ * Attaches a started session, if the start claim is still ours. Returns false if the claim
+ * was taken over meanwhile: the caller then uses the session that was attached instead.
+ */
+export async function attachSession(
+  db: Db,
+  conversationId: string,
+  claim: string,
+  session: { sessionId: string; agentId: string; agentVersion: number },
+): Promise<boolean> {
+  const rows = await db.query(
+    `update conversations
+     set agent_session_id = $3, agent_id = $4, agent_version = $5, session_state = 'active',
+         updated_at = now()
+     where id = $1 and agent_session_id = $2
+     returning id`,
+    [conversationId, claim, session.sessionId, session.agentId, session.agentVersion],
+  );
+  return rows.length > 0;
+}
+
+// ---------------------------------------------------------------------------------------
+// Inbound messages
+
+export interface RecordedInbound {
+  id: string;
+  /** True when this message was already recorded (a retry, or the same message twice). */
+  duplicate: boolean;
+  /** True when the message has already been handed to the agent. */
+  forwarded: boolean;
 }
 
 /** Records an inbound message once. A repeat returns the first record with `duplicate: true`. */
@@ -184,49 +318,28 @@ export async function recordInbound(
   return { id: row.id, duplicate: true, forwarded: row.forwarded_at !== null };
 }
 
-/** Marks a session as being started; never a real session id. */
-const STARTING_PREFIX = "starting:";
-/** A session start that has not finished after this long is assumed lost. */
-const STALE_START_SECONDS = 60;
-
-/** The conversation's agent session id, or undefined if none has started yet. */
-export function sessionIdOf(conversation: Conversation): string | undefined {
-  const id = conversation.agentSessionId;
-  return id === null || id.startsWith(STARTING_PREFIX) ? undefined : id;
-}
-
-/**
- * Claims the right to start the conversation's agent session, so two first messages in one
- * thread start one session. Returns false if a session exists or another start is under way.
- * The claim is committed before the agent is called: no transaction stays open meanwhile.
- */
-export async function claimSessionStart(db: Db, conversationId: string): Promise<boolean> {
-  const rows = await db.query(
-    `update conversations
-     set agent_session_id = $2 || gen_random_uuid()::text, updated_at = now()
-     where id = $1
-       and (agent_session_id is null
-            or (agent_session_id like $3 and updated_at < now() - make_interval(secs => $4)))
-     returning id`,
-    [conversationId, STARTING_PREFIX, `${STARTING_PREFIX}%`, STALE_START_SECONDS],
-  );
-  return rows.length > 0;
-}
-
-/** Gives up a claimed session start, so the next message can try again. */
-export async function releaseSessionStart(db: Db, conversationId: string): Promise<void> {
+/** Marks an inbound message as handed to the agent, with the event id the runtime gave it. */
+export async function markForwarded(
+  db: Db,
+  inboundId: string,
+  agentEventId: string | undefined,
+): Promise<void> {
   await db.query(
-    `update conversations set agent_session_id = null, updated_at = now()
-     where id = $1 and agent_session_id like $2`,
-    [conversationId, `${STARTING_PREFIX}%`],
+    `update inbound_messages
+     set forwarded_at = coalesce(forwarded_at, now()), agent_event_id = coalesce($2, agent_event_id)
+     where id = $1`,
+    [inboundId, agentEventId ?? null],
   );
 }
 
-export async function getConversation(db: Db, id: string): Promise<Conversation> {
-  const rows = await db.query(`select ${conversationColumns} from conversations where id = $1`, [
-    id,
-  ]);
-  return toConversation(one(rows));
+/** Counts a failed hand-over to the agent. Returns the number of failures so far. */
+export async function recordForwardFailure(db: Db, inboundId: string): Promise<number> {
+  const rows = await db.query(
+    `update inbound_messages set forward_attempts = forward_attempts + 1 where id = $1
+     returning forward_attempts`,
+    [inboundId],
+  );
+  return z.object({ forward_attempts: z.number().int() }).parse(one(rows)).forward_attempts;
 }
 
 export interface PendingForward {
@@ -254,61 +367,57 @@ export async function pendingForwards(
   });
 }
 
-export async function attachSession(
-  db: Db,
-  conversationId: string,
-  session: { sessionId: string; agentId: string; agentVersion: number },
-): Promise<void> {
-  await db.query(
-    `update conversations
-     set agent_session_id = $2, agent_id = $3, agent_version = $4, updated_at = now()
-     where id = $1`,
-    [conversationId, session.sessionId, session.agentId, session.agentVersion],
-  );
-}
-
-/** Marks a conversation as waiting on the agent, keeping the time it first started waiting. */
-export async function markWaiting(db: Db, conversationId: string): Promise<void> {
-  await db.query(
-    `update conversations
-     set status = 'waiting',
-         waiting_since = case when status = 'waiting' then waiting_since else now() end,
-         updated_at = now()
-     where id = $1`,
-    [conversationId],
-  );
-}
+/** Which pending messages to settle. */
+export type Settlement =
+  /** Messages whose agent events are listed: the agent processed them. */
+  | { kind: "agent_events"; ids: string[] }
+  /** Messages handed to the agent at or before `cutoff`, with no agent event id recorded. */
+  | { kind: "forwarded_without_event"; cutoff: Date }
+  /** Every message handed to the agent (the session can take no more). */
+  | { kind: "all_forwarded" }
+  /** Specific inbound messages, by their id here. */
+  | { kind: "inbound"; ids: string[] };
 
 /**
- * Settles the pending messages the agent has dealt with: those handed to it no later than
- * `forwardedBefore`, a time from `databaseNow` taken before the agent's state was read.
- * Messages handed over later stay pending, and so does the conversation while any remain.
- * A conversation already settled is not changed (a "stopped" is never turned into "answered").
- * Returns the settled messages' ids in the source system, oldest first, so their status can
- * be shown there (for Slack: reactions).
+ * Settles the selected pending messages. The conversation stays waiting while any message
+ * remains pending, with its waiting time reset to the oldest of them, so a busy thread is
+ * never cut off by the time limit of an earlier turn. A conversation already settled is not
+ * changed by a later answer (a "stopped" is never turned into "answered"). Returns the settled
+ * messages' ids in the source system, oldest first, so their status can be shown there.
  */
-export async function settleConversation(
+export async function settleMessages(
   db: Db,
   conversationId: string,
   status: SettledStatus,
-  options: { forwardedBefore: Date },
+  settlement: Settlement,
 ): Promise<string[]> {
   return db.transaction(async (tx) => {
     await lockConversation(tx, conversationId);
+    const where = {
+      agent_events: "agent_event_id = any($3::text[])",
+      forwarded_without_event:
+        "agent_event_id is null and forwarded_at is not null and forwarded_at <= $3",
+      all_forwarded: "forwarded_at is not null",
+      inbound: "id = any($3::uuid[])",
+    }[settlement.kind];
+    const params: unknown[] = [conversationId, status];
+    if (settlement.kind === "agent_events" || settlement.kind === "inbound") {
+      params.push(settlement.ids);
+    } else if (settlement.kind === "forwarded_without_event") {
+      params.push(settlement.cutoff);
+    }
     const settled = await tx.query(
       `update inbound_messages set status = $2
-       where conversation_id = $1 and status = 'received'
-         and forwarded_at is not null and forwarded_at <= $3
+       where conversation_id = $1 and status = 'received' and ${where}
        returning message_id, sent_at`,
-      [conversationId, status, options.forwardedBefore],
+      params,
     );
     await tx.query(
       `update conversations c
        set status = case when p.oldest is null then $2 else 'waiting' end,
-           waiting_since = case when p.oldest is null then null
-                                else coalesce(c.waiting_since, p.oldest) end,
+           waiting_since = p.oldest,
            updated_at = now()
-       from (select min(created_at) as oldest from inbound_messages
+       from (select min(coalesce(forwarded_at, created_at)) as oldest from inbound_messages
              where conversation_id = $1 and status = 'received') p
        where c.id = $1 and c.status in ('new', 'waiting')`,
       [conversationId, status],
@@ -320,69 +429,103 @@ export async function settleConversation(
   });
 }
 
-export type DeliveryKind = "reply" | "failure" | "stopped";
+// ---------------------------------------------------------------------------------------
+// Deliveries
 
-/** Deliveries are given up after this many attempts. */
+export type DeliveryKind = "reply" | "note" | "status";
+
+/** Deliveries are given up (abandoned) after this many failed attempts. */
 export const MAX_DELIVERY_ATTEMPTS = 5;
 
-/** A delivery stuck in "sending" this long is assumed lost and may be claimed again. */
-export const STALE_SENDING_SECONDS = 120;
-
-/** The right to send one delivery, for one attempt. */
-export interface DeliveryClaim {
-  id: string;
-  attempt: number;
-}
-
 /**
- * Claims the right to send one delivery. Returns a claim if this caller should send it now:
- * the first time, after a failed attempt, or when an earlier attempt went silent. Returns
- * undefined if it was sent, is being sent by someone else, or has used up its attempts.
+ * Queues one delivery under a key that makes it unique in the conversation (for a reply, the
+ * agent event id). Queuing the same key again does nothing, so a reply is queued once.
  */
-export async function claimDelivery(
+export async function enqueueDelivery(
   db: Db,
   conversationId: string,
-  agentEventId: string,
+  key: string,
   kind: DeliveryKind,
-): Promise<DeliveryClaim | undefined> {
-  const rows = await db.query(
-    `insert into deliveries (conversation_id, agent_event_id, kind)
-     values ($1, $2, $3)
-     on conflict (conversation_id, agent_event_id) do update
-       set status = 'sending', attempts = deliveries.attempts + 1, updated_at = now()
-       where deliveries.attempts < $4
-         and (deliveries.status = 'failed'
-              or (deliveries.status = 'sending'
-                  and deliveries.updated_at < now() - make_interval(secs => $5)))
-     returning id, attempts`,
-    [conversationId, agentEventId, kind, MAX_DELIVERY_ATTEMPTS, STALE_SENDING_SECONDS],
+  payload: OutboundDelivery,
+): Promise<void> {
+  await db.query(
+    `insert into deliveries (conversation_id, agent_event_id, kind, payload)
+     values ($1, $2, $3, $4)
+     on conflict (conversation_id, agent_event_id) do nothing`,
+    [conversationId, key, kind, JSON.stringify(payload)],
   );
-  if (rows[0] === undefined) return undefined;
-  const row = z.object({ id: z.string(), attempts: z.number().int() }).parse(rows[0]);
-  return { id: row.id, attempt: row.attempts };
+}
+
+export interface QueuedDelivery {
+  id: string;
+  key: string;
+  attempts: number;
+  payload: OutboundDelivery;
+}
+
+/** Deliveries still to send, in the order they were queued. */
+export async function unsentDeliveries(db: Db, conversationId: string): Promise<QueuedDelivery[]> {
+  const rows = await db.query(
+    `select id, agent_event_id, attempts, payload from deliveries
+     where conversation_id = $1 and status in ('pending', 'sending', 'failed')
+     order by seq`,
+    [conversationId],
+  );
+  return rows.map((row) => {
+    const r = z
+      .object({
+        id: z.string(),
+        agent_event_id: z.string(),
+        attempts: z.number().int(),
+        payload: z.unknown(),
+      })
+      .parse(row);
+    const payload = typeof r.payload === "string" ? (JSON.parse(r.payload) as unknown) : r.payload;
+    return {
+      id: r.id,
+      key: r.agent_event_id,
+      attempts: r.attempts,
+      payload: outboundDeliverySchema.parse(payload),
+    };
+  });
+}
+
+export async function markDeliverySent(db: Db, deliveryId: string): Promise<void> {
+  await db.query(
+    `update deliveries set status = 'sent', last_error = null, updated_at = now() where id = $1`,
+    [deliveryId],
+  );
 }
 
 /**
- * Records how an attempt ended: sent, or failed with `error`. Only the latest attempt can
- * record: a slow attempt that was taken over cannot overwrite the result of its replacement.
+ * Records a failed attempt. Returns true if the delivery has now used up its attempts and is
+ * abandoned: it will not be tried again.
  */
-export async function finishDelivery(db: Db, claim: DeliveryClaim, error?: string): Promise<void> {
-  await db.query(
-    `update deliveries set status = $3, last_error = $4, updated_at = now()
-     where id = $1 and attempts = $2 and status = 'sending'`,
-    [
-      claim.id,
-      claim.attempt,
-      error === undefined ? "sent" : "failed",
-      error === undefined ? null : error.slice(0, 1000),
-    ],
+export async function markDeliveryFailed(
+  db: Db,
+  deliveryId: string,
+  error: string,
+): Promise<boolean> {
+  const rows = await db.query(
+    `update deliveries
+     set attempts = attempts + 1,
+         status = case when attempts + 1 >= $3 then 'abandoned' else 'failed' end,
+         last_error = $2, updated_at = now()
+     where id = $1
+     returning status`,
+    [deliveryId, error.slice(0, 1000), MAX_DELIVERY_ATTEMPTS],
   );
+  return z.object({ status: z.string() }).parse(one(rows)).status === "abandoned";
 }
+
+// ---------------------------------------------------------------------------------------
+// Reconcile
 
 /**
  * Conversations the reconcile job should look at: waiting on the agent for longer than
- * `waitingForSeconds`, with a message never handed to the agent after that long, or with a
- * delivery that failed or went silent and still has attempts left. Oldest first.
+ * `waitingForSeconds`, with a message never handed to the agent after that long, or with
+ * deliveries still to send. Least recently touched first, so none is starved; conversations
+ * being synced right now are skipped.
  */
 export async function conversationsToReconcile(
   db: Db,
@@ -390,19 +533,18 @@ export async function conversationsToReconcile(
 ): Promise<Conversation[]> {
   const rows = await db.query(
     `select ${conversationColumns} from conversations c
-     where (c.status = 'waiting' and c.waiting_since < now() - make_interval(secs => $1))
-        or exists (select 1 from inbound_messages m
-                   where m.conversation_id = c.id and m.forwarded_at is null
-                     and m.status = 'received'
-                     and m.created_at < now() - make_interval(secs => $1))
-        or exists (select 1 from deliveries d
-                   where d.conversation_id = c.id and d.attempts < $3
-                     and (d.status = 'failed'
-                          or (d.status = 'sending'
-                              and d.updated_at < now() - make_interval(secs => $4))))
-     order by c.waiting_since nulls last
+     where (c.sync_lease_until is null or c.sync_lease_until < now())
+       and ((c.status = 'waiting' and c.waiting_since < now() - make_interval(secs => $1))
+            or exists (select 1 from inbound_messages m
+                       where m.conversation_id = c.id and m.forwarded_at is null
+                         and m.status = 'received'
+                         and m.created_at < now() - make_interval(secs => $1))
+            or exists (select 1 from deliveries d
+                       where d.conversation_id = c.id
+                         and d.status in ('pending', 'sending', 'failed')))
+     order by c.updated_at
      limit $2`,
-    [options.waitingForSeconds, options.limit, MAX_DELIVERY_ATTEMPTS, STALE_SENDING_SECONDS],
+    [options.waitingForSeconds, options.limit],
   );
   return rows.map(toConversation);
 }

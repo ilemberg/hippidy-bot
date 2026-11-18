@@ -1,11 +1,10 @@
 -- Calls the API's reconcile route about every minute (decision 54): the safety net for
 -- Anthropic webhooks that never arrived. It also keeps the free-plan project awake.
 --
--- The URL and the API's service token are read from Supabase Vault at run time, so neither
--- is in this public repo. Until both secrets exist the job does nothing. Create them once in
--- the Supabase SQL editor (see the README's Setup section):
---   select vault.create_secret('https://hippidy-bot.vercel.app', 'hippidy_api_url');
---   select vault.create_secret('<the API service token>', 'hippidy_api_token');
+-- The URL and the reconcile token (RECONCILE_TOKEN, which only allows /v1/reconcile) are read
+-- from Supabase Vault at run time, so neither is in this public repo. Until both secrets exist
+-- the job does nothing. Add them once in the Supabase dashboard's Vault page (see the README's
+-- Setup section), named hippidy_api_url and hippidy_reconcile_token.
 --
 -- pg_cron, pg_net and Vault exist only on Supabase; elsewhere (tests) this does nothing.
 do $$
@@ -37,7 +36,7 @@ begin
       from (
         select
           (select decrypted_secret from vault.decrypted_secrets where name = 'hippidy_api_url') as url,
-          (select decrypted_secret from vault.decrypted_secrets where name = 'hippidy_api_token') as token
+          (select decrypted_secret from vault.decrypted_secrets where name = 'hippidy_reconcile_token') as token
       ) s
       where s.url is not null and s.token is not null
     $job$

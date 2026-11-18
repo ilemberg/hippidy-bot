@@ -13,6 +13,8 @@ describe("markdownToSlack", () => {
     ["1 < 2 && 3 > 2", "1 &lt; 2 &amp;&amp; 3 &gt; 2"],
     ["a `**not bold**` b", "a `**not bold**` b"],
     ["math: 2 * 3 * 4", "math: 2 * 3 * 4"],
+    ["[a __b__ link](https://x.io/a__b__c)", "<https://x.io/a__b__c|a __b__ link>"],
+    ["**[bold link](https://x.io/*a*)**", "*<https://x.io/*a*|bold link>*"],
   ])("%j becomes %j", (input, expected) => {
     expect(markdownToSlack(input)).toBe(expected);
   });
@@ -35,6 +37,14 @@ describe("splitForSlack", () => {
     expect(chunks.length).toBeGreaterThan(1);
     for (const chunk of chunks) expect(chunk.length).toBeLessThanOrEqual(204);
     expect(chunks.join("\n\n")).toBe(text);
+  });
+
+  it("never cuts inside a link or an escaped character", () => {
+    const text = "x".repeat(95) + "<https://example.com/long|link> and &amp; " + "y".repeat(95);
+    for (const chunk of splitForSlack(text, 100)) {
+      expect((chunk.match(/</g) ?? []).length).toBe((chunk.match(/>/g) ?? []).length);
+      expect(chunk).not.toMatch(/&[a-z]*$/);
+    }
   });
 
   it("closes and reopens a code block cut in two", () => {
