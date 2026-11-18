@@ -7,7 +7,7 @@ stakeholders.
 
 **Status: slice 1 done.** Mention `@hippidy-bot` in Slack and the message goes through the API
 and gets a 👀 reaction. Slice 2 (replies from a Claude agent) is drafted in
-[docs/planning/slice-2.md](docs/planning/slice-2.md) and waiting on decisions.
+[docs/planning/slice-2.md](docs/planning/slice-2.md), with every question answered; not started.
 
 ## Layout
 

@@ -39,48 +39,17 @@ taking the real bot offline. A leading candidate is recorded with it in `decisio
 
 ## B. Blocks slice 2
 
-`slice-2.md` collects these with five new ones (B10 to B14) in one table to answer before the
-slice starts.
+`slice-2.md` collects these with five new ones (B10 to B14) in one table. All answered
+(`decisions.md` 51 to 63); B13 (one free Supabase project, PGlite for tests) is decision 63.
 
 B1 (storage before slice 3) is answered: see `decisions.md` 8.
 
-**B2. What is one conversation?**
-*Recommendation:* one Slack thread is one conversation is one agent session. A top-level
-mention starts a new one.
+B2 (one thread is one conversation), B3 (replies must mention the bot) and B4 (a reconcile job
+as the backup for lost webhooks) are answered: see `decisions.md` 51, 52 and 54.
 
-**B3. Must replies in a thread mention the bot?**
-Without a mention, the bot needs to read all channel messages (a broader Slack scope) and
-decide which are for it.
-*Recommendation:* require the mention at first. Smallest scope, no ambiguity.
-
-**B4. Backup for lost "agent finished" notifications.**
-The async loop is decided (`decisions.md` 13). Still open: Anthropic tells the API an agent has
-finished by calling a webhook, tries three times, then gives up without saying so. If the API
-was down or erroring at that moment, the Slack thread stays on 👀 forever.
-*Recommendation:* a small scheduled job that asks "which conversations are still waiting?"
-and checks each one directly. A dozen lines, and it turns a silent hang into a late reply.
-
-**B5. Final answer only, or progress as it works?**
-*Recommendation:* final answer only in slice 2, with the reaction as the status signal. Live
-progress (editing one status message) when slice 4 makes turns long.
-
-**B6. What cap per session, inside the $100 a month budget?** Model is decided (Opus 5.5,
-`decisions.md` 20).
-*Recommendation:* about $2 per session for slice 2, a monthly spend limit on the Anthropic
-workspace as the backstop, and set the slice 4 cap from measured coding sessions.
-
-**B7. How are the agent's prompt and config managed?**
-*Recommendation:* as files in the repo, synced with Anthropic's CLI, so prompt changes go
-through pull requests like code. This is also what makes prompt changes evaluable in slice 6.
-
-**B8. What happens to open threads when the agent changes?**
-Sessions pin the agent version they started with.
-*Recommendation:* accept it. Old threads keep old behavior; record agent version on every
-conversation so behavior can be explained later.
-
-**B9. Can you stop it?**
-*Recommendation:* a "stop" message or reaction that sends an interrupt. Cheap now, essential
-by slice 4.
+B5 (final answer only), B6 (about $2 per session plus a monthly spend limit), B7 (agent config
+as files in the repo), B8 (old threads keep their version) and B9 (stop with 🛑 or
+"@hippidy-bot stop") are answered: see `decisions.md` 55 and 57 to 60.
 
 ## C. Blocks slice 3
 
