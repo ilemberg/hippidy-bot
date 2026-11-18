@@ -80,6 +80,7 @@ entries are not edited.
 | 71 | 2026-11-18 | Stop works through `POST /v1/stop` on the API (channel-agnostic): it names the conversation by thread, or by a message for a 🛑 reaction. It interrupts the session if the agent is working, marks pending messages and the stop message 🛑, and posts a note at once (the adapter adds no 👀 to a stop). The session stays usable: the next mention carries on in the same thread | Decision 60 as built. A stop is a pause, not an end; text the agent had already written before the interrupt may still be posted |
 | 72 | 2026-11-18 | The Slack adapter looks up the sender's display name (`users.info`, cached for an hour per server instance) and passes it with the message; the agent sees "From: Ilya (Slack user U...)". A failed lookup only drops the name | Decision 34 as built; the id stays the stable key |
 | 73 | 2026-11-18 | Refines 71 after review: the stop message is settled before anything else, so it can never reach the agent; a stop covers every pending message, including ones not yet handed over (they are never sent); a 🛑 on a finished thread does nothing, while a stop message gets "nothing to stop"; a stop that starts a thread is answered; a 🛑 is ignored when the bot's own id is unknown | A failed stop could otherwise send "stop" to the agent as a question, and a stop in the first seconds of a thread was missed |
+| 74 | 2026-11-18 | Slice 2 is done: the agent answers in Slack threads. Slice 3 has not been planned or started | Retro in `wave-1.md` |
 
 ## Deferred on purpose
 

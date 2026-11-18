@@ -5,9 +5,8 @@ explore how an AI teammate fits into a SaaS product engineering team: engineers 
 team lead, senior, mid, junior), product manager, designer, QA, engineering manager and other
 stakeholders.
 
-**Status: slice 1 done.** Mention `@hippidy-bot` in Slack and the message goes through the API
-and gets a 👀 reaction. Slice 2 (replies from a Claude agent) is drafted in
-[docs/planning/slice-2.md](docs/planning/slice-2.md), with every question answered; not started.
+**Status: slice 2 done.** Mention `@hippidy-bot` in Slack and a Claude agent answers in the thread; reply
+there and it remembers the conversation.
 
 ## Layout
 
