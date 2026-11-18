@@ -1,0 +1,11 @@
+{
+  // Approximates the type check Vercel's build runs: it does not apply strict null checks,
+  // and fails the deploy on errors our strict check would not report. CI runs both.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "strictNullChecks": false,
+    "exactOptionalPropertyTypes": false
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts", "src/**/testing.ts", "src/agent/fake.ts"]
+}

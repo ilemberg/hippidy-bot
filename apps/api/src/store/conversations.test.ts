@@ -2,6 +2,10 @@ import type { InboundMessage } from "@hippidy/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   attachSession,
+  claimSessionStart,
+  getConversation,
+  pendingForwards,
+  releaseSessionStart,
   claimDelivery,
   conversationsToReconcile,
   databaseNow,
@@ -13,6 +17,7 @@ import {
   markWaiting,
   MAX_DELIVERY_ATTEMPTS,
   recordInbound,
+  sessionIdOf,
   setAgentEventCursor,
   settleConversation,
   type ConversationKey,
@@ -96,13 +101,75 @@ describe("conversations", () => {
   });
 });
 
+describe("session starts", () => {
+  it("lets one caller claim the start; the claim is not a session", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    expect(await claimSessionStart(db, conversation.id)).toBe(true);
+    expect(await claimSessionStart(db, conversation.id)).toBe(false);
+    expect(sessionIdOf(await getConversation(db, conversation.id))).toBeUndefined();
+
+    await attachSession(db, conversation.id, {
+      sessionId: "sesn_1",
+      agentId: "agent_1",
+      agentVersion: 1,
+    });
+    const started = await getConversation(db, conversation.id);
+    expect(sessionIdOf(started)).toBe("sesn_1");
+    expect(await claimSessionStart(db, conversation.id)).toBe(false);
+  });
+
+  it("can be released, or taken over when it went silent", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    await claimSessionStart(db, conversation.id);
+    await releaseSessionStart(db, conversation.id);
+    expect(await claimSessionStart(db, conversation.id)).toBe(true);
+
+    await db.query(`update conversations set updated_at = now() - interval '2 minutes'`);
+    expect(await claimSessionStart(db, conversation.id)).toBe(true);
+  });
+
+  it("never releases a real session", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    await attachSession(db, conversation.id, {
+      sessionId: "sesn_1",
+      agentId: "agent_1",
+      agentVersion: 1,
+    });
+    await releaseSessionStart(db, conversation.id);
+    expect((await getConversation(db, conversation.id)).agentSessionId).toBe("sesn_1");
+  });
+});
+
+describe("pending forwards", () => {
+  it("lists messages never handed to the agent, older than a threshold, oldest first", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    const old = await recordInbound(db, conversation.id, message(1));
+    const forwarded = await recordInbound(db, conversation.id, message(2));
+    await markForwarded(db, forwarded.id);
+    await db.query(`update inbound_messages set created_at = now() - interval '2 minutes'`);
+    await recordInbound(db, conversation.id, message(3)); // too recent
+
+    expect(await pendingForwards(db, conversation.id, 30)).toEqual([
+      { id: old.id, actorId: "U1", text: "message 1" },
+    ]);
+    const found = await conversationsToReconcile(db, { waitingForSeconds: 30, limit: 10 });
+    expect(found.map((c) => c.id)).toEqual([conversation.id]);
+  });
+});
+
 describe("inbound messages", () => {
   it("records a message once; a retry with the same event id is a duplicate", async () => {
     const conversation = await findOrCreateConversation(db, key);
     const first = await recordInbound(db, conversation.id, message(1));
     const retry = await recordInbound(db, conversation.id, message(1));
     expect(first.duplicate).toBe(false);
-    expect(retry).toEqual({ id: first.id, duplicate: true });
+    expect(retry).toEqual({ id: first.id, duplicate: true, forwarded: false });
+    await markForwarded(db, first.id);
+    expect(await recordInbound(db, conversation.id, message(1))).toEqual({
+      id: first.id,
+      duplicate: true,
+      forwarded: true,
+    });
   });
 
   it("treats the same message under a different event id as a duplicate", async () => {
@@ -113,7 +180,7 @@ describe("inbound messages", () => {
       conversation.id,
       message(1, { sourceEventId: "Ev-other" }),
     );
-    expect(sameMessage).toEqual({ id: first.id, duplicate: true });
+    expect(sameMessage).toEqual({ id: first.id, duplicate: true, forwarded: false });
   });
 
   it("finds the earlier record when the event id and the message match different rows", async () => {
@@ -205,7 +272,7 @@ describe("deliveries", () => {
     const conversation = await findOrCreateConversation(db, key);
     const claim = await claimDelivery(db, conversation.id, "sevt_1", "reply");
     if (claim === undefined) throw new Error("no claim");
-    await finishDelivery(db, claim, { ok: true });
+    await finishDelivery(db, claim);
     expect(await claimDelivery(db, conversation.id, "sevt_1", "reply")).toBeUndefined();
   });
 
@@ -215,7 +282,7 @@ describe("deliveries", () => {
       const claim = await claimDelivery(db, conversation.id, "sevt_1", "reply");
       expect(claim?.attempt).toBe(attempt);
       if (claim === undefined) throw new Error("no claim");
-      await finishDelivery(db, claim, { ok: false, error: "slack down" });
+      await finishDelivery(db, claim, "slack down");
     }
     expect(await claimDelivery(db, conversation.id, "sevt_1", "reply")).toBeUndefined();
   });
@@ -228,8 +295,8 @@ describe("deliveries", () => {
     const takeover = await claimDelivery(db, conversation.id, "sevt_1", "reply");
     if (slow === undefined || takeover === undefined) throw new Error("no claim");
 
-    await finishDelivery(db, takeover, { ok: true });
-    await finishDelivery(db, slow, { ok: false, error: "timed out long ago" });
+    await finishDelivery(db, takeover);
+    await finishDelivery(db, slow, "timed out long ago");
 
     expect(await db.query(`select status, attempts from deliveries`)).toEqual([
       { status: "sent", attempts: 2 },
@@ -253,7 +320,7 @@ describe("conversationsToReconcile", () => {
     await markWaiting(db, waitingShort.id);
     const failed = await claimDelivery(db, failedDelivery.id, "sevt_9", "reply");
     if (failed === undefined) throw new Error("no claim");
-    await finishDelivery(db, failed, { ok: false, error: "boom" });
+    await finishDelivery(db, failed, "boom");
     await claimDelivery(db, stuckDelivery.id, "sevt_8", "reply");
     await db.query(
       `update deliveries set updated_at = now() - interval '3 minutes'

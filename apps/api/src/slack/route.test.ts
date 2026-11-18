@@ -1,6 +1,9 @@
 import { createHmac } from "node:crypto";
 import { Hono } from "hono";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { FakeAgentRuntime } from "../agent/fake.ts";
+import { RecordingDeliverer } from "../api/testing.ts";
+import { createTestDb } from "../store/testing.ts";
 import type { ApiEnv } from "../api/types.ts";
 import { configureApp } from "../compose.ts";
 import type { Env } from "../config.ts";
@@ -35,6 +38,16 @@ function signed(
   });
 }
 
+let db: Awaited<ReturnType<typeof createTestDb>>;
+
+beforeEach(async () => {
+  db = await createTestDb();
+});
+
+afterEach(async () => {
+  await db.close();
+});
+
 function setup(appEnv: Env = env) {
   const { log, lines } = memoryLogger();
   const reactions: unknown[] = [];
@@ -49,7 +62,17 @@ function setup(appEnv: Env = env) {
       return Promise.resolve();
     },
   });
-  const app = configureApp(new Hono<ApiEnv>(), { env: appEnv, log, slackActions });
+  const conversations = {
+    db,
+    runtime: new FakeAgentRuntime(),
+    deliverers: { slack: new RecordingDeliverer() },
+    sleep: () => Promise.resolve(),
+  };
+  const app = configureApp(new Hono<ApiEnv>(), {
+    env: appEnv,
+    log,
+    services: { conversations, slackActions },
+  });
   return { app, lines, reaction, reactions };
 }
 

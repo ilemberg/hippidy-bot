@@ -11,12 +11,14 @@ and gets a 👀 reaction. Slice 2 (replies from a Claude agent) is drafted in
 
 ## Layout
 
-| Path                  | What it is                                                                                     |
-| --------------------- | ---------------------------------------------------------------------------------------------- |
-| `apps/api`            | The deployable, served by Vercel: the core API (`src/api`) and the Slack adapter (`src/slack`) |
-| `slack/manifest.yaml` | The Slack app's definition: name, scopes, events                                               |
-| `packages/contracts`  | The API's request, response and error schemas (Zod), shared with every client                  |
-| `docs/planning`       | Plans and the decision log                                                                     |
+| Path                     | What it is                                                                                     |
+| ------------------------ | ---------------------------------------------------------------------------------------------- |
+| `apps/api`               | The deployable, served by Vercel: the core API (`src/api`) and the Slack adapter (`src/slack`) |
+| `slack/manifest.yaml`    | The Slack app's definition: name, scopes, events                                               |
+| `packages/contracts`     | The API's request, response and error schemas (Zod), shared with every client                  |
+| `agents`, `environments` | The agent's definition and system prompt, and its sandbox; synced to Anthropic by CI           |
+| `supabase`               | Database schema as migrations, applied by CI on merge to `main`                                |
+| `docs/planning`          | Plans and the decision log                                                                     |
 
 ## Run, test, check
 
@@ -43,11 +45,13 @@ Vercel does and checks it starts (`pnpm build && pnpm smoke`).
 
 ## API
 
-| Route                | Auth            | What it does                                                                                                                          |
-| -------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /health`        | none            | Returns `{"status":"ok"}`. Works with no configuration at all                                                                         |
-| `POST /v1/messages`  | service token   | Accepts one inbound message, returns 202 with an id. Logs it                                                                          |
-| `POST /slack/events` | Slack signature | Slack's Events API. On `app_mention`: sends the message through `/v1/messages`, then reacts 👀. Answers 503 until Slack is configured |
+| Route                     | Auth                | What it does                                                                                                                          |
+| ------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /health`             | none                | Returns `{"status":"ok"}`. Works with no configuration at all                                                                         |
+| `POST /v1/messages`       | service token       | Accepts one inbound message, hands it to the thread's agent session, returns 202                                                      |
+| `POST /v1/webhooks/agent` | Anthropic signature | Anthropic says a session went idle or ended; the API posts any new replies                                                            |
+| `POST /v1/reconcile`      | service token       | The safety net: delivers replies whose webhook was lost, retries failed posts. Called every minute                                    |
+| `POST /slack/events`      | Slack signature     | Slack's Events API. On `app_mention`: sends the message through `/v1/messages`, then reacts 👀. Answers 503 until Slack is configured |
 
 The request and response shapes are in `packages/contracts`. Every error from the API has the
 body `{"error":{"code":"...","message":"..."}}`. The one exception is `/slack/events`: errors there
@@ -163,6 +167,46 @@ reaching the URL (check Event Subscriptions).
    replace `[YOUR-PASSWORD]` with your database password. If the password has any of
    `@ : / ? # %` in it, reset it in Supabase to one with only letters and numbers first, or the
    string breaks. Then redeploy. Until it is set, storage stays off and the rest keeps working.
+
+## Slice 2 setup: the agent loop
+
+Do steps 1 to 4 **before merging** the agent loop pull request: once it is deployed,
+`/v1/messages` needs storage and the agent, and the bot stops reacting until both are set.
+
+1. **API key.** In the Anthropic Console (platform.claude.com), in the `hippidy-bot`
+   workspace with its monthly spend limit, create an API key. Add it as `ANTHROPIC_API_KEY`
+   in two places: Vercel (Production only), and GitHub (Settings, Secrets and variables,
+   Actions, repository secret). GitHub uses it to sync the agent.
+2. **Webhook.** In the Console, go to Manage, then Webhooks, and add an endpoint:
+   - URL: `https://hippidy-bot.vercel.app/v1/webhooks/agent`
+   - Events: `session.status_idled` and `session.status_terminated`
+   - Copy the signing secret (`whsec_...`, shown once) into Vercel as
+     `ANTHROPIC_WEBHOOK_SIGNING_KEY`, Production only.
+3. **Database.** If not done yet, add `DATABASE_URL` to Vercel (storage setup, step 4).
+4. **Safety net.** In Supabase, open the SQL Editor and run these two lines, with your
+   service token (the same value as `API_SERVICE_TOKEN` in Vercel) in the second:
+
+   ```sql
+   select vault.create_secret('https://hippidy-bot.vercel.app', 'hippidy_api_url');
+   ```
+
+   ```sql
+   select vault.create_secret('PASTE-THE-SERVICE-TOKEN', 'hippidy_api_token');
+   ```
+
+   Supabase then calls `/v1/reconcile` every minute. Until both exist the job does nothing.
+
+5. **Merge.** On merge, GitHub's **Agent sync** workflow creates the agent and its
+   environment in your Anthropic workspace (check the run is green), the **Database
+   migrations** workflow adds the schedule, and Vercel deploys. Redeploy once in Vercel if you
+   added variables after the last deploy.
+6. **Try it.** Mention `@hippidy-bot` with a question. 👀 appears at once; within a minute or
+   so the answer arrives in the thread and 👀 becomes ✅. Reply in the thread, mentioning the
+   bot, and it answers with the earlier context.
+
+If no answer arrives: search the Vercel logs for `conversation.`, `webhook.` and
+`reconcile.`. The Console's session viewer (Managed Agents, Sessions) shows what the agent
+did. Each conversation is capped at $2; past that the bot says so and shows ❌.
 
 ## Planning docs
 

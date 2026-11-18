@@ -6,7 +6,7 @@ import fixture from "./fixtures/app-mention.json" with { type: "json" };
 import { handleMention, type MentionDelivery, type SlackActions } from "./handler.ts";
 
 const accepted: PostMessageResult = {
-  ok: true,
+  kind: "accepted",
   accepted: { id: "0b6c9a52-2c43-4a8e-9f5e-0d5f2b0a4c11", status: "accepted" },
 };
 
@@ -64,7 +64,7 @@ describe("handleMention", () => {
     const { deps, reactions, lines } = setup({
       api: () =>
         Promise.resolve({
-          ok: false,
+          kind: "rejected",
           status: 401,
           error: { code: "unauthorized", message: "nope" },
         }),

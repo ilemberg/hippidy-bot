@@ -8,8 +8,8 @@ import {
 } from "@hippidy/contracts";
 
 export type PostMessageResult =
-  | { ok: true; accepted: AcceptedMessage }
-  | { ok: false; status: number; error: ErrorResponse["error"] | undefined };
+  | { kind: "accepted"; accepted: AcceptedMessage }
+  | { kind: "rejected"; status: number; error: ErrorResponse["error"] | undefined };
 
 /** What the adapter needs from the API. Defined by the contract, not by the API's code. */
 export interface ApiClient {
@@ -50,14 +50,14 @@ export function createApiClient(options: {
         body: JSON.stringify(message),
       });
       const response = await options.fetch(request);
-      const body: unknown = await response.json().catch(() => undefined);
+      const body: unknown = await response.json().catch((): undefined => undefined);
 
       if (response.status === 202) {
         const accepted = acceptedMessageSchema.safeParse(body);
-        if (accepted.success) return { ok: true, accepted: accepted.data };
+        if (accepted.success) return { kind: "accepted", accepted: accepted.data };
       }
       const error = errorResponseSchema.safeParse(body);
-      return { ok: false, status: response.status, error: error.data?.error };
+      return { kind: "rejected", status: response.status, error: error.data?.error };
     },
   };
 }

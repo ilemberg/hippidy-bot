@@ -114,6 +114,8 @@ export interface RecordedInbound {
   id: string;
   /** True when this message was already recorded (a retry, or the same message twice). */
   duplicate: boolean;
+  /** True when the message has already been handed to the agent. */
+  forwarded: boolean;
 }
 
 /** Marks an inbound message as handed to the agent. */
@@ -162,10 +164,10 @@ export async function recordInbound(
     ],
   );
   if (inserted[0] !== undefined) {
-    return { id: z.string().parse(inserted[0].id), duplicate: false };
+    return { id: z.string().parse(inserted[0].id), duplicate: false, forwarded: false };
   }
   const existing = await db.query(
-    `select id from inbound_messages
+    `select id, forwarded_at from inbound_messages
      where source = $1
        and (source_event_id = $2
             or (workspace_id = $3 and channel_id = $4 and message_id = $5))
@@ -178,7 +180,78 @@ export async function recordInbound(
       conversation.messageId,
     ],
   );
-  return { id: z.string().parse(one(existing).id), duplicate: true };
+  const row = z.object({ id: z.string(), forwarded_at: z.date().nullable() }).parse(one(existing));
+  return { id: row.id, duplicate: true, forwarded: row.forwarded_at !== null };
+}
+
+/** Marks a session as being started; never a real session id. */
+const STARTING_PREFIX = "starting:";
+/** A session start that has not finished after this long is assumed lost. */
+const STALE_START_SECONDS = 60;
+
+/** The conversation's agent session id, or undefined if none has started yet. */
+export function sessionIdOf(conversation: Conversation): string | undefined {
+  const id = conversation.agentSessionId;
+  return id === null || id.startsWith(STARTING_PREFIX) ? undefined : id;
+}
+
+/**
+ * Claims the right to start the conversation's agent session, so two first messages in one
+ * thread start one session. Returns false if a session exists or another start is under way.
+ * The claim is committed before the agent is called: no transaction stays open meanwhile.
+ */
+export async function claimSessionStart(db: Db, conversationId: string): Promise<boolean> {
+  const rows = await db.query(
+    `update conversations
+     set agent_session_id = $2 || gen_random_uuid()::text, updated_at = now()
+     where id = $1
+       and (agent_session_id is null
+            or (agent_session_id like $3 and updated_at < now() - make_interval(secs => $4)))
+     returning id`,
+    [conversationId, STARTING_PREFIX, `${STARTING_PREFIX}%`, STALE_START_SECONDS],
+  );
+  return rows.length > 0;
+}
+
+/** Gives up a claimed session start, so the next message can try again. */
+export async function releaseSessionStart(db: Db, conversationId: string): Promise<void> {
+  await db.query(
+    `update conversations set agent_session_id = null, updated_at = now()
+     where id = $1 and agent_session_id like $2`,
+    [conversationId, `${STARTING_PREFIX}%`],
+  );
+}
+
+export async function getConversation(db: Db, id: string): Promise<Conversation> {
+  const rows = await db.query(`select ${conversationColumns} from conversations where id = $1`, [
+    id,
+  ]);
+  return toConversation(one(rows));
+}
+
+export interface PendingForward {
+  id: string;
+  actorId: string;
+  text: string;
+}
+
+/** Messages recorded but not yet handed to the agent, older than `olderThanSeconds`. */
+export async function pendingForwards(
+  db: Db,
+  conversationId: string,
+  olderThanSeconds: number,
+): Promise<PendingForward[]> {
+  const rows = await db.query(
+    `select id, actor_id, text from inbound_messages
+     where conversation_id = $1 and forwarded_at is null and status = 'received'
+       and created_at < now() - make_interval(secs => $2)
+     order by created_at`,
+    [conversationId, olderThanSeconds],
+  );
+  return rows.map((row) => {
+    const r = z.object({ id: z.string(), actor_id: z.string(), text: z.string() }).parse(row);
+    return { id: r.id, actorId: r.actor_id, text: r.text };
+  });
 }
 
 export async function attachSession(
@@ -290,30 +363,26 @@ export async function claimDelivery(
 }
 
 /**
- * Records how an attempt ended. Only the latest attempt can record: a slow attempt that was
- * taken over cannot overwrite the result of the one that replaced it.
+ * Records how an attempt ended: sent, or failed with `error`. Only the latest attempt can
+ * record: a slow attempt that was taken over cannot overwrite the result of its replacement.
  */
-export async function finishDelivery(
-  db: Db,
-  claim: DeliveryClaim,
-  outcome: { ok: true } | { ok: false; error: string },
-): Promise<void> {
+export async function finishDelivery(db: Db, claim: DeliveryClaim, error?: string): Promise<void> {
   await db.query(
     `update deliveries set status = $3, last_error = $4, updated_at = now()
      where id = $1 and attempts = $2 and status = 'sending'`,
     [
       claim.id,
       claim.attempt,
-      outcome.ok ? "sent" : "failed",
-      outcome.ok ? null : outcome.error.slice(0, 1000),
+      error === undefined ? "sent" : "failed",
+      error === undefined ? null : error.slice(0, 1000),
     ],
   );
 }
 
 /**
  * Conversations the reconcile job should look at: waiting on the agent for longer than
- * `waitingForSeconds`, or with a delivery that failed or went silent and still has attempts
- * left. Oldest first.
+ * `waitingForSeconds`, with a message never handed to the agent after that long, or with a
+ * delivery that failed or went silent and still has attempts left. Oldest first.
  */
 export async function conversationsToReconcile(
   db: Db,
@@ -322,6 +391,10 @@ export async function conversationsToReconcile(
   const rows = await db.query(
     `select ${conversationColumns} from conversations c
      where (c.status = 'waiting' and c.waiting_since < now() - make_interval(secs => $1))
+        or exists (select 1 from inbound_messages m
+                   where m.conversation_id = c.id and m.forwarded_at is null
+                     and m.status = 'received'
+                     and m.created_at < now() - make_interval(secs => $1))
         or exists (select 1 from deliveries d
                    where d.conversation_id = c.id and d.attempts < $3
                      and (d.status = 'failed'
