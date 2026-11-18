@@ -20,6 +20,9 @@ describe("listConversationsQuerySchema", () => {
   it("takes a conversation id as the cursor, and nothing it does not know", () => {
     const before = "0b1f8f3e-6f0f-4c3a-9d55-3f3a7a2a9c11";
     expect(listConversationsQuerySchema.parse({ before })).toEqual({ limit: 20, before });
+    // Any UUID the database holds, whatever its version bits say.
+    const byHand = "00000000-0000-0000-0000-000000000001";
+    expect(listConversationsQuerySchema.parse({ before: byHand }).before).toBe(byHand);
     expect(listConversationsQuerySchema.safeParse({ before: "yesterday" }).success).toBe(false);
     expect(listConversationsQuerySchema.safeParse({ page: "2" }).success).toBe(false);
   });
@@ -27,15 +30,15 @@ describe("listConversationsQuerySchema", () => {
 
 describe("listAgentEventsQuerySchema", () => {
   it("defaults the page size and reads the position to continue after", () => {
-    expect(listAgentEventsQuerySchema.parse({})).toEqual({ limit: 100 });
-    expect(listAgentEventsQuerySchema.parse({ limit: "500", after: "42" })).toEqual({
-      limit: 500,
+    expect(listAgentEventsQuerySchema.parse({})).toEqual({ limit: 50 });
+    expect(listAgentEventsQuerySchema.parse({ limit: "200", after: "42" })).toEqual({
+      limit: 200,
       after: 42,
     });
   });
 
   it("rejects a page size or position out of range", () => {
-    expect(listAgentEventsQuerySchema.safeParse({ limit: "501" }).success).toBe(false);
+    expect(listAgentEventsQuerySchema.safeParse({ limit: "201" }).success).toBe(false);
     expect(listAgentEventsQuerySchema.safeParse({ after: "-1" }).success).toBe(false);
   });
 });

@@ -35,7 +35,7 @@ import { errorResponse } from "./errors.ts";
 import { backfillRecord } from "./record.ts";
 import type { ApiEnv } from "./types.ts";
 
-const conversationIdSchema = z.uuid();
+const conversationIdSchema = z.guid();
 
 export interface ApiDeps {
   config: ApiConfig;
@@ -152,17 +152,25 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
     if (deps.conversations === undefined) {
       return errorResponse(c, 503, "not_configured", "Conversations are not configured");
     }
+    const { limit, before } = query.data;
+    // A cursor that names nothing must not look like the end of the list.
+    if (
+      before !== undefined &&
+      (await readConversation(deps.conversations.db, before)) === undefined
+    ) {
+      return errorResponse(c, 400, "invalid_request", "Query is invalid", [
+        { path: "before", message: "No such conversation" },
+      ]);
+    }
     // One more than asked for, to know whether there is a next page.
-    const found = await listConversations(deps.conversations.db, {
-      limit: query.data.limit + 1,
-      before: query.data.before,
-    });
-    const conversations = found.slice(0, query.data.limit);
+    const found = await listConversations(deps.conversations.db, { limit: limit + 1, before });
+    const conversations = found.slice(0, limit);
     const last = conversations.at(-1);
     const body: ConversationList = {
       conversations,
-      next: found.length > query.data.limit && last !== undefined ? last.id : null,
+      next: found.length > limit && last !== undefined ? last.id : null,
     };
+    c.var.log.info("conversations.listed", { count: conversations.length });
     return c.json(body);
   });
 
@@ -180,6 +188,7 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
       conversation,
       transcript: await readTranscript(deps.conversations.db, id.data),
     };
+    c.var.log.info("conversation.read", { conversationId: id.data, lines: body.transcript.length });
     return c.json(body);
   });
 
@@ -204,6 +213,8 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
       events,
       next: found.length > query.data.limit && last !== undefined ? last.position : null,
     };
+    // Raw events can hold whatever the agent saw: reading them leaves a trace.
+    c.var.log.info("conversation.events_read", { conversationId: id.data, count: events.length });
     return c.json(body);
   });
 

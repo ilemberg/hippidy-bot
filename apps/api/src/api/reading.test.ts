@@ -72,7 +72,9 @@ function message(n: number, threadId = "100.000001"): InboundMessage {
     },
     actor: n === 1 ? { id: "U1", displayName: "Ilya" } : { id: "U2" },
     text: `question ${n}`,
-    sentAt: `2026-11-17T00:00:0${n}.000Z`,
+    // The fake agent's clock starts at this midnight and moves a second per event, so the
+    // first message comes before its answer and the second well after.
+    sentAt: `2026-11-18T00:0${n - 1}:00.000Z`,
   };
 }
 
@@ -146,17 +148,17 @@ describe("GET /v1/conversations/:id", () => {
         status: "answered",
       },
       {
+        role: "agent",
+        text: "An answer.",
+        eventId: expect.stringMatching(/^sevt_/) as unknown,
+        delivery: "sent",
+      },
+      {
         role: "user",
         text: "question 2",
         actor: { id: "U2" },
         messageId: "100.0000012",
         status: "failed",
-      },
-      {
-        role: "agent",
-        text: "An answer.",
-        eventId: expect.stringMatching(/^sevt_/) as unknown,
-        delivery: "sent",
       },
       {
         role: "note",
@@ -245,21 +247,60 @@ describe("GET /v1/conversations", () => {
       seen.push(...page.conversations.map((c) => c.id));
       before = page.next;
     } while (before !== null);
-    expect([...seen].sort()).toEqual([...ids].sort());
-    expect(seen).toHaveLength(3);
+    // Ties on the time are broken by id, newest-first meaning the larger id first.
+    expect(seen).toEqual([...ids].sort().reverse());
   });
 
-  it("is empty when there are none, and after a conversation that does not exist", async () => {
+  it("says there is no next page when the page holds exactly what is left", async () => {
+    for (const threadId of ["100.000001", "200.000001"]) await thread(threadId);
+    const page = conversationListSchema.parse(
+      await (await api().request("/v1/conversations?limit=2", { headers: auth })).json(),
+    );
+    expect(page.conversations).toHaveLength(2);
+    expect(page.next).toBeNull();
+  });
+
+  it("shows no agent session while one is still being started", async () => {
+    const { id } = await thread("100.000001");
+    await db.query(`update conversations set agent_session_id = 'starting:abc' where id = $1`, [
+      id,
+    ]);
+    const page = conversationListSchema.parse(
+      await (await api().request("/v1/conversations", { headers: auth })).json(),
+    );
+    expect(page.conversations[0]?.agent).toBeNull();
+  });
+
+  it("reads a conversation whose id was not made by the database", async () => {
+    const byHand = "00000000-0000-0000-0000-000000000001";
+    await db.query(
+      `insert into conversations (id, source, workspace_id, channel_id, thread_id)
+       values ($1, 'slack', 'T1', 'C1', '900.000001')`,
+      [byHand],
+    );
     const app = api();
-    expect(await (await app.request("/v1/conversations", { headers: auth })).json()).toEqual({
+    const detail = await app.request(`/v1/conversations/${byHand}`, { headers: auth });
+    expect(conversationDetailSchema.parse(await detail.json()).conversation.id).toBe(byHand);
+    const list = await app.request(`/v1/conversations?before=${byHand}`, { headers: auth });
+    expect(list.status).toBe(200);
+  });
+
+  it("is empty when there are none", async () => {
+    expect(await (await api().request("/v1/conversations", { headers: auth })).json()).toEqual({
       conversations: [],
       next: null,
     });
+  });
+
+  it("rejects a cursor that names no conversation, rather than looking like the last page", async () => {
     await thread("100.000001");
-    const res = await app.request("/v1/conversations?before=00000000-0000-4000-8000-000000000000", {
-      headers: auth,
-    });
-    expect(await res.json()).toEqual({ conversations: [], next: null });
+    await expectError(
+      await api().request("/v1/conversations?before=00000000-0000-4000-8000-000000000000", {
+        headers: auth,
+      }),
+      400,
+      "invalid_request",
+    );
   });
 
   it("rejects a query it does not understand", async () => {
@@ -310,6 +351,32 @@ describe("GET /v1/conversations/:id/events", () => {
     expect(second.next).toBeNull();
   });
 
+  it("says there is no next page when the page holds exactly what is left", async () => {
+    const { id } = await thread("100.000001");
+    const page = agentEventListSchema.parse(
+      await (
+        await api().request(`/v1/conversations/${id}/events?limit=6`, { headers: auth })
+      ).json(),
+    );
+    expect(page.events).toHaveLength(6);
+    expect(page.next).toBeNull();
+  });
+
+  it("shows a message still in the agent's queue with no processed time", async () => {
+    const { id, sessionId } = await thread("100.000001");
+    await receiveMessage(deps, message(2), log);
+    const conversation = await findConversationBySession(db, sessionId);
+    if (conversation === undefined) throw new Error("expected a conversation");
+    await syncConversation(deps, conversation, log);
+
+    const page = agentEventListSchema.parse(
+      await (await api().request(`/v1/conversations/${id}/events`, { headers: auth })).json(),
+    );
+    const queued = page.events.at(-1);
+    expect(queued).toMatchObject({ type: "user.message", kind: "user_message", processedAt: null });
+    expect(queued?.updatedAt).toMatch(/^\d{4}-/);
+  });
+
   it("lists only that conversation's events", async () => {
     const one = await thread("100.000001", "One.");
     const two = await thread("200.000001", "Two.");
@@ -332,7 +399,7 @@ describe("GET /v1/conversations/:id/events", () => {
       404,
       "not_found",
     );
-    for (const query of ["limit=0", "limit=501", "after=-1", "after=soon"]) {
+    for (const query of ["limit=0", "limit=201", "after=-1", "after=soon"]) {
       await expectError(
         await app.request(`/v1/conversations/${id}/events?${query}`, { headers: auth }),
         400,

@@ -86,7 +86,7 @@ function toSummary(row: Row): ConversationSummary {
 
 /**
  * Conversations, newest first. With `before` (a conversation's id), those older than it. An
- * id that names no conversation gives an empty page.
+ * id that names no conversation gives an empty page: callers check the id first.
  */
 export async function listConversations(
   db: Db,
@@ -169,6 +169,7 @@ const eventRow = z.object({
   processed_at: z.date().nullable(),
   payload: z.unknown(),
   position: z.number().int(),
+  updated_at: z.date(),
 });
 
 /**
@@ -181,7 +182,7 @@ export async function readAgentEvents(
   options: { limit: number; after?: number | undefined },
 ): Promise<AgentEventView[]> {
   const rows = await db.query(
-    `select event_id, type, kind, processed_at, payload, seq::float8 as position
+    `select event_id, type, kind, processed_at, payload, seq::float8 as position, updated_at
      from agent_events
      where conversation_id = $1 and seq > $2
      order by seq limit $3`,
@@ -196,6 +197,7 @@ export async function readAgentEvents(
       processedAt: r.processed_at === null ? null : r.processed_at.toISOString(),
       payload: r.payload,
       position: r.position,
+      updatedAt: r.updated_at.toISOString(),
     };
   });
 }

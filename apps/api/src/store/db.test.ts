@@ -278,6 +278,21 @@ describe("createPostgresDb", () => {
       (await listConversations(db, { limit: 100, before: conversation.id })).map((c) => c.id),
     ).not.toContain(conversation.id);
 
+    // Paging with ties on the time: every conversation once, in one fixed order.
+    await db.query(`update conversations set created_at = '2026-11-18T00:00:00Z'`);
+    const all = (await listConversations(db, { limit: 100 })).map((c) => c.id);
+    expect(all).toEqual([...all].sort().reverse());
+    expect(all.length).toBeGreaterThan(2);
+    const paged: string[] = [];
+    let cursor: string | undefined;
+    for (;;) {
+      const page = await listConversations(db, { limit: 2, before: cursor });
+      if (page.length === 0) break;
+      paged.push(...page.map((c) => c.id));
+      cursor = page.at(-1)?.id;
+    }
+    expect(paged).toEqual(all);
+
     expect(await readTranscript(db, conversation.id)).toMatchObject([
       { role: "agent", text: "Hello.", eventId: "evt_1", at: "2026-11-18T00:00:03.123Z" },
       { role: "note", text: "A note.", delivery: "pending" },

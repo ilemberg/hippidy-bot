@@ -5,6 +5,8 @@ import { messageSourceSchema } from "./messages.ts";
 // it comes from the API's own database, never from the agent runtime at request time.
 
 const timestamp = z.iso.datetime({ offset: true });
+/** A conversation's id: any UUID the database accepts, whatever its version. */
+const conversationId = z.guid();
 
 /** Where a conversation stands: waiting on the agent, or how its last turn ended. */
 export const conversationStatusSchema = z.enum(["new", "waiting", "answered", "failed", "stopped"]);
@@ -38,7 +40,7 @@ export type ConversationUsage = z.infer<typeof conversationUsageSchema>;
 
 /** One conversation: a thread of work in its source, and the agent session behind it. */
 export const conversationSummarySchema = z.strictObject({
-  id: z.uuid(),
+  id: conversationId,
   source: messageSourceSchema,
   workspaceId: z.string(),
   channelId: z.string(),
@@ -62,8 +64,11 @@ export type ConversationSummary = z.infer<typeof conversationSummarySchema>;
 /** Query of `GET /v1/conversations`. */
 export const listConversationsQuerySchema = z.strictObject({
   limit: z.coerce.number().int().min(1).max(100).default(20),
-  /** The `next` of the page before: lists the conversations older than that one. */
-  before: z.uuid().optional(),
+  /**
+   * The `next` of the page before: lists the conversations older than that one. An id that
+   * names no conversation is an error, not an empty page.
+   */
+  before: conversationId.optional(),
 });
 export type ListConversationsQuery = z.infer<typeof listConversationsQuerySchema>;
 
@@ -71,7 +76,7 @@ export type ListConversationsQuery = z.infer<typeof listConversationsQuerySchema
 export const conversationListSchema = z.strictObject({
   conversations: z.array(conversationSummarySchema),
   /** Pass as `before` for the next page; null when this is the last one. */
-  next: z.uuid().nullable(),
+  next: conversationId.nullable(),
 });
 export type ConversationList = z.infer<typeof conversationListSchema>;
 
@@ -134,14 +139,25 @@ export const agentEventSchema = z.strictObject({
   processedAt: timestamp.nullable(),
   /** The event exactly as the runtime sent it. Its shape belongs to the runtime. */
   payload: z.unknown(),
-  /** The event's place in the order events were stored. Pass the last one as `after`. */
+  /**
+   * The event's place in the order events were first stored, which is not always the order
+   * they happened in: a message queued during a turn is stored before the rest of that turn.
+   * Pass the last one as `after`.
+   */
   position: z.number().int(),
+  /**
+   * When the stored event last changed. An event can change after it is first listed (a
+   * queued user message gains its processed time), and paging with `after` does not return
+   * it again.
+   */
+  updatedAt: timestamp,
 });
 export type AgentEventView = z.infer<typeof agentEventSchema>;
 
 /** Query of `GET /v1/conversations/:id/events`. */
 export const listAgentEventsQuerySchema = z.strictObject({
-  limit: z.coerce.number().int().min(1).max(500).default(100),
+  /** Events carry their whole payload, which can be large: pages are small by default. */
+  limit: z.coerce.number().int().min(1).max(200).default(50),
   /** The `next` of the page before: lists the events stored after that position. */
   after: z.coerce.number().int().min(0).optional(),
 });

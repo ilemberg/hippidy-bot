@@ -173,9 +173,15 @@ All answered on 2026-11-18 ("go with your picks").
   deployed with an agent runtime whose every call fails.
 - Counts are stored as `bigint`, which the production client returns as strings; the reads
   cast them, and a test runs the reads through the production client.
+- The independent review found nothing that had to be fixed. Its smaller points are in
+  decision 93; the tests now also show people and agent interleaved in a transcript.
 - Known limits, accepted for now:
-  - A transcript is returned whole, not in pages. Fine for chat threads; revisit in slice 4
-    if coding sessions make transcripts long.
+  - A transcript is returned whole, not in pages, and an event page has no size budget in
+    bytes. Fine for chat threads; revisit in slice 4, when tool output makes both large
+    (Vercel limits a response to a few megabytes).
+  - Events are paged in the order they were first stored, which is not always the order they
+    happened in: a message queued during a turn is stored ahead of the rest of that turn.
+  - No index serves the two listings yet. Fine at this size.
   - Times in the API are to the millisecond (JavaScript dates); the database keeps
     microseconds and orders by them.
 
