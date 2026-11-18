@@ -46,5 +46,7 @@ export type InboundMessage = z.infer<typeof inboundMessageSchema>;
 export const acceptedMessageSchema = z.strictObject({
   id: z.uuid(),
   status: z.literal("accepted"),
+  /** True when this message had already been received; nothing new was done. */
+  duplicate: z.boolean().optional(),
 });
 export type AcceptedMessage = z.infer<typeof acceptedMessageSchema>;

@@ -1,0 +1,67 @@
+name: Agent sync
+
+# Syncs agents/ and environments/ to Anthropic (decision 58): a dry run on pull requests from
+# this repo, the real thing on merge to main. Pull requests from forks never get the key.
+on:
+  pull_request:
+    paths:
+      - "agents/**"
+      - "environments/**"
+      - "apps/api/scripts/sync-agent.ts"
+      - "apps/api/scripts/agent-files.ts"
+      - ".github/workflows/agent.yml"
+  push:
+    branches: [main]
+    paths:
+      - "agents/**"
+      - "environments/**"
+      - "apps/api/scripts/sync-agent.ts"
+      - "apps/api/scripts/agent-files.ts"
+      - ".github/workflows/agent.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-sync-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync the agent to Anthropic
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check the Anthropic key is configured
+        id: configured
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::warning::ANTHROPIC_API_KEY is not set, so the agent was not synced. See the README's Setup section."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v5
+        if: steps.configured.outputs.ready == 'true'
+      - uses: pnpm/action-setup@v4
+        if: steps.configured.outputs.ready == 'true'
+      - uses: actions/setup-node@v5
+        if: steps.configured.outputs.ready == 'true'
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        if: steps.configured.outputs.ready == 'true'
+      - name: Dry run
+        if: steps.configured.outputs.ready == 'true' && github.event_name == 'pull_request'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: pnpm agent:sync --dry-run
+      - name: Sync
+        if: steps.configured.outputs.ready == 'true' && github.event_name != 'pull_request'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: pnpm agent:sync

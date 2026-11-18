@@ -1,0 +1,10 @@
+# The environment hippidy-bot's sessions run in. Synced by `pnpm agent:sync`.
+# The agent has no tools in slice 2, so the sandbox needs no network access at all.
+name: hippidy-bot
+description: Sandbox for hippidy-bot sessions. No network until the agent gets tools.
+config:
+  type: cloud
+  networking:
+    type: limited
+    allow_package_managers: false
+    allow_mcp_servers: false

@@ -73,7 +73,7 @@ export async function handleMention(
     log.error("slack.api_call_failed", { error });
     return "api_rejected";
   }
-  if (!result.ok) {
+  if (result.kind === "rejected") {
     log.error("slack.api_rejected", { status: result.status, error: result.error });
     return "api_rejected";
   }

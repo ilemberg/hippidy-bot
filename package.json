@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && pnpm -r typecheck",
     "test": "vitest run",
     "build": "pnpm --filter @hippidy/api build",
-    "smoke": "pnpm --filter @hippidy/api smoke"
+    "smoke": "pnpm --filter @hippidy/api smoke",
+    "agent:sync": "pnpm --filter @hippidy/api agent:sync"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

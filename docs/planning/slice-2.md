@@ -132,6 +132,19 @@ All answered on 2026-11-18. B2 to B9 are in
 - A Slack event delivered twice starts one session.
 - Lint, typecheck, tests and the Vercel build check pass in CI.
 
+## As built (pull request B)
+
+- Settling, ordering and retries follow decisions 68 to 70: messages are matched to the agent's
+  own events, one sync per conversation at a time, and a delivery queue retried in order.
+- Known limits, accepted for now:
+  - A long reply is split into several Slack messages; if Slack fails partway, the retry posts
+    the earlier parts again.
+  - Every sync reads the session's whole event list. Fine at slice 2's volume; switch to
+    reading only new events (`created_at[gt]`) if it gets slow or costly.
+  - The agent sync workflow uses actions pinned by tag, and its pull request dry run runs the
+    pull request's own script with the API key (only people with write access can open one).
+    Pin by commit and consider a protected GitHub environment before slice 4.
+
 ## Not in this slice
 
 Tools for the agent, the repo mount (slice 4), the full record of messages and agent events

@@ -22,6 +22,12 @@ all pass. CI runs these, then `pnpm build && pnpm smoke`.
 - `apps/api/src/slack` is the Slack adapter: Bolt with the `@vercel/slack-bolt` receiver at
   `POST /slack/events`. It maps Slack events to the contract and calls the API through
   `ApiClient`. A lint rule stops it importing `src/api` or `src/compose.ts`.
+- `apps/api/src/agent` wraps the agent runtime (Claude Managed Agents) behind `AgentRuntime`,
+  with a fake for tests. The agent itself is defined in `agents/hippidy.md` and
+  `environments/hippidy.yaml` and synced by `pnpm agent:sync` (CI does it on merge); the
+  runtime looks both up by name. Never create agents from the request path.
+- `apps/api/src/api/conversations.ts` is the conversation loop: receive a message, start or
+  reuse the thread's session, sync replies back exactly once, settle messages, reconcile.
 - `apps/api/src/api` is the core API. It is channel-agnostic: it knows sources, conversations
   and messages, never Slack threads or Slack markup.
 - Slack (and later the UI) reach the system only through the API's routes and contract. The
@@ -63,6 +69,11 @@ all pass. CI runs these, then `pnpm build && pnpm smoke`.
 - Vercel's build runs its own type check, in which the global `Response` type is empty. Code
   that reads a Response from Hono's `app.fetch` must go through `ResponseLike` (see
   `src/compose.ts`). Check a risky change with a local `vercel build` if in doubt.
+- Vercel's type check also runs without strict null checks. `pnpm typecheck` runs a second
+  check like it (`apps/api/tsconfig.vercel.json`). Tag unions with strings (`kind: "a"`), not
+  booleans, and avoid type predicates (`x is T`) that only differ by nullability.
+- Import the Anthropic SDK's named export (`import { Anthropic } from "@anthropic-ai/sdk"`):
+  Vercel's type check does not see the default export as a class.
 - Workspace packages export their TypeScript source under the `source` condition (used by
   `tsc`, Vitest and `pnpm dev`) and compiled `dist/` by default (used on Vercel). The API's
   `build` script compiles them; Vercel runs it.

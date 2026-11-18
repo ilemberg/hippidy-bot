@@ -27,4 +27,12 @@ describe("readApiConfig", () => {
     expect(lines[0]).toMatchObject({ level: "error", msg: "config.service_token_invalid" });
     expect(JSON.stringify(lines)).not.toContain('short"');
   });
+
+  it("reads the reconcile token separately", () => {
+    const { log } = memoryLogger();
+    const reconcile = "r".repeat(40);
+    const config = readApiConfig({ API_SERVICE_TOKEN: goodToken, RECONCILE_TOKEN: reconcile }, log);
+    expect(config).toEqual({ serviceToken: goodToken, reconcileToken: reconcile });
+    expect(readApiConfig({ API_SERVICE_TOKEN: goodToken }, log).reconcileToken).toBeUndefined();
+  });
 });
