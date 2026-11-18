@@ -13,6 +13,7 @@ import {
 interface Ids {
   agentId: string;
   environmentId: string;
+  vaultId: string;
 }
 
 /**
@@ -36,12 +37,27 @@ export function createManagedAgentRuntime(
 
   return {
     async startSession({ title, metadata }) {
-      const { agentId, environmentId } = await resolveIds();
+      // Fails closed (decision 122): without the token, no session starts, so the message
+      // is answered with a note rather than reaching an agent that cannot see its repo.
+      if (config.repository === undefined) {
+        throw new Error("AGENT_GITHUB_TOKEN is missing or invalid; sessions cannot mount the repo");
+      }
+      const { agentId, environmentId, vaultId } = await resolveIds();
       const session = await client.beta.sessions.create({
         agent: agentId,
         environment_id: environmentId,
         title,
         metadata,
+        // The default branch, so a new thread starts from the latest main (decision 109). The
+        // token stays outside the sandbox: git reaches GitHub through a proxy that adds it.
+        resources: [
+          {
+            type: "github_repository",
+            url: config.repository.url,
+            authorization_token: config.repository.token,
+          },
+        ],
+        vault_ids: [vaultId],
         budget: {
           type: "limit",
           max_list_cost: { amount: String(config.sessionBudgetCents), currency: "USD" },
@@ -117,13 +133,18 @@ async function lookUpIds(client: Anthropic, config: AgentConfig): Promise<Ids> {
       environmentId = environment.id;
     }
   }
-  if (agentId === undefined || environmentId === undefined) {
+  let vaultId: string | undefined;
+  for await (const vault of client.beta.vaults.list()) {
+    if (vault.display_name === config.vaultName && vault.archived_at === null) vaultId = vault.id;
+  }
+  if (agentId === undefined || environmentId === undefined || vaultId === undefined) {
     throw new Error(
-      `Agent "${config.agentName}" or environment "${config.environmentName}" not found. ` +
-        "Run the agent sync (pnpm agent:sync) with this workspace's API key.",
+      `Agent "${config.agentName}", environment "${config.environmentName}" or vault ` +
+        `"${config.vaultName}" not found. Run the agent sync (pnpm agent:sync) with this ` +
+        "workspace's API key and AGENT_GITHUB_TOKEN.",
     );
   }
-  return { agentId, environmentId };
+  return { agentId, environmentId, vaultId };
 }
 
 /** A Managed Agents event as it is recorded: untouched, with what the API makes of it. */

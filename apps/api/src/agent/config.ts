@@ -11,11 +11,22 @@ export interface AgentConfig {
   environmentName: string;
   /** Hard spend cap per session, in US cents (decision 55). */
   sessionBudgetCents: number;
+  /**
+   * The repo every session mounts (decision 15) and the token that mounts it (decision 122).
+   * Undefined when the token is missing or bad: sessions then fail to start, so a message is
+   * answered with a note instead of reaching an agent without its repo.
+   */
+  repository: { url: string; token: string } | undefined;
+  /** The vault holding the GitHub MCP server's credential, made by the agent sync. */
+  vaultName: string;
 }
 
 export const AGENT_NAME = "hippidy-bot";
 export const ENVIRONMENT_NAME = "hippidy-bot";
-export const DEFAULT_SESSION_BUDGET_CENTS = 200;
+export const VAULT_NAME = "hippidy-bot";
+export const REPOSITORY_URL = "https://github.com/ilemberg/hippidy-bot";
+/** A coding session's starting cap (decision 107). */
+export const DEFAULT_SESSION_BUDGET_CENTS = 500;
 
 const schema = z.object({
   ANTHROPIC_API_KEY: z.string().regex(/^sk-ant-\S+$/, "must be an Anthropic API key"),
@@ -25,6 +36,9 @@ const schema = z.object({
     .optional(),
   SESSION_BUDGET_CENTS: z.coerce.number().int().min(1).max(10_000).optional(),
 });
+
+/** A fine-grained personal access token (decision 122). */
+const githubToken = z.string().regex(/^github_pat_\w+$/, "must be a fine-grained GitHub token");
 
 /** Reads what the agent runtime needs. Never throws; logs variable names, never values. */
 export function readAgentConfig(env: Env, log: Logger): AgentConfig | undefined {
@@ -45,12 +59,24 @@ export function readAgentConfig(env: Env, log: Logger): AgentConfig | undefined 
   if (parsed.data.ANTHROPIC_WEBHOOK_SIGNING_KEY === undefined) {
     log.warn("config.webhook_signing_key_missing", { variable: "ANTHROPIC_WEBHOOK_SIGNING_KEY" });
   }
+  const token = githubToken.safeParse(env.AGENT_GITHUB_TOKEN);
+  if (!token.success) {
+    log.error("config.agent_github_token_missing", {
+      variable: "AGENT_GITHUB_TOKEN",
+      reason:
+        env.AGENT_GITHUB_TOKEN === undefined || env.AGENT_GITHUB_TOKEN === ""
+          ? "not set"
+          : "not a fine-grained GitHub token",
+    });
+  }
   return {
     apiKey: parsed.data.ANTHROPIC_API_KEY,
     webhookSigningKey: parsed.data.ANTHROPIC_WEBHOOK_SIGNING_KEY,
     agentName: AGENT_NAME,
     environmentName: ENVIRONMENT_NAME,
     sessionBudgetCents: parsed.data.SESSION_BUDGET_CENTS ?? DEFAULT_SESSION_BUDGET_CENTS,
+    repository: token.success ? { url: REPOSITORY_URL, token: token.data } : undefined,
+    vaultName: VAULT_NAME,
   };
 }
 
