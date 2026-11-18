@@ -1,7 +1,14 @@
 import { Anthropic } from "@anthropic-ai/sdk";
 import type { BetaManagedAgentsSessionEvent } from "@anthropic-ai/sdk/resources/beta/sessions/events";
+import type { BetaManagedAgentsSession } from "@anthropic-ai/sdk/resources/beta/sessions/sessions";
 import type { AgentConfig } from "./config.ts";
-import type { AgentEvent, AgentRuntime } from "./runtime.ts";
+import {
+  SessionNotFoundError,
+  type AgentEvent,
+  type AgentEventRecord,
+  type AgentRuntime,
+  type SessionUsage,
+} from "./runtime.ts";
 
 interface Ids {
   agentId: string;
@@ -59,14 +66,32 @@ export function createManagedAgentRuntime(
     },
 
     async listEvents(sessionId) {
-      const events: AgentEvent[] = [];
-      for await (const event of client.beta.sessions.events.list(sessionId, { order: "asc" })) {
-        const mapped = toAgentEvent(event);
-        if (mapped !== undefined) events.push(mapped);
+      const records: AgentEventRecord[] = [];
+      try {
+        for await (const event of client.beta.sessions.events.list(sessionId, { order: "asc" })) {
+          records.push(toAgentEventRecord(event));
+        }
+      } catch (error) {
+        if (isNotFound(error)) throw new SessionNotFoundError(sessionId, { cause: error });
+        throw error;
       }
-      return events;
+      return records;
+    },
+
+    async readUsage(sessionId) {
+      try {
+        return toSessionUsage(await client.beta.sessions.retrieve(sessionId));
+      } catch (error) {
+        if (isNotFound(error)) throw new SessionNotFoundError(sessionId, { cause: error });
+        throw error;
+      }
     },
   };
+}
+
+/** Anthropic answers 404 for a session it no longer has. */
+function isNotFound(error: unknown): boolean {
+  return error instanceof Error && "status" in error && error.status === 404;
 }
 
 async function lookUpIds(client: Anthropic, config: AgentConfig): Promise<Ids> {
@@ -89,7 +114,56 @@ async function lookUpIds(client: Anthropic, config: AgentConfig): Promise<Ids> {
   return { agentId, environmentId };
 }
 
-/** Reduces a Managed Agents event to what the API acts on; everything else is dropped. */
+/** A Managed Agents event as it is recorded: untouched, with what the API makes of it. */
+export function toAgentEventRecord(event: BetaManagedAgentsSessionEvent): AgentEventRecord {
+  return {
+    id: event.id,
+    type: event.type,
+    processedAt: processedAtOf(event),
+    payload: event,
+    event: toAgentEvent(event),
+  };
+}
+
+/** Every event carries `processed_at`; a user message still in the queue has none yet. */
+function processedAtOf(event: object): Date | null {
+  const value: unknown = "processed_at" in event ? event.processed_at : undefined;
+  if (typeof value !== "string") return null;
+  const at = new Date(value);
+  return Number.isNaN(at.getTime()) ? null : at;
+}
+
+/** A session's cumulative usage and budget, in the runtime-independent shape. */
+export function toSessionUsage(
+  session: Pick<BetaManagedAgentsSession, "usage" | "budget">,
+): SessionUsage {
+  const { usage, budget } = session;
+  const cost = usage.list_cost ?? undefined;
+  const limit = budget === null ? undefined : budget.max_list_cost;
+  const creation = usage.cache_creation;
+  return {
+    inputTokens: usage.input_tokens ?? null,
+    outputTokens: usage.output_tokens ?? null,
+    cacheReadTokens: usage.cache_read_input_tokens ?? null,
+    cacheCreationTokens:
+      creation === undefined
+        ? null
+        : (creation.ephemeral_1h_input_tokens ?? 0) + (creation.ephemeral_5m_input_tokens ?? 0),
+    activeSeconds: usage.active_seconds ?? null,
+    listCostMinor: minorUnits(cost?.amount),
+    budgetMinor: minorUnits(limit?.amount),
+    currency: cost?.currency ?? limit?.currency ?? null,
+  };
+}
+
+/** Anthropic gives money as an integer string in minor units ("50" is fifty cents). */
+function minorUnits(amount: string | undefined): number | null {
+  if (amount === undefined || !/^\d+$/.test(amount)) return null;
+  const value = Number(amount);
+  return Number.isSafeInteger(value) ? value : null;
+}
+
+/** Reduces a Managed Agents event to what the API acts on; undefined for everything else. */
 export function toAgentEvent(event: BetaManagedAgentsSessionEvent): AgentEvent | undefined {
   switch (event.type) {
     case "user.message":

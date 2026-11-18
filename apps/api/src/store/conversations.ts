@@ -225,7 +225,7 @@ export async function releaseSyncLease(db: Db, conversationId: string): Promise<
 // Agent sessions
 
 /** Marks a session as being started; never a real session id. */
-const STARTING_PREFIX = "starting:";
+export const STARTING_PREFIX = "starting:";
 /** A session start not finished after this long is assumed lost (above the runtime's retries). */
 const STALE_START_SECONDS = 180;
 
@@ -507,8 +507,10 @@ export async function enqueueDelivery(
   payload: OutboundDelivery,
 ): Promise<void> {
   await db.query(
+    // Cast from text: the production client would otherwise store the string itself as a
+    // JSON string, not the object it holds. Rows from before this cast are read both ways.
     `insert into deliveries (conversation_id, agent_event_id, kind, payload)
-     values ($1, $2, $3, $4)
+     values ($1, $2, $3, $4::text::jsonb)
      on conflict (conversation_id, agent_event_id) do nothing`,
     [conversationId, key, kind, JSON.stringify(payload)],
   );

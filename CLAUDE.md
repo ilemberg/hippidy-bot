@@ -37,6 +37,10 @@ all pass. CI runs these, then `pnpm build && pnpm smoke`.
   API's shape starts there.
 - `apps/api/src/store` is the API's storage (Supabase Postgres): plain SQL with `$1` parameters
   through the small `Db` interface, rows checked with Zod. Only the API uses it.
+- The record (`src/api/record.ts`, `src/store/record.ts`): every sync stores the agent
+  session's events in `agent_events` and its usage on `conversations`, so a conversation can be
+  rebuilt from the database alone. Keeping the record never fails the conversation loop: it
+  logs and is retried.
 - `supabase/migrations` holds the schema. Add a new timestamped file for every change; never
   edit one that has been merged. CI applies them on merge to `main`, at the same time as Vercel
   deploys, so a migration must work with both the old and the new code (add first, remove
@@ -59,6 +63,11 @@ all pass. CI runs these, then `pnpm build && pnpm smoke`.
 - Never hold a database transaction open across a call to another service (Anthropic, Slack).
 - Database tests use `createTestDb()` from `src/store/testing.ts`: an in-process Postgres
   (PGlite) with every migration applied from scratch. No Docker.
+- The production client (postgres.js) does not behave exactly like PGlite. Pass JSON as text
+  and cast it in the SQL (`$1::text::jsonb`): bound straight to a jsonb parameter, a string is
+  stored as a JSON string. `bigint` columns come back as strings; cast (`::int`) or parse.
+  Anything touching JSON or number types gets a test in `src/store/db.test.ts`, which runs
+  through postgres.js.
 - Tests sit next to the code as `*.test.ts` (Vitest). Slack, Anthropic and the network are
   faked; no test talks to a real service. Pass dependencies in, rather than mocking modules.
 

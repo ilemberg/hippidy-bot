@@ -224,6 +224,36 @@ agent, marks the pending messages 🛑 and says so in the thread. "Don't stop" n
 A 🛑 on a thread where nothing is running does nothing; a stop message there gets "nothing
 running". Text the agent had already written before the stop may still arrive.
 
+## Slice 3: the record
+
+Nothing to set up. From this slice on, every conversation is kept in Supabase so it can be
+read back without Anthropic:
+
+- `agent_events`: every event of a conversation's agent session, with the raw payload.
+- `conversations`: the session's usage so far (tokens, running time, list cost in cents) and
+  its budget.
+- `conversation_transcript`: a view of what people wrote, what the agent answered and the
+  notes the bot posted.
+
+To look, open the Supabase dashboard, then **SQL Editor**, and run for example:
+
+```sql
+-- The latest conversation, as people saw it
+select role, actor_name, text, occurred_at
+from conversation_transcript
+where conversation_id = (select id from conversations order by created_at desc limit 1)
+order by occurred_at, recorded_at;
+
+-- What each conversation cost
+select created_at, usage_list_cost_minor / 100.0 as dollars, usage_input_tokens,
+       usage_output_tokens
+from conversations
+order by created_at desc;
+```
+
+Conversations from before this slice are filled in by the reconcile job, three per minute, as
+far as Anthropic still has them. In the Vercel logs, search for `record.`.
+
 ## Planning docs
 
 | Doc                                                                  | What it is                                                                                 |
