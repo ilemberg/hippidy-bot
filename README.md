@@ -307,7 +307,7 @@ repository secrets, exactly as before.
 | [docs/planning/wave-1.md](docs/planning/wave-1.md)                   | The wave 1 plan: six slices, each with a demo, exit criteria, and what is known to be hard |
 | [docs/planning/slice-1.md](docs/planning/slice-1.md)                 | Slice 1 as built: what was built, the manual steps, how the work was done                  |
 | [docs/planning/slice-2.md](docs/planning/slice-2.md)                 | Slice 2 as built: the agent loop, storage, names and stop                                  |
-| [docs/planning/slice-3.md](docs/planning/slice-3.md)                 | The current slice: Supabase as the record. What gets built, in which order, manual steps   |
+| [docs/planning/slice-3.md](docs/planning/slice-3.md)                 | Slice 3 as built: Supabase as the record, and what is still open before it closes          |
 | [docs/planning/open-questions.md](docs/planning/open-questions.md)   | The grill: decisions that are open, grouped by when they block                             |
 | [docs/planning/decisions.md](docs/planning/decisions.md)             | Decision log. Things move here from open-questions once decided                            |
 | [docs/planning/stack-and-tools.md](docs/planning/stack-and-tools.md) | Stack options, MCP servers, and off-the-shelf pieces that make this cheaper or better      |
