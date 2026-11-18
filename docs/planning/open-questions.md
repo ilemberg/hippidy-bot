@@ -68,6 +68,8 @@ only new events, housekeeping, one branch per pull request) are answered: see `d
 
 ## D. Blocks slice 4
 
+Nothing is open.
+
 `slice-4.md` collects these in one table with three new ones (D11 to D13). MCP servers come
 first where they do not make things worse (`decisions.md` 98), which changed the
 answer to D2 and the recommendation for D7.
@@ -84,25 +86,14 @@ D9 (not bricking the thing that fixes itself) is set aside and does not block sl
 D2 (one fine-grained personal access token on your account, the simplest that works) is
 answered: see `decisions.md` 104.
 
-**D4. How does the agent get the project instructions?** `CLAUDE.md` loading from a mounted
-repo is not documented; `.claude/skills/` is.
-*Recommendation:* keep one source of instructions in the repo, shared by local Claude Code
-and the cloud agent, and verify by experiment how the cloud agent picks it up.
+D4 (`CLAUDE.md` as the one source, plus a skill) and D6 (the sandbox runs the suite) are
+answered and confirmed by the experiment that opens the slice: see `decisions.md` 110.
 
-**D5. What is "done" for a change?** *Recommendation:* lint, typecheck and unit tests pass
-in the sandbox; the PR description says what changed and how it was verified; CI is green.
+D5 (what "done" means) and D8 (the thread keeps going on the same pull request) are answered:
+see `decisions.md` 109.
 
-**D6. Can the sandbox run the full test suite?** Needs a spike: Node version, package
-install time, no Docker. Whatever cannot run there must run in CI and be fed back to the agent.
-
-**D7. How do CI results get back to the agent and to Slack?**
-*Recommendation (changed 2026-11-18):* the agent reads its checks and failed job logs itself
-through the GitHub MCP server, waiting for them in the same turn. A GitHub webhook to the
-API, which wakes the session, is added only when results that arrive after the turn matter.
-
-**D8. One session per request, or does the thread keep going?**
-*Recommendation:* the thread's session continues through review feedback ("also rename X"),
-and a new top-level mention starts clean from the latest `main`.
+D7 (the agent reads its own CI results through MCP; a GitHub webhook waits for slice 6) is
+answered: see `decisions.md` 108.
 
 D11 (four GitHub MCP tools, running without asking, everything else off) is answered: see
 `decisions.md` 105.

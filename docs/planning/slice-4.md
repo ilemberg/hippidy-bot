@@ -1,12 +1,9 @@
 # Slice 4: the agent gets a development environment
 
-Status: **draft 2026-11-18, not started.** Decided so far: MCP servers first (decision 98), the
-agent opens the pull request through the GitHub MCP server (99), the problems of the bot
-developing itself are set aside (100), and the build session sees production through
-connectors (101), progress notes in the thread on a fixed schedule (103, 106), one
-fine-grained GitHub token (104), four GitHub tools that run without asking (105), and a
-starting budget (107). Still open: D4 to D8, each with a pick below; D4 and D6 are settled by
-the experiment.
+Status: **plan final 2026-11-18, not started** (decision 111). Every question is answered
+(decisions 98 to 110). Two answers are confirmed by the experiment that opens the slice: how
+the agent picks up the project instructions (D4) and whether the sandbox runs the whole test
+suite (D6).
 
 **Demo:** `@hippidy-bot change the 👀 reaction to 🫡`. The agent works in a clone of this repo,
 makes the change, runs lint, typecheck and tests, pushes a branch and opens a pull request.
@@ -84,7 +81,7 @@ exists, unless that makes things worse. "Worse" means one of:
 - _Verify:_ a fine-grained token without the Workflows permission cannot push a change to
   `.github/workflows`.
 
-## What gets built (sketch, firmed up after the experiment)
+## What gets built
 
 ### Agent and environment
 
@@ -119,8 +116,7 @@ exists, unless that makes things worse. "Worse" means one of:
 
 ## Experiment first
 
-One throwaway session, started by hand with the real agent settings, before the plan is made
-final. It answers what cannot be decided from the docs:
+One throwaway session, started by hand with the real agent settings, before anything is built. It answers what cannot be decided from the docs:
 
 | Question | What the experiment shows |
 |---|---|
@@ -140,23 +136,23 @@ hand in the `release` environment, or from your machine.
 | D1 | Which runtime? | Already answered: Managed Agents behind `AgentRuntime` (decision 4, built in slice 2). Reopens only if D6 fails |
 | D2 | GitHub identity | **Decided** (104): the simplest that works. A fine-grained personal access token on your account, limited to this repo (contents and pull requests: write; read access to CI results; no workflows, no administration; exact permission names checked in the experiment). It serves both the repo mount and the MCP server. If the experiment shows something we need does not accept it, the next simplest that does is used (a classic token first) and recorded. Cost: pull requests appear as you, so you cannot approve them; that matters in slice 6 |
 | D3 | Who opens the pull request? | **Decided** (99): the agent, through the GitHub MCP server |
-| D4 | How does the agent get the project instructions? | One source: `CLAUDE.md`. The prompt tells the agent to read it, and a skill under `.claude/skills/` holds the definition of done. Confirmed by the experiment |
-| D5 | What is "done"? | Lint, format check, typecheck and tests pass in the sandbox; the pull request says what changed and how it was checked; CI is green. Given to the session as an outcome with a rubric, so a grader checks it before the bot says ✅ |
-| D6 | Can the sandbox run the whole suite? | Expected yes (no Docker is needed since slice 2). Confirmed by the experiment; what cannot run there is left to CI |
-| D7 | How do CI results reach the agent? | **Changed pick:** the agent reads them itself through the GitHub MCP server. After opening the pull request it waits for the checks in the same turn (a limit of about ten minutes), reads the log of a failed job, fixes and pushes again. No GitHub webhook in this slice. The cost: anything that happens after the turn ends reaches the agent only when someone mentions it in the thread. A webhook that wakes the session is added when that hurts |
-| D8 | Does the thread keep going? | Yes: one thread is one session (decision 51), so "also rename X" continues on the same branch and pull request. A new top-level mention starts from the latest `main` |
+| D4 | How does the agent get the project instructions? | **Decided** (110): one source, `CLAUDE.md`. The prompt tells the agent to read it, and a skill under `.claude/skills/` holds the definition of done. The experiment confirms how the agent picks them up |
+| D5 | What is "done"? | **Decided** (109): lint, format check, typecheck and tests pass in the sandbox; the pull request says what changed and how it was checked; CI is green. Given to the session as an outcome with a rubric, so a grader checks it before the bot says ✅ |
+| D6 | Can the sandbox run the whole suite? | **Decided** (110): expected yes (no Docker is needed since slice 2), confirmed by the experiment; what cannot run there is left to CI |
+| D7 | How do CI results reach the agent? | **Decided** (108): the agent reads them itself through the GitHub MCP server. After opening the pull request it waits for the checks in the same turn (a limit of about ten minutes), reads the log of a failed job, fixes and pushes again. No GitHub webhook in this slice; one that wakes the session is planned for slice 6, where review, merge and deploy happen after the turn. Until then, anything that happens after the turn ends reaches the agent only when someone mentions it in the thread |
+| D8 | Does the thread keep going? | **Decided** (109): yes. One thread is one session (decision 51), so "also rename X" continues on the same branch and pull request. A new top-level mention starts from the latest `main` |
 | D9 | Not bricking the thing that fixes itself | **Set aside** (100). The fallback stays what it is today: this build session and Vercel's rollback |
 | D11 | Which GitHub MCP tools, and do they ask first? | **Decided** (105): four tools on, each running without asking: `create_pull_request`, `update_pull_request`, `pull_request_read` (the pull request, its diff, comments and check results) and `get_job_logs` (the log of a failed CI job). Everything else is off, among them `merge_pull_request`, `actions_run_trigger`, `push_files`, `create_or_update_file`, `delete_file`, `create_branch`, the review tools and the issue tools. No call waits for approval, so a thread cannot hang on one. The token's rights are the hard limit; the tool list is the second one |
 | D12 | What does the thread show during a long turn? | **Decided** (103, 106): 👀 as now, and a note in the thread with the latest on what the agent is doing when a turn is still running after 15 minutes, 1 hour, 2 hours, 4 hours and 8 hours, then every 4 hours. Nothing before 15 minutes. Each note is a new message; its text comes from the stored events (the agent's latest own words, else its latest step) with no extra model call; reconcile posts it, so it is right to the minute |
 | D13 | Budget for a coding session | **Decided** (107): about $5 to start (it is $2 for a talk-only thread, decision 55), raised when real turns need more. The long end of the progress schedule is there just in case, not a target. The workspace's monthly limit stays the backstop |
 
-## Order of work (proposed)
+## Order of work
 
 Schema ships before the code that uses it (decision 86); one branch per pull request (88).
 
 | # | Pull request | Depends on |
 |---|---|---|
-| A | This plan made final, decisions, and any migration | The open questions answered |
+| A | This plan and its decisions (done); then any migration, on its own | - |
 | - | The experiment | The manual steps marked "before the experiment" |
 | B | Loop hardening: lease owner check, read only new events, size budgets | The experiment (for decision 95) |
 | C | The agent gets the repo, the sandbox tools and the GitHub MCP server; sessions mount the repo and attach the vault | B |
@@ -177,7 +173,7 @@ Schema ships before the code that uses it (decision 86); one branch per pull req
 
 ## Done when
 
-Each line gets its exact query or log search when the plan is made final (decision 96).
+Each line gets its exact query or log search before its pull request merges (decision 96).
 
 - The demo works: a request in Slack ends with a pull request whose checks are green, and its
   link in the thread.

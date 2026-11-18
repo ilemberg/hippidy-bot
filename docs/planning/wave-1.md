@@ -202,11 +202,11 @@ Carried into this slice from slice 3:
 - The record is what progress updates and eval cases can be built from: tool use and model
   requests are already stored per conversation.
 
-Drafted 2026-11-18 in `slice-4.md`, not started. The sketch above is kept as it was; what
-changed (`decisions.md` 98 to 102):
+Planned 2026-11-18 in `slice-4.md` (final, not started). The sketch above is kept as it was;
+what changed (`decisions.md` 98 to 111):
 
 - MCP servers first. The agent opens the pull request through the GitHub MCP server (D3), and
-  the picks for D2 and D7 changed with it: one fine-grained token instead of a GitHub App,
+  the answers to D2 and D7 changed with it: one fine-grained token instead of a GitHub App,
   and the agent reads its own CI results through MCP instead of a GitHub webhook to the API.
 - The two "bot develops itself" items no longer block the slice: D9, and trying changes in
   real Slack without touching the real bot.
