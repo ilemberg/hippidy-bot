@@ -432,3 +432,6 @@ count of conversations left unstored.
 **Still to do by hand:** move the CI secrets into the `release` environment before slice 4;
 update and reinstall the Slack app so the bot gets the sender's name (both in the README).
 Moved since: both are now prerequisites of slice 6, not slice 4 (`decisions.md` 112).
+Done 2026-11-18, as reported by the owner: the CI secrets work from `release` (both workflows
+ran green on `main` by hand) and the repository ones are deleted; the Slack app is
+reinstalled and the sender's name tested; stop mid-answer (open since slice 2) tested live.

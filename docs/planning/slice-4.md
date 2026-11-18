@@ -176,7 +176,7 @@ closes).
 | Create the GitHub token (D2). Save it in Vercel, Production only, and as the GitHub MCP credential in an Anthropic vault | The experiment and the live demo: without it the agent cannot clone, push or open a pull request |
 | Make sure the rule on `main` (pull request and CI required) allows no bypass, including for you: the token acts as you | Safe use of the token |
 | ~~Move the CI secrets into the `release` environment and delete the repository ones~~ | **Done 2026-11-18** (confirmed by the owner): "Database migrations" ran green on `main` from the environment's secrets. The Anthropic key is exercised by the next "Agent sync" run |
-| Update and reinstall the Slack app (open since slice 2) | The bot knowing the sender's name |
+| ~~Update and reinstall the Slack app~~ | **Done 2026-11-18** (tested by the owner): the bot gets the sender's name. Stop mid-answer, open since slice 2, was tested live the same day |
 | Add the Supabase (read-only) and Vercel connectors to the build session | Live checks without screenshots |
 
 ## Done when
