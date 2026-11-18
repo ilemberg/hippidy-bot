@@ -76,7 +76,7 @@ first row can be swapped for another without touching Slack or the database.
 | 4 | Repo skills in `.claude/skills/` | Same skills locally and in the cloud |
 | 4 | Vault credentials | GitHub MCP auth; any CLI secret |
 | 4 | Outcomes | Rubric-graded "done" before the bot reports success |
-| 4 | Permission policies | Risky tool calls pause for approval in Slack |
+| 4 | Permission policies | Slice 4: a short list of tools that run without asking, the rest off (`slice-4.md`, D11). Pausing risky calls for approval in Slack comes later |
 | 5 | MCP servers | Ticket and document systems |
 | 6 | Multi-agent roster | Separate reviewer; later, team personas |
 | later | Memory stores | What the agent learns across sessions |
@@ -86,14 +86,19 @@ first row can be swapped for another without touching Slack or the database.
 For the cloud agent (runtime) and for local development with Claude Code. *Verify* each
 server's current URL and auth method before use.
 
+MCP servers come first where they do not make things worse (`decisions.md` 98). The "No"
+rows below are the cases where they would: the agent would go around the API. For the
+runtime agent a server is declared by URL in the agent file and its credential sits in an
+Anthropic vault; its tools ask before running unless each is set not to (`slice-4.md`).
+
 | Server | Runtime agent | Local development |
 |---|---|---|
-| GitHub | Slice 4: pull requests, issues | Yes |
+| GitHub | Slice 4: pull requests, checks and CI logs (decision 99). Issues from slice 5 | Yes |
 | Atlassian (Jira, Confluence) | Slice 5 candidate | Yes |
 | Linear | Slice 5 candidate | Yes |
 | Notion | Slice 5 candidate | Yes |
-| Supabase | No. The API is the only door to the database | Yes, against the dev project |
-| Vercel | No | Yes: deployments and logs |
+| Supabase | No. The API is the only door to the database | Yes, read-only against production: the build session's eyes (decision 101). There is no dev project (decision 63) |
+| Vercel | No | Yes: deployments and logs (decision 101) |
 | Slack | No. The API posts to Slack | Optional |
 | Context7 or similar docs server | Optional | Yes: current library docs |
 

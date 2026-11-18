@@ -23,6 +23,8 @@ Rules that hold for the whole wave:
 3. Agent runtime, work-item system and knowledge system each sit behind an interface, because
    the product direction (software factory, AI employee, or knowledge and task system) is not
    decided yet and those are the parts that would change.
+4. Where the agent needs an outside system, it uses an MCP server when one exists, unless
+   that makes things worse: for one, when it would go around rule 1 (`decisions.md` 98).
 
 ## Facts that shape the design
 
@@ -200,13 +202,27 @@ Carried into this slice from slice 3:
 - The record is what progress updates and eval cases can be built from: tool use and model
   requests are already stored per conversation.
 
+Planned 2026-11-18 in `slice-4.md` (final, not started). The sketch above is kept as it was;
+what changed (`decisions.md` 98 to 111):
+
+- MCP servers first. The agent opens the pull request through the GitHub MCP server (D3), and
+  the answers to D2 and D7 changed with it: one fine-grained token instead of a GitHub App,
+  and the agent reads its own CI results through MCP instead of a GitHub webhook to the API.
+- The two "bot develops itself" items no longer block the slice: D9, and trying changes in
+  real Slack without touching the real bot.
+- The build session gets its eyes on production from Supabase and Vercel connectors.
+- Three questions were added: which GitHub tools the agent gets (D11), progress in the thread
+  (D12, since answered: notes on a fixed schedule, decision 103) and the budget of a coding
+  session (D13).
+
 ## Slice 5: work from a ticket instead of a sentence
 
 **Demo:** `@hippidy-bot pick up HB-12`. The agent reads the ticket and linked docs, does the
 work, opens the PR, and updates the ticket.
 
 Sketch: a work-item provider and a knowledge provider behind interfaces, each backed by an
-MCP server where one exists. Candidates and tradeoffs are in `stack-and-tools.md`. The opinion
+MCP server where one exists (now the rule: `decisions.md` 98). Candidates and tradeoffs are in
+`stack-and-tools.md`. The opinion
 to form by then: for each system, is the agent the only writer, a collaborator, or read-only.
 
 Decide before starting: questions E1 to E5.

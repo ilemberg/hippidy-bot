@@ -35,7 +35,7 @@ Nothing is open. All of group A is decided (`decisions.md` 12, 16, 18, 21 to 28 
 
 One item from this group is deferred, not solved: how to test new code against Slack without
 taking the real bot offline. A leading candidate is recorded with it in `decisions.md`,
-"Deferred on purpose", to be decided before slice 4.
+"Deferred on purpose". It no longer blocks slice 4 (decision 100).
 
 ## B. Blocks slice 2
 
@@ -68,44 +68,41 @@ only new events, housekeeping, one branch per pull request) are answered: see `d
 
 ## D. Blocks slice 4
 
-**D1. Managed Agents or something else for the coding agent?**
-Alternatives: Claude Code GitHub Action triggered by the API, or the Claude Agent SDK in a
-container you host. See `stack-and-tools.md` for the comparison.
-*Recommendation:* Managed Agents, as planned, behind an `AgentRuntime` interface.
+Nothing is open.
 
-**D2. GitHub identity.** A personal access token (PRs appear as you, and you cannot approve
-your own PR) or a GitHub App (PRs appear as the bot, short-lived tokens, reviewable by you).
-*Recommendation:* GitHub App. It is more setup once and removes a wall in slice 6.
+`slice-4.md` collects these in one table with three new ones (D11 to D13). MCP servers come
+first where they do not make things worse (`decisions.md` 98), which changed the
+answer to D2 and the recommendation for D7.
 
-**D3. Who opens the PR?** The agent via the GitHub MCP server, or the API after the agent
-pushes a branch.
-*Recommendation:* spike both. API-opens-PR gives the agent less power and a more predictable
-PR format; MCP is the documented path.
+D1 (Managed Agents behind `AgentRuntime`) was answered up front and built in slice 2: see
+`decisions.md` 4. It reopens only if D6 fails.
 
-**D4. How does the agent get the project instructions?** `CLAUDE.md` loading from a mounted
-repo is not documented; `.claude/skills/` is.
-*Recommendation:* keep one source of instructions in the repo, shared by local Claude Code
-and the cloud agent, and verify by experiment how the cloud agent picks it up.
+D3 (the agent opens the pull request through the GitHub MCP server) is answered: see
+`decisions.md` 99.
 
-**D5. What is "done" for a change?** *Recommendation:* lint, typecheck and unit tests pass
-in the sandbox; the PR description says what changed and how it was verified; CI is green.
+D9 (not bricking the thing that fixes itself) is set aside and does not block slice 4: see
+`decisions.md` 100.
 
-**D6. Can the sandbox run the full test suite?** Needs a spike: Node version, package
-install time, no Docker. Whatever cannot run there must run in CI and be fed back to the agent.
+D2 (one fine-grained personal access token on your account, the simplest that works) is
+answered: see `decisions.md` 104.
 
-**D7. How do CI results get back to the agent and to Slack?**
-*Recommendation:* a GitHub webhook to the API, which posts to the thread and, on failure,
-sends the failure to the same session to fix.
+D4 (`CLAUDE.md` as the one source, plus a skill) and D6 (the sandbox runs the suite) are
+answered and confirmed by the experiment that opens the slice: see `decisions.md` 110.
 
-**D8. One session per request, or does the thread keep going?**
-*Recommendation:* the thread's session continues through review feedback ("also rename X"),
-and a new top-level mention starts clean from the latest `main`.
+D5 (what "done" means) and D8 (the thread keeps going on the same pull request) are answered:
+see `decisions.md` 109.
 
-**D9. How do you avoid bricking the thing that fixes itself?** Deferred by choice; revisit
-before slice 4 ships.
-*Recommendation:* local Claude Code on the repo always works without the bot; Vercel rollback
-is documented in the repo; the bot's deploy and the agent's config are in the "human review
-always" tier.
+D7 (the agent reads its own CI results through MCP; a GitHub webhook waits for slice 6) is
+answered: see `decisions.md` 108.
+
+D11 (four GitHub MCP tools, running without asking, everything else off) is answered: see
+`decisions.md` 105.
+
+D12 (progress notes after 15 minutes, 1, 2, 4 and 8 hours, then every 4 hours) is answered:
+see `decisions.md` 103 and 106.
+
+D13 (a coding session starts at about $5, raised when turns need more) is answered: see
+`decisions.md` 107.
 
 D10 (browser for the agent) is answered: try Playwright in the sandbox first, see
 `decisions.md` 24.
