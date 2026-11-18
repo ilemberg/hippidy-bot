@@ -352,6 +352,28 @@ When it expires (GitHub emails you first), make a new one the same way, replace 
 places, then run **Actions**, **Agent sync**, **Run workflow** on `main` so the vault gets
 the new one too.
 
+## Slice 4: the experiment
+
+Before the agent gets the repo, one throwaway session checks what the docs cannot (decision
+118; the questions are under "Experiment first" in `docs/planning/slice-4.md`). It runs only
+from `main`, by hand, in the `release` environment, and needs `ANTHROPIC_API_KEY` and
+`AGENT_GITHUB_TOKEN` there.
+
+1. **Actions**, **Slice 4 experiment**, **Run workflow** on `main`, mode `probes-only`. This
+   costs nothing: it checks the token (repo, check runs, job logs, and that it cannot push a
+   workflow change) and lists the tools at each address of GitHub's MCP server. The findings
+   are in the run's summary.
+2. If those look right, run it again with mode `full` (about 30 to 60 minutes, at most $10 by
+   default). It makes its own agent, environment and vault named `hippidy-bot-experiment`,
+   runs one session in three turns (a sandbox report, a plain question, the demo change), and
+   prints a table of findings in the run's summary.
+3. It cleans up after itself: the agent's pull request is closed, every `experiment/` branch
+   is deleted, the vault is deleted and the rest archived. If a run dies half way, run it with
+   mode `cleanup-only`.
+
+Locally, with the three variables set (`GITHUB_REPOSITORY` is `owner/name`):
+`pnpm agent:experiment --probes-only`.
+
 ## Planning docs
 
 | Doc                                                                  | What it is                                                                                 |
@@ -360,7 +382,7 @@ the new one too.
 | [docs/planning/slice-1.md](docs/planning/slice-1.md)                 | Slice 1 as built: what was built, the manual steps, how the work was done                  |
 | [docs/planning/slice-2.md](docs/planning/slice-2.md)                 | Slice 2 as built: the agent loop, storage, names and stop                                  |
 | [docs/planning/slice-3.md](docs/planning/slice-3.md)                 | Slice 3 as built: Supabase as the record, the read routes, and how the slice closed        |
-| [docs/planning/slice-4.md](docs/planning/slice-4.md)                 | Slice 4 plan: the agent gets a development environment (not started)                       |
+| [docs/planning/slice-4.md](docs/planning/slice-4.md)                 | Slice 4 plan: the agent gets a development environment (in progress)                       |
 | [docs/planning/open-questions.md](docs/planning/open-questions.md)   | The grill: decisions that are open, grouped by when they block                             |
 | [docs/planning/decisions.md](docs/planning/decisions.md)             | Decision log. Things move here from open-questions once decided                            |
 | [docs/planning/stack-and-tools.md](docs/planning/stack-and-tools.md) | Stack options, MCP servers, and off-the-shelf pieces that make this cheaper or better      |

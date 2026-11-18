@@ -1,0 +1,64 @@
+name: Slice 4 experiment
+
+# The experiment that opens slice 4 (decision 118): one throwaway agent session on this repo,
+# run by hand. It answers the questions under "Experiment first" in docs/planning/slice-4.md
+# and prints its findings in the job summary. It makes its own agent, environment and vault
+# (named hippidy-bot-experiment), so the production agent is not touched; it closes the
+# pull request the agent opens and deletes every `experiment/` branch when it ends.
+#
+# It needs the Anthropic key and the agent's GitHub token, which live in the `release`
+# environment that only `main` may use (decision 94). So it runs only from `main`, and only
+# when started by hand: Actions, Slice 4 experiment, Run workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "full: everything. probes-only: token and MCP checks, no agent, no cost. cleanup-only: remove what a failed run left."
+        type: choice
+        options: [full, probes-only, cleanup-only]
+        default: full
+      allowed_hosts:
+        description: Hosts the sandbox may reach, besides package registries and MCP servers (comma-separated)
+        type: string
+        default: github.com,nodejs.org
+      budget_usd:
+        description: Spend cap for the session, in dollars
+        type: string
+        default: "10"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: slice-4-experiment
+  cancel-in-progress: false
+
+jobs:
+  experiment:
+    name: Run the experiment
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    environment: release
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Secrets are given only to this step, never to third-party actions.
+      - name: Experiment
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AGENT_GITHUB_TOKEN: ${{ secrets.AGENT_GITHUB_TOKEN }}
+          EXPERIMENT_ALLOWED_HOSTS: ${{ inputs.allowed_hosts }}
+          EXPERIMENT_BUDGET_USD: ${{ inputs.budget_usd }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          case "$MODE" in
+            full) pnpm agent:experiment ;;
+            *) pnpm agent:experiment "--$MODE" ;;
+          esac
