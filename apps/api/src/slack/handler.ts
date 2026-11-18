@@ -28,7 +28,7 @@ export interface MentionDelivery {
 export type MentionOutcome =
   "reacted" | "stopped" | "dropped_retry" | "invalid_event" | "api_rejected" | "reaction_failed";
 
-export const RECEIVED_REACTION = "eyes";
+export const RECEIVED_REACTION = "saluting_face";
 /** The reaction that stops the agent in a thread (decision 60). */
 export const STOP_REACTION = "octagonal_sign";
 
@@ -38,7 +38,7 @@ export function isStopCommand(text: string): boolean {
 }
 
 /**
- * Handles one `app_mention`: send it to the API, and add 👀 once the API has accepted it.
+ * Handles one `app_mention`: send it to the API, and add 🫡 once the API has accepted it.
  * Never throws; every outcome is logged and returned.
  */
 export async function handleMention(

@@ -54,7 +54,7 @@ Vercel does and checks it starts (`pnpm build && pnpm smoke`).
 | `GET /v1/conversations`            | service token       | Conversations, newest first. `limit` (1 to 100, default 20); `before` takes the `next` of the page before                                     |
 | `GET /v1/conversations/:id`        | service token       | One conversation: its state, usage and cost, and the transcript, oldest first                                                                 |
 | `GET /v1/conversations/:id/events` | service token       | Every event the agent session reported, raw, in the order stored. `limit` (1 to 200, default 50); `after` takes the `next` of the page before |
-| `POST /slack/events`               | Slack signature     | Slack's Events API. On `app_mention`: sends the message through `/v1/messages`, then reacts 👀. Answers 503 until Slack is configured         |
+| `POST /slack/events`               | Slack signature     | Slack's Events API. On `app_mention`: sends the message through `/v1/messages`, then reacts 🫡. Answers 503 until Slack is configured         |
 
 The request and response shapes are in `packages/contracts`. Every error from the API has the
 body `{"error":{"code":"...","message":"..."}}`. The one exception is `/slack/events`: errors there
@@ -139,7 +139,7 @@ push protection.
    `https://hippidy-bot.vercel.app/slack/events`, then click **Retry** (or enter it). Slack should
    show **Verified**. Check `app_mention` is listed under bot events, and save.
 3. In Slack, invite the bot to a channel (`/invite @hippidy-bot`) and mention it:
-   `@hippidy-bot hello`. Within a couple of seconds the message gets a 👀 reaction, and the Vercel
+   `@hippidy-bot hello`. Within a couple of seconds the message gets a 🫡 reaction, and the Vercel
    logs show a `message.received` line with who sent it and where.
 4. Soon after, while Vercel still has the logs: find the `slack.mention.raw` line for that
    mention and copy its `body`. It becomes the test fixture in the last pull request of the
@@ -216,8 +216,8 @@ Do steps 1 to 4 **before merging** the agent loop pull request: once it is deplo
    environment in your Anthropic workspace (check the run is green), the **Database
    migrations** workflow adds the schedule, and Vercel deploys. Redeploy once in Vercel if you
    added variables after the last deploy.
-6. **Try it.** Mention `@hippidy-bot` with a question. 👀 appears at once; within a minute or
-   so the answer arrives in the thread and 👀 becomes ✅. Reply in the thread, mentioning the
+6. **Try it.** Mention `@hippidy-bot` with a question. 🫡 appears at once; within a minute or
+   so the answer arrives in the thread and 🫡 becomes ✅. Reply in the thread, mentioning the
    bot, and it answers with the earlier context.
 
 If no answer arrives: search the Vercel logs for `conversation.`, `webhook.` and

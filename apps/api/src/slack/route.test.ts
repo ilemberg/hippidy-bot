@@ -125,7 +125,7 @@ describe("POST /slack/events", () => {
     expect(await reaction).toEqual({
       channel: "C0LAN2Q65",
       timestamp: "1515449522.000016",
-      name: "eyes",
+      name: "saluting_face",
     });
     // Nothing tried to reach Slack, and the API itself logged the message with the Slack
     // event id as the correlation id.
@@ -173,7 +173,7 @@ describe("POST /slack/events", () => {
     expect(await reaction).toEqual({
       channel: "C0CHT679Y1K",
       timestamp: "1794971036.957189",
-      name: "eyes",
+      name: "saluting_face",
     });
     expect(lines).toContainEqual(
       expect.objectContaining({

@@ -109,7 +109,7 @@ export interface ReceiveResult {
  * Handles one inbound message: record it once, make sure the thread has an agent session, and
  * hand the message to it. Returns once the agent has the message; the answer arrives later
  * through the webhook or reconcile (decision 13). If the thread can take no more messages, the
- * message is answered with a note instead (posted by the next reconcile, after 👀 is added).
+ * message is answered with a note instead (posted by the next reconcile, after 🫡 is added).
  */
 export async function receiveMessage(
   deps: ConversationDeps,
@@ -579,7 +579,7 @@ async function giveUpIfStuck(
  * Stops the agent in a conversation (decision 60): interrupts the session if it is working,
  * marks every pending message stopped (🛑), and says so in the thread. The stop message
  * itself, when there is one, is marked stopped too. Sends the result straight away; the
- * source adds no 👀 to a stop.
+ * source adds no 🫡 to a stop.
  */
 export async function stopConversation(
   deps: ConversationDeps,

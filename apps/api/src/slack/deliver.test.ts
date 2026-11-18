@@ -35,7 +35,7 @@ describe("createSlackDeliverer", () => {
     expect(calls).toEqual(["post C1 100.000001 *Yes.*"]);
   });
 
-  it("swaps 👀 for ✅ on every answered message", async () => {
+  it("swaps 🫡 for ✅ on every answered message", async () => {
     const { poster, calls } = fakePoster();
     await createSlackDeliverer(poster).deliver(
       { kind: "status", target, messageIds: ["1.1", "1.2"], status: "answered" },
@@ -43,9 +43,9 @@ describe("createSlackDeliverer", () => {
     );
     expect(calls).toEqual([
       "add 1.1 white_check_mark",
-      "remove 1.1 eyes",
+      "remove 1.1 saluting_face",
       "add 1.2 white_check_mark",
-      "remove 1.2 eyes",
+      "remove 1.2 saluting_face",
     ]);
   });
 

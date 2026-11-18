@@ -20,7 +20,7 @@ const HARMLESS = new Set(["already_reacted", "no_reaction"]);
 
 /**
  * Delivers the API's outbound messages to Slack (decision 53): replies go in the thread as
- * Slack-formatted text, and a status swaps the 👀 on each settled message for ✅, ❌ or 🛑.
+ * Slack-formatted text, and a status swaps the 🫡 on each settled message for ✅, ❌ or 🛑.
  * Throws if anything did not go out, so the API retries it.
  */
 export function createSlackDeliverer(poster: SlackPoster | (() => SlackPoster)): Deliverer {

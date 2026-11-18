@@ -54,14 +54,14 @@ function mentionSaying(text: string): MentionDelivery {
 const first: MentionDelivery = { body: fixture, retryNum: 0, retryReason: "" };
 
 describe("handleMention", () => {
-  it("sends one message to the API and adds one 👀 reaction", async () => {
+  it("sends one message to the API and adds one 🫡 reaction", async () => {
     const { deps, posted, reactions, lines } = setup();
     expect(await handleMention(first, deps)).toBe("reacted");
     expect(posted).toHaveLength(1);
     expect(posted[0]?.correlationId).toBe("Ev0LAN670R");
     expect(posted[0]?.message.text).toBe("What is the hour of the pearl, ?");
     expect(reactions).toEqual([
-      { channel: "C0LAN2Q65", timestamp: "1515449522.000016", name: "eyes" },
+      { channel: "C0LAN2Q65", timestamp: "1515449522.000016", name: "saluting_face" },
     ]);
     expect(lines).toContainEqual(
       expect.objectContaining({ msg: "slack.mention.raw", correlationId: "Ev0LAN670R" }),
@@ -176,7 +176,7 @@ describe("stop", () => {
     },
   );
 
-  it("sends '@bot stop' to the API as a stop for the thread, with no 👀", async () => {
+  it("sends '@bot stop' to the API as a stop for the thread, with no 🫡", async () => {
     const { deps, posted, stops, reactions } = setup();
     expect(await handleMention(mentionSaying("<@U0LAN0Z89> stop"), deps)).toBe("stopped");
     expect(posted).toEqual([]);
