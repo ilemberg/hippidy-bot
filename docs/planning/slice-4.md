@@ -3,8 +3,10 @@
 Status: **draft 2026-11-18, not started.** Decided so far: MCP servers first (decision 98), the
 agent opens the pull request through the GitHub MCP server (99), the problems of the bot
 developing itself are set aside (100), and the build session sees production through
-connectors (101), and progress notes in the thread on a fixed schedule (103). Still open: D2,
-D4 to D8, D11 and D13, each with a pick below.
+connectors (101), progress notes in the thread on a fixed schedule (103, 106), one
+fine-grained GitHub token (104), four GitHub tools that run without asking (105), and a
+starting budget (107). Still open: D4 to D8, each with a pick below; D4 and D6 are settled by
+the experiment.
 
 **Demo:** `@hippidy-bot change the 👀 reaction to 🫡`. The agent works in a clone of this repo,
 makes the change, runs lint, typecheck and tests, pushes a branch and opens a pull request.
@@ -136,7 +138,7 @@ hand in the `release` environment, or from your machine.
 | # | Question | Pick, or the answer |
 |---|---|---|
 | D1 | Which runtime? | Already answered: Managed Agents behind `AgentRuntime` (decision 4, built in slice 2). Reopens only if D6 fails |
-| D2 | GitHub identity | **Changed pick:** a fine-grained personal access token on your account, limited to this repo (contents and pull requests: write; read access to CI results; no workflows, no administration; exact permission names checked in the experiment). It serves both the repo mount and the MCP server. A GitHub App was the earlier pick, but its tokens last an hour and a vault can only renew OAuth tokens, so it works against MCP first. Cost: pull requests appear as you, so you cannot approve them; that matters in slice 6, and the move to an App or a bot account is made then |
+| D2 | GitHub identity | **Decided** (104): the simplest that works. A fine-grained personal access token on your account, limited to this repo (contents and pull requests: write; read access to CI results; no workflows, no administration; exact permission names checked in the experiment). It serves both the repo mount and the MCP server. If the experiment shows something we need does not accept it, the next simplest that does is used (a classic token first) and recorded. Cost: pull requests appear as you, so you cannot approve them; that matters in slice 6 |
 | D3 | Who opens the pull request? | **Decided** (99): the agent, through the GitHub MCP server |
 | D4 | How does the agent get the project instructions? | One source: `CLAUDE.md`. The prompt tells the agent to read it, and a skill under `.claude/skills/` holds the definition of done. Confirmed by the experiment |
 | D5 | What is "done"? | Lint, format check, typecheck and tests pass in the sandbox; the pull request says what changed and how it was checked; CI is green. Given to the session as an outcome with a rubric, so a grader checks it before the bot says ✅ |
@@ -144,9 +146,9 @@ hand in the `release` environment, or from your machine.
 | D7 | How do CI results reach the agent? | **Changed pick:** the agent reads them itself through the GitHub MCP server. After opening the pull request it waits for the checks in the same turn (a limit of about ten minutes), reads the log of a failed job, fixes and pushes again. No GitHub webhook in this slice. The cost: anything that happens after the turn ends reaches the agent only when someone mentions it in the thread. A webhook that wakes the session is added when that hurts |
 | D8 | Does the thread keep going? | Yes: one thread is one session (decision 51), so "also rename X" continues on the same branch and pull request. A new top-level mention starts from the latest `main` |
 | D9 | Not bricking the thing that fixes itself | **Set aside** (100). The fallback stays what it is today: this build session and Vercel's rollback |
-| D11 | Which GitHub MCP tools, and do they ask first? | Four tools on, each running without asking: `create_pull_request`, `update_pull_request`, `pull_request_read` (the pull request, its diff, comments and check results) and `get_job_logs` (the log of a failed CI job). Everything else is off, among them `merge_pull_request`, `actions_run_trigger`, `push_files`, `create_or_update_file`, `delete_file`, `create_branch`, the review tools and the issue tools. The token's rights are the hard limit; the tool list is the second one. The other options, not picked: every tool on with the server judging each call (`auto`), which can pause a session the loop cannot yet un-pause; or every call approved by you in Slack, which needs an approval step built first |
-| D12 | What does the thread show during a long turn? | **Decided** (103): 👀 as now, and a note in the thread with the latest on what the agent is doing when a turn is still running after 15 minutes, 1 hour, 2 hours, 4 hours and 8 hours, then every 4 hours. Nothing before 15 minutes. How it is built (picks): reconcile posts it, so it is right to the minute; the text comes from the stored events (the agent's latest own words, else its latest step), with no extra model call; each note is a new message in the thread |
-| D13 | Budget for a coding session | About $5 to start (it is $2 for a talk-only thread, decision 55), reset from the first ten measured sessions. The workspace's monthly limit stays the backstop. Open against decision 103: its schedule expects turns of many hours, and a turn ends when its session reaches the cap, long before that at $5 |
+| D11 | Which GitHub MCP tools, and do they ask first? | **Decided** (105): four tools on, each running without asking: `create_pull_request`, `update_pull_request`, `pull_request_read` (the pull request, its diff, comments and check results) and `get_job_logs` (the log of a failed CI job). Everything else is off, among them `merge_pull_request`, `actions_run_trigger`, `push_files`, `create_or_update_file`, `delete_file`, `create_branch`, the review tools and the issue tools. No call waits for approval, so a thread cannot hang on one. The token's rights are the hard limit; the tool list is the second one |
+| D12 | What does the thread show during a long turn? | **Decided** (103, 106): 👀 as now, and a note in the thread with the latest on what the agent is doing when a turn is still running after 15 minutes, 1 hour, 2 hours, 4 hours and 8 hours, then every 4 hours. Nothing before 15 minutes. Each note is a new message; its text comes from the stored events (the agent's latest own words, else its latest step) with no extra model call; reconcile posts it, so it is right to the minute |
+| D13 | Budget for a coding session | **Decided** (107): about $5 to start (it is $2 for a talk-only thread, decision 55), raised when real turns need more. The long end of the progress schedule is there just in case, not a target. The workspace's monthly limit stays the backstop |
 
 ## Order of work (proposed)
 
