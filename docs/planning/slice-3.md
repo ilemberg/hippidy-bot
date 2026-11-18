@@ -1,8 +1,9 @@
 # Slice 3: Supabase as the record
 
-Status: **started 2026-11-18.** Pull request A (this plan, the decisions and the migration) is
-merged and applied. Pull requests B (the write path) and C (the read path) are merged and
-deployed. Pull request D (housekeeping) is built.
+Status: **built and deployed 2026-11-18; not closed yet.** Pull requests A to D are merged
+(ilemberg/hippidy-bot 10 to 13). Two live checks are open, both yours: see "Open before the
+slice closes" below. Reading only new events (pull request E) is carried forward to slice 4
+(decision 95). Retro in `wave-1.md`.
 
 **Demo:** ask `@hippidy-bot` a question and get an answer, as in slice 2. Then read the whole
 conversation back from the API with Anthropic out of the picture: who wrote what, what the
@@ -95,7 +96,7 @@ code that uses it: the rule slice 2 broke once.
 | B | Write path and backfill | A merged and applied |
 | C | Read path | B |
 | D | Housekeeping | Nothing; any time |
-| E | Read only new events | B, and only if B was clean |
+| E | Read only new events | Carried forward to slice 4 (decision 95) |
 | - | Close: retro, re-sketch slice 4 | All of the above |
 
 ## What you will need to do by hand
@@ -195,6 +196,27 @@ All answered on 2026-11-18 ("go with your picks").
 - By hand (README, "Slice 3 setup: keep the CI secrets to `main`"): create the environment,
   restrict it to `main`, add the four secrets, delete the repository ones. The protection only
   holds once the repository secrets are deleted.
+
+## Open before the slice closes
+
+Checked live on 2026-11-18, after the write path deployed: events, usage and cost are stored
+for a new conversation, the transcript reads correctly, and no note has an empty text. Two
+things were not right, and neither is in this slice's code:
+
+- **The slice 2 conversation was not backfilled.** The backfill runs from `/v1/reconcile`.
+  Supabase does call it every minute, and every call is answered 401: the token in Supabase
+  Vault (`hippidy_reconcile_token`) is not the `RECONCILE_TOKEN` the API has. Confirmed
+  2026-11-18 from Supabase's own record of the calls. So the safety net for lost webhooks
+  has not been running since slice 2. The fix is by hand: one new token, set in both places
+  (retro, "to do by hand").
+- **The bot does not know the sender's name** (`actor_name` is null). Most likely the Slack
+  app was not updated and reinstalled after slice 2's "names and stop" (README).
+
+The slice closes when the first is fixed and the backfill has run (`not_yet_stored` is 0).
+The second is slice 2's and does not hold the slice.
+
+Also yours, any time before slice 4: move the CI secrets into the `release` environment
+(README, "Slice 3 setup: keep the CI secrets to `main`").
 
 ## Risks
 

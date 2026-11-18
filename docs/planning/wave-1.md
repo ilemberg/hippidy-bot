@@ -144,9 +144,12 @@ Exit criteria:
 Decide before starting: questions C1 to C6.
 
 Re-planned 2026-11-18 from what slice 2 built: see `slice-3.md`. The sketch above is kept as
-it was; the model that is being built is a raw event log (`agent_events`), usage on
-`conversations`, and a transcript view instead of `messages` and `agent_sessions` tables
-(`decisions.md` 75 to 87).
+it was; what was built is a raw event log (`agent_events`), usage on `conversations`, a
+transcript view instead of `messages` and `agent_sessions` tables, and three read routes
+(`decisions.md` 75 to 96).
+
+Built and deployed 2026-11-18; it closes when one live check passes. See `slice-3.md` and the
+retro below.
 
 ## Slice 4: the agent gets a development environment
 
@@ -180,6 +183,22 @@ Risks to design for:
   slice (`decisions.md`, "Deferred on purpose").
 
 Decide before starting: questions D1 to D9.
+
+Carried into this slice from slice 3:
+
+- Confirm the reconcile job is running in production before anything depends on it again.
+- Move the CI secrets into the `release` environment and delete the repository ones
+  (decision 94). Until then a pull request, including the agent's, can add a workflow that
+  reads them.
+- Make the sync lease owner-checked: a sync that outlives its 120 seconds can free a lease
+  another sync holds. Coding turns run long, so this stops being rare.
+- Read only new events on each sync (decision 95), after a probe of the live API. A coding
+  session lists thousands of events; today every sync reads them all.
+- Give transcripts and event pages a size budget: tool output makes both large, and Vercel
+  limits a response to a few megabytes. Revisit retention (decision 76) against the free
+  plan's 500 MB at the same time.
+- The record is what progress updates and eval cases can be built from: tool use and model
+  requests are already stored per conversation.
 
 ## Slice 5: work from a ticket instead of a sentence
 
@@ -329,3 +348,81 @@ deployed; their live check (a stop mid-answer, the bot using your name) is still
 
 **Carried forward:** check names and stop live; read only new agent events instead of the
 whole list on every sync; a long reply that fails partway is re-posted from the start.
+
+### Slice 3 (built 2026-11-18, one live check open)
+
+**Shipped:** ilemberg/hippidy-bot pull requests 10 (plan, decisions, schema), 11 (write path),
+12 (read path) and 13 (pinned actions, CI secrets kept to `main`). Checked live: a new
+conversation's events, usage and cost are stored, and its transcript reads back. Not yet: the
+slice 2 conversation was never backfilled (see below), so the slice is not closed.
+
+**What was learned:**
+
+- **Re-planning from what exists cut the slice to about a third.** Four of the five exit
+  criteria were already met. A view and one table replaced the four tables of the sketch, and
+  the conversation loop's tables were not touched.
+- **The test database is not the production client.** postgres.js stored a string bound to a
+  `jsonb` parameter as a JSON string; PGlite alone does not, so every test passed while
+  production held strings. It surfaced as empty note texts in a view nothing read yet.
+  Anything touching JSON or number types now has a test through the production client.
+- **A fix can open the next hole.** Storing payloads as real JSON meant a reply containing a
+  null character would have blocked its thread for good. The independent review found it by
+  running old and new code side by side. It found two must-fix problems in the write path
+  and none in the read path.
+- **Checking the SDK's types before designing paid off twice:** events change after they are
+  first listed (so the log is "never deleted", not "never updated"), and Anthropic reports
+  cost itself, in cents.
+- **Migration first worked.** The schema merged and applied before any code used it. A second
+  migration shipped with code, safely, because both old and new code read both forms.
+- **One session carried four pull requests** by restarting its branch from `main` after each
+  merge (decision 88). The friction of slice 2 did not come back.
+- **The build session cannot see production.** It took four screenshots from you to learn
+  that the write path worked and the backfill did not. The cause was a slice 2 leftover
+  nobody had noticed: Supabase has called `/v1/reconcile` every minute since slice 2 and
+  been answered 401 every time, because the token in Vault is not the one the API has. The
+  safety net for lost webhooks was never on. A second leftover: the bot does not get the
+  sender's name. "Merged and green" had been standing in for "works".
+- **A repository secret is open to any workflow a pull request adds.** Protecting the agent
+  sync's dry run, as planned, would not have closed that. The secrets now belong in an
+  environment only `main` may use, which needs your hands to finish.
+
+**What changes for the next slices:**
+
+- Every "done when" line gets a live check, written as the exact query or log search to run,
+  and the slice does not close until it has been run (decision 96).
+- Give the build session read-only eyes on production before slice 4: a Supabase or Vercel
+  connector, or a read-only database role. From slice 4 the agent's work has to be checked
+  against what actually happened.
+- Slice 4's list of things carried in is in its section above.
+
+**Carried forward:** read only new events (decision 95); the sync lease owner check; a long
+reply that fails partway is re-posted from the start; lazy-load Bolt; Dependabot alerts.
+
+**To do by hand before the slice closes:**
+
+1. Give the reconcile job a token the API accepts. Make a new one (`openssl rand -hex 32`)
+   and set the same value in both places, with no space or line break around it:
+   - Vercel: Settings, Environment Variables, `RECONCILE_TOKEN`, Production only. Then
+     redeploy: a changed variable only reaches new deployments.
+   - Supabase: Project Settings, Vault, `hippidy_reconcile_token`.
+
+   If you want to know what was wrong first, search Vercel's logs for `auth.rejected` and
+   read the `reason`: `service_token_not_configured` (the variable is missing in Production
+   or shorter than 32 characters), `wrong_token` (the two differ) or `malformed_header` (the
+   Vault value has a space or line break in it).
+
+2. Two minutes later, this should show `http response` rows starting with 200:
+
+   ```sql
+   select coalesce(status_code::text, 'no status') || ' '
+            || left(coalesce(content, error_msg, ''), 80) as response,
+          created
+   from net._http_response order by created desc limit 3;
+   ```
+
+3. A few minutes after that, this should be 0:
+
+   ```sql
+   select count(*) from conversations
+   where agent_session_id is not null and agent_events_synced_at is null;
+   ```
