@@ -5,7 +5,7 @@ explore how an AI teammate fits into a SaaS product engineering team: engineers 
 team lead, senior, mid, junior), product manager, designer, QA, engineering manager and other
 stakeholders.
 
-**Status: slice 3 done.** Mention `@hippidy-bot` in Slack and a Claude agent answers in the thread; reply
+**Status: slice 3 done; slice 4 planned, not started.** Mention `@hippidy-bot` in Slack and a Claude agent answers in the thread; reply
 there and it remembers the conversation. Every conversation is kept in Supabase, with what the agent
 did and what it cost, and can be read back through the API.
 
@@ -314,6 +314,44 @@ repository secrets, exactly as before.
    Run **Database migrations** once more: still green means the environment's secrets are the
    ones in use.
 
+## Slice 4 setup: the GitHub token
+
+From slice 4 the agent pushes branches and opens pull requests on this repo, which needs a
+key: one fine-grained personal access token on your account, for this repo only (decisions
+104 and 122). The API hands it to Anthropic when a session starts, so the agent's `git push`
+works without the token entering its sandbox. The agent sync keeps the same token in an
+Anthropic vault for GitHub's MCP server, which the agent uses to open pull requests and read
+CI results.
+
+Done on 2026-11-18. Nothing reads the token yet: the slice 4 experiment and pull request C
+will. To make it again:
+
+1. Open https://github.com/settings/personal-access-tokens/new (**Settings**, **Developer
+   settings**, **Personal access tokens**, **Fine-grained tokens**).
+2. Name it `hippidy-bot agent`. Pick the longest expiry offered and note the date.
+3. **Resource owner:** your account. **Repository access:** **Only select repositories**, then
+   `hippidy-bot`.
+4. **Repository permissions:**
+   - Contents: **Read and write**
+   - Pull requests: **Read and write**
+   - Actions: **Read-only**
+   - Commit statuses: **Read-only**
+   - Metadata: **Read-only** (GitHub sets it)
+   - everything else, Workflows and Administration included: **No access**
+5. Generate it and copy it straight into the two places below, never into a chat, a file or
+   your shell history:
+   - GitHub: the repo's **Settings**, **Environments**, `release`, **Add environment
+     secret**.
+   - Vercel: the project's **Settings**, **Environment Variables**, **Production** only,
+     marked **Sensitive**.
+
+   The name is `AGENT_GITHUB_TOKEN` in both. (GitHub does not allow secret names that start
+   with `GITHUB_`.)
+
+When it expires (GitHub emails you first), make a new one the same way, replace it in both
+places, then run **Actions**, **Agent sync**, **Run workflow** on `main` so the vault gets
+the new one too.
+
 ## Planning docs
 
 | Doc                                                                  | What it is                                                                                 |
@@ -322,6 +360,7 @@ repository secrets, exactly as before.
 | [docs/planning/slice-1.md](docs/planning/slice-1.md)                 | Slice 1 as built: what was built, the manual steps, how the work was done                  |
 | [docs/planning/slice-2.md](docs/planning/slice-2.md)                 | Slice 2 as built: the agent loop, storage, names and stop                                  |
 | [docs/planning/slice-3.md](docs/planning/slice-3.md)                 | Slice 3 as built: Supabase as the record, the read routes, and how the slice closed        |
+| [docs/planning/slice-4.md](docs/planning/slice-4.md)                 | Slice 4 plan: the agent gets a development environment (not started)                       |
 | [docs/planning/open-questions.md](docs/planning/open-questions.md)   | The grill: decisions that are open, grouped by when they block                             |
 | [docs/planning/decisions.md](docs/planning/decisions.md)             | Decision log. Things move here from open-questions once decided                            |
 | [docs/planning/stack-and-tools.md](docs/planning/stack-and-tools.md) | Stack options, MCP servers, and off-the-shelf pieces that make this cheaper or better      |

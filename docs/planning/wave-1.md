@@ -215,6 +215,21 @@ what changed (`decisions.md` 98 to 111):
   (D12, since answered: notes on a fixed schedule, decision 103) and the budget of a coding
   session (D13).
 
+Revised 2026-11-18 after the plan was checked against the code and the SDK
+(`decisions.md` 112 to 124). Still not started:
+
+- The loop is made fit for long turns: a turn is stopped only once it has gone quiet for 30
+  minutes, and only its last message is posted, beside the progress notes.
+- Every message goes with an outcome, and ✅ comes from the grader's verdict, not from the
+  turn ending.
+- The GitHub MCP server's address must include its actions tools. The token can merge, so the
+  tool list is what stops a merge.
+- The experiment gets its own pull request and runs in `release`, with a throwaway agent.
+- Everything is kept; the database size is read at each slice's close (13 MB at the start).
+- The steps by hand are done (CI secrets in `release`, Slack app, connectors, the GitHub
+  token as `AGENT_GITHUB_TOKEN`), except confirming the rule on `main` and the workspace's
+  spend limit.
+
 ## Slice 5: work from a ticket instead of a sentence
 
 **Demo:** `@hippidy-bot pick up HB-12`. The agent reads the ticket and linked docs, does the
