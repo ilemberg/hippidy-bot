@@ -2,15 +2,27 @@ import { randomUUID } from "node:crypto";
 import {
   CORRELATION_ID_HEADER,
   inboundMessageSchema,
+  listAgentEventsQuerySchema,
+  listConversationsQuerySchema,
   stopRequestSchema,
   type AcceptedMessage,
+  type AgentEventList,
+  type ConversationDetail,
+  type ConversationList,
 } from "@hippidy/contracts";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { z } from "zod";
 import type { VerifyAgentWebhook } from "../agent/webhooks.ts";
 import type { ApiConfig } from "../config.ts";
 import type { Logger } from "../log.ts";
 import { findConversationBySession } from "../store/conversations.ts";
+import {
+  listConversations,
+  readAgentEvents,
+  readConversation,
+  readTranscript,
+} from "../store/reading.ts";
 import { requireServiceToken } from "./auth.ts";
 import {
   reconcile,
@@ -22,6 +34,8 @@ import {
 import { errorResponse } from "./errors.ts";
 import { backfillRecord } from "./record.ts";
 import type { ApiEnv } from "./types.ts";
+
+const conversationIdSchema = z.uuid();
 
 export interface ApiDeps {
   config: ApiConfig;
@@ -116,6 +130,81 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
       return errorResponse(c, 503, "not_configured", "Conversations are not configured");
     }
     return c.json(await stopConversation(deps.conversations, parsed.data, c.var.log), 202);
+  });
+
+  // Reading the record (decision 79). Everything below is answered from the database alone:
+  // the agent runtime is not asked, so a conversation reads the same when it is unreachable.
+  const readers = requireServiceToken(deps.config.serviceToken);
+
+  /** The issues of a bad query string, in the error shape. */
+  const invalidQuery = (c: Context<ApiEnv>, error: z.ZodError) =>
+    errorResponse(
+      c,
+      400,
+      "invalid_request",
+      "Query is invalid",
+      error.issues.map((issue) => ({ path: issue.path.join("."), message: issue.message })),
+    );
+
+  api.get("/v1/conversations", readers, async (c) => {
+    const query = listConversationsQuerySchema.safeParse(c.req.query());
+    if (!query.success) return invalidQuery(c, query.error);
+    if (deps.conversations === undefined) {
+      return errorResponse(c, 503, "not_configured", "Conversations are not configured");
+    }
+    // One more than asked for, to know whether there is a next page.
+    const found = await listConversations(deps.conversations.db, {
+      limit: query.data.limit + 1,
+      before: query.data.before,
+    });
+    const conversations = found.slice(0, query.data.limit);
+    const last = conversations.at(-1);
+    const body: ConversationList = {
+      conversations,
+      next: found.length > query.data.limit && last !== undefined ? last.id : null,
+    };
+    return c.json(body);
+  });
+
+  api.get("/v1/conversations/:id", readers, async (c) => {
+    const id = conversationIdSchema.safeParse(c.req.param("id"));
+    if (!id.success) return errorResponse(c, 404, "not_found", "No such conversation");
+    if (deps.conversations === undefined) {
+      return errorResponse(c, 503, "not_configured", "Conversations are not configured");
+    }
+    const conversation = await readConversation(deps.conversations.db, id.data);
+    if (conversation === undefined) {
+      return errorResponse(c, 404, "not_found", "No such conversation");
+    }
+    const body: ConversationDetail = {
+      conversation,
+      transcript: await readTranscript(deps.conversations.db, id.data),
+    };
+    return c.json(body);
+  });
+
+  api.get("/v1/conversations/:id/events", readers, async (c) => {
+    const id = conversationIdSchema.safeParse(c.req.param("id"));
+    if (!id.success) return errorResponse(c, 404, "not_found", "No such conversation");
+    const query = listAgentEventsQuerySchema.safeParse(c.req.query());
+    if (!query.success) return invalidQuery(c, query.error);
+    if (deps.conversations === undefined) {
+      return errorResponse(c, 503, "not_configured", "Conversations are not configured");
+    }
+    if ((await readConversation(deps.conversations.db, id.data)) === undefined) {
+      return errorResponse(c, 404, "not_found", "No such conversation");
+    }
+    const found = await readAgentEvents(deps.conversations.db, id.data, {
+      limit: query.data.limit + 1,
+      after: query.data.after,
+    });
+    const events = found.slice(0, query.data.limit);
+    const last = events.at(-1);
+    const body: AgentEventList = {
+      events,
+      next: found.length > query.data.limit && last !== undefined ? last.position : null,
+    };
+    return c.json(body);
   });
 
   // Anthropic calls this when a session changes state (decision 13). The body is thin: it

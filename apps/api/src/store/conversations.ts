@@ -1,9 +1,13 @@
 import {
+  conversationStatusSchema,
   messageSourceSchema,
   outboundDeliverySchema,
+  sessionStateSchema,
+  type ConversationStatus,
   type InboundMessage,
   type MessageSource,
   type OutboundDelivery,
+  type SessionState,
 } from "@hippidy/contracts";
 import { z } from "zod";
 import type { Db, Row } from "./db.ts";
@@ -16,15 +20,12 @@ export interface ConversationKey {
   threadId: string;
 }
 
-export const conversationStatusSchema = z.enum(["new", "waiting", "answered", "failed", "stopped"]);
-export type ConversationStatus = z.infer<typeof conversationStatusSchema>;
+// The statuses are part of the contract (clients read them); the store uses the same ones.
+export { conversationStatusSchema, sessionStateSchema };
+export type { ConversationStatus, SessionState };
 
 /** Final states a message can be settled into. */
 export type SettledStatus = Exclude<ConversationStatus, "new" | "waiting">;
-
-export const sessionStateSchema = z.enum(["active", "budget_reached", "terminated"]);
-/** Whether the thread's agent session can still take messages. */
-export type SessionState = z.infer<typeof sessionStateSchema>;
 
 const conversationRow = z.object({
   id: z.string(),

@@ -1,7 +1,8 @@
 # Slice 3: Supabase as the record
 
 Status: **started 2026-11-18.** Pull request A (this plan, the decisions and the migration) is
-merged and applied. Pull request B (the write path) is built; the read path is next.
+merged and applied. Pull request B (the write path) is merged and deployed. Pull request C
+(the read path) is built.
 
 **Demo:** ask `@hippidy-bot` a question and get an answer, as in slice 2. Then read the whole
 conversation back from the API with Anthropic out of the picture: who wrote what, what the
@@ -163,6 +164,20 @@ All answered on 2026-11-18 ("go with your picks").
     that conversation.
   - The fake agent's clock in tests is not the messages' clock, so tests do not show a
     realistic interleaving of people and agent in the transcript.
+
+## As built (pull request C)
+
+- Decision 92: three read routes (list, one conversation with transcript, raw events), with
+  their shapes in `packages/contracts/src/conversations.ts`. No migration.
+- The proof of the demo is a test: a conversation is built, then read through the API as
+  deployed with an agent runtime whose every call fails.
+- Counts are stored as `bigint`, which the production client returns as strings; the reads
+  cast them, and a test runs the reads through the production client.
+- Known limits, accepted for now:
+  - A transcript is returned whole, not in pages. Fine for chat threads; revisit in slice 4
+    if coding sessions make transcripts long.
+  - Times in the API are to the millisecond (JavaScript dates); the database keeps
+    microseconds and orders by them.
 
 ## Risks
 
