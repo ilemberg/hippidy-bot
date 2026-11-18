@@ -1,6 +1,6 @@
 # Slice 2: talk to one managed agent
 
-Status: **drafted after slice 1, not started. Questions below need your answers first.**
+Status: **drafted after slice 1, not started.** Six questions are answered (decisions 51 to 55); seven are still open.
 
 **Demo:** mention `@hippidy-bot` with a question. 👀 appears at once. Within a minute or so the
 bot replies in a thread under your message, and 👀 becomes ✅. Reply in that thread (mentioning
@@ -23,8 +23,8 @@ Scheduled reconcile ─▶ sessions waiting too long ─▶ same fetch-and-deliv
 ```
 
 The API stays channel-agnostic in both directions: it knows conversations, messages and
-deliveries. Posting to Slack is done by the Slack adapter, behind an interface the API defines
-(question B10).
+deliveries. Posting to Slack is done by the Slack adapter, behind a delivery interface the API
+defines (decision 53).
 
 ## What gets built
 
@@ -62,11 +62,11 @@ record).
   message exactly once.
 - `POST /v1/reconcile` (service token): for conversations waiting longer than a threshold,
   runs the same fetch-and-deliver; after a hard limit, marks them failed so ❌ is shown. Called
-  on a schedule (B11).
+  about every minute by Supabase `pg_cron` (decision 54).
 - Two messages in quick succession: the second is sent only when the session is idle again,
   so answers come back in order. *Verify* whether a session accepts a message while it is
   running; if it does not, the API queues it in `conversations`.
-- Per-session budget cap (B6).
+- Per-session budget cap of about $2 (decision 55).
 
 ### Slack adapter
 
@@ -90,7 +90,7 @@ record).
 |---|---|
 | Before work starts | Answer the questions below |
 | Early | Create a Supabase project (free tier) and give its database URL to Vercel, Production only |
-| Early | Create an Anthropic API key for this project, set a monthly spend limit on its workspace (B6), and add the key to Vercel |
+| Early | Create an Anthropic API key for this project, set a monthly spend limit on its workspace (decision 55), and add the key to Vercel |
 | After the agent PR | Point Anthropic's webhook at `https://hippidy-bot.vercel.app/v1/webhooks/agent` and add its signing secret to Vercel |
 | After the Slack PR | Reinstall the Slack app for the new `users:read` scope |
 
@@ -99,18 +99,18 @@ record).
 Each question has a recommendation; "go with your picks" is a valid answer. B2 to B9 are in
 `open-questions.md`; B10 to B14 are new from slice 1.
 
-| # | Question | Recommendation |
+| # | Question | Recommendation, or the answer |
 |---|---|---|
-| B2 | What is one conversation? | One Slack thread = one conversation = one agent session. A top-level mention starts a new one |
-| B3 | Must replies in a thread mention the bot? | Yes, at first. Smallest scope, no ambiguity |
-| B4 | Backup for lost "finished" webhooks | A scheduled reconcile (in the plan above) |
+| B2 | What is one conversation? | **Decided** (51): one Slack thread = one conversation = one agent session. A top-level mention starts a new one |
+| B3 | Must replies in a thread mention the bot? | **Decided** (52): yes, at first |
+| B4 | Backup for lost "finished" webhooks | **Decided** (54): a scheduled reconcile, as in the plan above |
 | B5 | Final answer only, or progress? | Final answer only, with reactions as status |
-| B6 | Cost cap | About $2 per session, plus a monthly spend limit on the Anthropic workspace |
+| B6 | Cost cap | **Decided** (55): about $2 per session, plus a monthly spend limit on the Anthropic workspace |
 | B7 | Agent prompt and config | Files in the repo, synced by script, changed by pull request |
 | B8 | Open threads when the agent changes | Accept that old threads keep the old version; record the version per conversation |
 | B9 | Can you stop it? | A "stop" reaction (🛑) on the user's message sends an interrupt. Small; could slip to slice 3 |
-| B10 | How does the API post back without knowing Slack? | The API defines a delivery interface keyed by source; `compose.ts` registers the Slack implementation. The API calls it in-process, the same way the adapter calls the API |
-| B11 | What runs the reconcile on a schedule? | Supabase `pg_cron` calling `/v1/reconcile` every minute. Vercel's free plan limits cron jobs (*verify*: it has allowed only daily runs) |
+| B10 | How does the API post back without knowing Slack? | **Decided** (53): the API defines a delivery interface keyed by source; `compose.ts` registers the Slack implementation; the API calls it in-process |
+| B11 | What runs the reconcile on a schedule? | **Decided** (54): Supabase `pg_cron` calls `/v1/reconcile` about every minute. Vercel's free plan limits cron jobs (*verify*) |
 | B12 | Migrations: Supabase CLI or Drizzle, and who applies them? (C2, C4 pulled forward) | Supabase CLI migrations with generated types, applied by CI on merge to `main`, never by hand |
 | B13 | Supabase environments (C3 pulled forward) | One hosted project for production; PGlite for tests; no separate dev project yet |
 | B14 | Testing split details (decision 17 said "revisit before implementing") | Unit and database tests (PGlite) run everywhere; CI also builds and smoke-tests as now; no Docker yet |

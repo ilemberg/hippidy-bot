@@ -57,6 +57,12 @@ entries are not edited.
 | 48 | 2026-11-18 | Node 26 (Vercel's current LTS) is the pinned version, per decision 32 | Vercel lists Node 26 as generally available and the default for new projects |
 | 49 | 2026-11-18 | Slice 1 is done: the demo works in production. Slice 2 is drafted in `slice-2.md` and has not started | Retro in `wave-1.md` |
 | 50 | 2026-11-18 | The production domain is `hippidy-bot.vercel.app`; Slack's events URL points there | Vercel's branch addresses sit behind a login wall Slack cannot pass |
+| 51 | 2026-11-18 | Answers B2: one Slack thread is one conversation is one agent session. A top-level mention starts a new one | Simplest mapping; matches how people already use Slack threads |
+| 52 | 2026-11-18 | Answers B3: replies in a thread must mention the bot, at first | Smallest Slack scope (no reading every channel message) and no guessing which messages are for the bot |
+| 53 | 2026-11-18 | Answers B10: the API sends replies back through a delivery interface it defines, keyed by source. `compose.ts` registers the Slack adapter's implementation, and the API calls it in-process | Keeps the API channel-agnostic in both directions; the mirror image of how the adapter calls the API (decision 30) |
+| 54 | 2026-11-18 | Answers B11, and with it B4: a reconcile job finds conversations still waiting and fetches their replies directly; Supabase `pg_cron` calls the API's `/v1/reconcile` about every minute | Managed Agents webhooks give up silently after three attempts. Vercel's free plan limits scheduled jobs (to be confirmed when the slice starts) |
+| 55 | 2026-11-18 | Answers B6: a budget cap of about $2 per agent session (one conversation), plus a monthly spend limit on the Anthropic workspace as the backstop. The slice 4 cap is set later from measured coding sessions | Fits the $100 a month budget (decision 11) |
+| 56 | 2026-11-18 | Slice 2 plan updated with decisions 51 to 55. Not started; B5, B7, B8, B9 and B12 to B14 are still open | Planning only until told to begin |
 
 ## Deferred on purpose
 

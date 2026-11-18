@@ -39,35 +39,19 @@ taking the real bot offline. A leading candidate is recorded with it in `decisio
 
 ## B. Blocks slice 2
 
-`slice-2.md` collects these with five new ones (B10 to B14) in one table to answer before the
-slice starts.
+`slice-2.md` collects these with five new ones (B10 to B14) in one table. Answered so far: B2,
+B3, B4, B6, B10 and B11 (`decisions.md` 51 to 55). Still open: B5, B7, B8, B9, B12, B13, B14.
 
 B1 (storage before slice 3) is answered: see `decisions.md` 8.
 
-**B2. What is one conversation?**
-*Recommendation:* one Slack thread is one conversation is one agent session. A top-level
-mention starts a new one.
-
-**B3. Must replies in a thread mention the bot?**
-Without a mention, the bot needs to read all channel messages (a broader Slack scope) and
-decide which are for it.
-*Recommendation:* require the mention at first. Smallest scope, no ambiguity.
-
-**B4. Backup for lost "agent finished" notifications.**
-The async loop is decided (`decisions.md` 13). Still open: Anthropic tells the API an agent has
-finished by calling a webhook, tries three times, then gives up without saying so. If the API
-was down or erroring at that moment, the Slack thread stays on 👀 forever.
-*Recommendation:* a small scheduled job that asks "which conversations are still waiting?"
-and checks each one directly. A dozen lines, and it turns a silent hang into a late reply.
+B2 (one thread is one conversation), B3 (replies must mention the bot) and B4 (a reconcile job
+as the backup for lost webhooks) are answered: see `decisions.md` 51, 52 and 54.
 
 **B5. Final answer only, or progress as it works?**
 *Recommendation:* final answer only in slice 2, with the reaction as the status signal. Live
 progress (editing one status message) when slice 4 makes turns long.
 
-**B6. What cap per session, inside the $100 a month budget?** Model is decided (Opus 5.5,
-`decisions.md` 20).
-*Recommendation:* about $2 per session for slice 2, a monthly spend limit on the Anthropic
-workspace as the backstop, and set the slice 4 cap from measured coding sessions.
+B6 (about $2 per session plus a monthly spend limit) is answered: see `decisions.md` 55.
 
 **B7. How are the agent's prompt and config managed?**
 *Recommendation:* as files in the repo, synced with Anthropic's CLI, so prompt changes go
