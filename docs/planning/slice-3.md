@@ -1,8 +1,8 @@
 # Slice 3: Supabase as the record
 
 Status: **started 2026-11-18.** Pull request A (this plan, the decisions and the migration) is
-merged and applied. Pull request B (the write path) is merged and deployed. Pull request C
-(the read path) is built.
+merged and applied. Pull requests B (the write path) and C (the read path) are merged and
+deployed. Pull request D (housekeeping) is built.
 
 **Demo:** ask `@hippidy-bot` a question and get an answer, as in slice 2. Then read the whole
 conversation back from the API with Anthropic out of the picture: who wrote what, what the
@@ -104,7 +104,7 @@ code that uses it: the rule slice 2 broke once.
 |---|---|
 | After A merges | Check the "Database migrations" workflow went green. Nothing else: no new secrets |
 | After B deploys | Ask the bot something, then look at `agent_events` and `conversation_transcript` in the Supabase table editor |
-| For D | Create the protected environment in GitHub and move `ANTHROPIC_API_KEY` into it (steps will be in the README) |
+| For D | Create the `release` environment in GitHub, restrict it to `main`, and move the four CI secrets into it (README, "Slice 3 setup: keep the CI secrets to `main`") |
 | Any time | Still open from slice 2: check names and stop live |
 
 ## Decisions
@@ -184,6 +184,17 @@ All answered on 2026-11-18 ("go with your picks").
   - No index serves the two listings yet. Fine at this size.
   - Times in the API are to the millisecond (JavaScript dates); the database keeps
     microseconds and orders by them.
+
+## As built (pull request D)
+
+- Decision 94: actions pinned by commit; the secret-using jobs run in the `release`
+  environment. This goes further than "protect the agent sync": the same weakness applied to
+  the Supabase secrets, and a protected dry run would not have closed it.
+- The workflows work before and after the manual steps: until the environment's secrets
+  exist, GitHub falls back to the repository secrets.
+- By hand (README, "Slice 3 setup: keep the CI secrets to `main`"): create the environment,
+  restrict it to `main`, add the four secrets, delete the repository ones. The protection only
+  holds once the repository secrets are deleted.
 
 ## Risks
 
