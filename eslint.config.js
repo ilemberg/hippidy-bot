@@ -25,6 +25,32 @@ export default defineConfig(
     },
   },
   {
+    // The Slack adapter talks to the API only through its route and the shared contract
+    // (decision 43). compose.ts is the one place that wires them together.
+    files: ["apps/api/src/slack/**/*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              regex: "(^|/)api/",
+              message: "The Slack adapter may not import the API's code. Use @hippidy/contracts.",
+            },
+            {
+              regex: "(^|/)compose\\.ts$",
+              message: "Only tests may import the composition root.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ["apps/api/src/slack/**/*.test.ts"],
+    rules: { "no-restricted-imports": "off" },
+  },
+  {
     files: ["**/*.js"],
     extends: [tseslint.configs.disableTypeChecked],
   },

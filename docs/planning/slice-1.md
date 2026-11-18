@@ -88,7 +88,9 @@ and it can be switched to a real network call by changing that one client.
 
 - `slack/manifest.yaml` in the repo: app name, bot user, the `app_mention` event, and the
   scopes `app_mentions:read`, `reactions:write`, `chat:write` (the last is for slice 2, added
-  now to avoid reinstalling the app).
+  now to avoid reinstalling the app). It includes the events URL with a placeholder domain,
+  because Slack's docs do not say whether a manifest with events can omit it; you put your
+  production domain in before creating the app.
 
 ### Tests
 
@@ -135,7 +137,7 @@ and it can be switched to a real network call by changing that one client.
 | After the second pull request is up, before merging it | Create the Slack app at api.slack.com from `slack/manifest.yaml` and install it to your workspace | Needs your Slack account |
 | Same time | Add the Slack bot token and signing secret in Vercel, Production environment only | Secrets go into Vercel directly, never into chat or the repo |
 | Then | Merge the second pull request. Production deploys with the Slack variables | The deploy picks up the variables |
-| After that deploy | Paste the production URL plus `/slack/events` into the Slack app's event settings; Slack checks it and shows "verified" | Slack only accepts a URL that is already live |
+| After that deploy | In the Slack app's Event Subscriptions, check the URL is the production URL plus `/slack/events` and click Retry; Slack checks it and shows "Verified" | Slack only verifies a URL that is already live |
 | Then | Invite the bot to a channel and mention it | The live demo. Real Slack cannot be tested from the build session |
 | Soon after the demo | Copy the raw `app_mention` event from the Vercel log and hand it over for the test fixture | Only you can read the Vercel logs, and the free plan keeps them only briefly |
 
