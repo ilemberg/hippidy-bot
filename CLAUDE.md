@@ -40,7 +40,8 @@ all pass. CI runs these, then `pnpm build && pnpm smoke`.
 - The record (`src/api/record.ts`, `src/store/record.ts`): every sync stores the agent
   session's events in `agent_events` and its usage on `conversations`, so a conversation can be
   rebuilt from the database alone. Keeping the record never fails the conversation loop: it
-  logs and is retried.
+  logs and is retried. `src/store/reading.ts` reads it back for the `GET /v1/conversations`
+  routes, which never call the agent runtime.
 - `supabase/migrations` holds the schema. Add a new timestamped file for every change; never
   edit one that has been merged. CI applies them on merge to `main`, at the same time as Vercel
   deploys, so a migration must work with both the old and the new code (add first, remove
@@ -73,6 +74,8 @@ all pass. CI runs these, then `pnpm build && pnpm smoke`.
   next webhook or a stop find the conversation busy.
 - Tests sit next to the code as `*.test.ts` (Vitest). Slack, Anthropic and the network are
   faked; no test talks to a real service. Pass dependencies in, rather than mocking modules.
+  Run Vitest from the repo root: from `apps/api` it resolves `@hippidy/contracts` to a stale
+  `dist/` instead of the source.
 
 ## Vercel gotchas (learned the hard way)
 

@@ -12,6 +12,7 @@ import {
   unsentDeliveries,
 } from "./conversations.ts";
 import { createPostgresDb, type Db } from "./db.ts";
+import { listConversations, readAgentEvents, readConversation, readTranscript } from "./reading.ts";
 import { recordUsage, storeAgentEvents } from "./record.ts";
 import { applyMigration, applyMigrations } from "./testing.ts";
 
@@ -217,6 +218,100 @@ describe("createPostgresDb", () => {
         [conversation.id],
       ),
     ).toEqual([{ input: 1200, cost: 7 }]);
+  });
+
+  // bigint comes back from this client as a string; the reads must still give numbers.
+  it("reads the record back with numbers as numbers and times as ISO strings", async () => {
+    const key = { source: "slack" as const, workspaceId: "T", channelId: "C", threadId: "6.6" };
+    const conversation = await findOrCreateConversation(db, key);
+    await db.query(
+      `update conversations set agent_session_id = 'sesn_6', agent_id = 'agent_1',
+         agent_version = 3 where id = $1`,
+      [conversation.id],
+    );
+    await recordUsage(db, conversation.id, {
+      inputTokens: 5_000_000_000,
+      outputTokens: 340,
+      cacheReadTokens: null,
+      cacheCreationTokens: 0,
+      activeSeconds: 12.5,
+      listCostMinor: 7,
+      budgetMinor: 200,
+      currency: "USD",
+    });
+    await storeAgentEvents(db, conversation.id, "sesn_6", [
+      {
+        id: "evt_1",
+        type: "agent.message",
+        kind: "agent_message",
+        text: "Hello.",
+        processedAt: "2026-11-18T00:00:03.123456Z",
+        payload: { id: "evt_1", nested: { n: 1 } },
+      },
+    ]);
+    await enqueueDelivery(db, conversation.id, "note:x", "note", {
+      kind: "reply",
+      target: key,
+      text: "A note.",
+    });
+
+    const summary = await readConversation(db, conversation.id);
+    expect(summary).toMatchObject({
+      id: conversation.id,
+      agent: { sessionId: "sesn_6", agentId: "agent_1", version: 3 },
+      usage: {
+        inputTokens: 5_000_000_000,
+        outputTokens: 340,
+        cacheReadTokens: null,
+        cacheCreationTokens: 0,
+        activeSeconds: 12.5,
+        listCostMinor: 7,
+        budgetMinor: 200,
+        currency: "USD",
+      },
+    });
+    expect(summary?.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T.*Z$/);
+    expect((await listConversations(db, { limit: 100 })).map((c) => c.id)).toContain(
+      conversation.id,
+    );
+    expect(
+      (await listConversations(db, { limit: 100, before: conversation.id })).map((c) => c.id),
+    ).not.toContain(conversation.id);
+
+    // Paging with ties on the time: every conversation once, in one fixed order.
+    await db.query(`update conversations set created_at = '2026-11-18T00:00:00Z'`);
+    const all = (await listConversations(db, { limit: 100 })).map((c) => c.id);
+    expect(all).toEqual([...all].sort().reverse());
+    expect(all.length).toBeGreaterThan(2);
+    const paged: string[] = [];
+    let cursor: string | undefined;
+    for (;;) {
+      const page = await listConversations(db, { limit: 2, before: cursor });
+      if (page.length === 0) break;
+      paged.push(...page.map((c) => c.id));
+      cursor = page.at(-1)?.id;
+    }
+    expect(paged).toEqual(all);
+
+    expect(await readTranscript(db, conversation.id)).toMatchObject([
+      { role: "agent", text: "Hello.", eventId: "evt_1", at: "2026-11-18T00:00:03.123Z" },
+      { role: "note", text: "A note.", delivery: "pending" },
+    ]);
+
+    const events = await readAgentEvents(db, conversation.id, { limit: 10 });
+    expect(events).toMatchObject([
+      {
+        id: "evt_1",
+        type: "agent.message",
+        kind: "agent_message",
+        processedAt: "2026-11-18T00:00:03.123Z",
+        payload: { id: "evt_1", nested: { n: 1 } },
+      },
+    ]);
+    expect(typeof events[0]?.position).toBe("number");
+    expect(
+      await readAgentEvents(db, conversation.id, { limit: 10, after: events[0]?.position }),
+    ).toEqual([]);
   });
 
   it("commits a transaction, and rolls back when the work throws", async () => {

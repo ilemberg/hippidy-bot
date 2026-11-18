@@ -44,13 +44,16 @@ Vercel does and checks it starts (`pnpm build && pnpm smoke`).
 
 ## API
 
-| Route                     | Auth                | What it does                                                                                                                          |
-| ------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /health`             | none                | Returns `{"status":"ok"}`. Works with no configuration at all                                                                         |
-| `POST /v1/messages`       | service token       | Accepts one inbound message, hands it to the thread's agent session, returns 202                                                      |
-| `POST /v1/webhooks/agent` | Anthropic signature | Anthropic says a session went idle or ended; the API posts any new replies                                                            |
-| `POST /v1/reconcile`      | reconcile token     | The safety net: delivers replies whose webhook was lost, retries failed posts. Called every minute                                    |
-| `POST /slack/events`      | Slack signature     | Slack's Events API. On `app_mention`: sends the message through `/v1/messages`, then reacts 👀. Answers 503 until Slack is configured |
+| Route                              | Auth                | What it does                                                                                                                                  |
+| ---------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /health`                      | none                | Returns `{"status":"ok"}`. Works with no configuration at all                                                                                 |
+| `POST /v1/messages`                | service token       | Accepts one inbound message, hands it to the thread's agent session, returns 202                                                              |
+| `POST /v1/webhooks/agent`          | Anthropic signature | Anthropic says a session went idle or ended; the API posts any new replies                                                                    |
+| `POST /v1/reconcile`               | reconcile token     | The safety net: delivers replies whose webhook was lost, retries failed posts. Called every minute                                            |
+| `GET /v1/conversations`            | service token       | Conversations, newest first. `limit` (1 to 100, default 20); `before` takes the `next` of the page before                                     |
+| `GET /v1/conversations/:id`        | service token       | One conversation: its state, usage and cost, and the transcript, oldest first                                                                 |
+| `GET /v1/conversations/:id/events` | service token       | Every event the agent session reported, raw, in the order stored. `limit` (1 to 200, default 50); `after` takes the `next` of the page before |
+| `POST /slack/events`               | Slack signature     | Slack's Events API. On `app_mention`: sends the message through `/v1/messages`, then reacts 👀. Answers 503 until Slack is configured         |
 
 The request and response shapes are in `packages/contracts`. Every error from the API has the
 body `{"error":{"code":"...","message":"..."}}`. The one exception is `/slack/events`: errors there
@@ -253,6 +256,18 @@ order by created_at desc;
 
 Conversations from before this slice are filled in by the reconcile job, three per minute, as
 far as Anthropic still has them. In the Vercel logs, search for `record.`.
+
+The same can be read through the API, which answers from the database alone (the agent
+runtime is not asked). With the service token from Vercel in `TOKEN`:
+
+```sh
+curl -s -H "Authorization: Bearer $TOKEN" https://hippidy-bot.vercel.app/v1/conversations?limit=5
+curl -s -H "Authorization: Bearer $TOKEN" https://hippidy-bot.vercel.app/v1/conversations/<id>
+curl -s -H "Authorization: Bearer $TOKEN" https://hippidy-bot.vercel.app/v1/conversations/<id>/events
+```
+
+Keep the token out of chat and out of your shell history (for example, read it into the
+variable with `read -s TOKEN`).
 
 ## Planning docs
 
