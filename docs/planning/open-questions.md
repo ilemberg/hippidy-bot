@@ -39,32 +39,17 @@ taking the real bot offline. A leading candidate is recorded with it in `decisio
 
 ## B. Blocks slice 2
 
-`slice-2.md` collects these with five new ones (B10 to B14) in one table. Answered so far: B2,
-B3, B4, B6, B10 and B11 (`decisions.md` 51 to 55). Still open: B5, B7, B8, B9, B12, B13, B14.
+`slice-2.md` collects these with five new ones (B10 to B14) in one table. Answered: everything
+but B13 (`decisions.md` 51 to 62).
 
 B1 (storage before slice 3) is answered: see `decisions.md` 8.
 
 B2 (one thread is one conversation), B3 (replies must mention the bot) and B4 (a reconcile job
 as the backup for lost webhooks) are answered: see `decisions.md` 51, 52 and 54.
 
-**B5. Final answer only, or progress as it works?**
-*Recommendation:* final answer only in slice 2, with the reaction as the status signal. Live
-progress (editing one status message) when slice 4 makes turns long.
-
-B6 (about $2 per session plus a monthly spend limit) is answered: see `decisions.md` 55.
-
-**B7. How are the agent's prompt and config managed?**
-*Recommendation:* as files in the repo, synced with Anthropic's CLI, so prompt changes go
-through pull requests like code. This is also what makes prompt changes evaluable in slice 6.
-
-**B8. What happens to open threads when the agent changes?**
-Sessions pin the agent version they started with.
-*Recommendation:* accept it. Old threads keep old behavior; record agent version on every
-conversation so behavior can be explained later.
-
-**B9. Can you stop it?**
-*Recommendation:* a "stop" message or reaction that sends an interrupt. Cheap now, essential
-by slice 4.
+B5 (final answer only), B6 (about $2 per session plus a monthly spend limit), B7 (agent config
+as files in the repo), B8 (old threads keep their version) and B9 (stop with 🛑 or
+"@hippidy-bot stop") are answered: see `decisions.md` 55 and 57 to 60.
 
 ## C. Blocks slice 3
 

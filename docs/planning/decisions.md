@@ -63,6 +63,12 @@ entries are not edited.
 | 54 | 2026-11-18 | Answers B11, and with it B4: a reconcile job finds conversations still waiting and fetches their replies directly; Supabase `pg_cron` calls the API's `/v1/reconcile` about every minute | Managed Agents webhooks give up silently after three attempts. Vercel's free plan limits scheduled jobs (to be confirmed when the slice starts) |
 | 55 | 2026-11-18 | Answers B6: a budget cap of about $2 per agent session (one conversation), plus a monthly spend limit on the Anthropic workspace as the backstop. The slice 4 cap is set later from measured coding sessions | Fits the $100 a month budget (decision 11) |
 | 56 | 2026-11-18 | Slice 2 plan updated with decisions 51 to 55. Not started; B5, B7, B8, B9 and B12 to B14 are still open | Planning only until told to begin |
+| 57 | 2026-11-18 | Answers B5: final answer only in slice 2, with reactions as the status (👀, ✅, ❌). Live progress waits for slice 4, when turns get long | Simplest; reactions already show progress |
+| 58 | 2026-11-18 | Answers B7: the agent's prompt and config are files in the repo, synced to Anthropic by a script, and changed only by pull request | Prompt changes are reviewed like code, and can be evaluated in slice 6 |
+| 59 | 2026-11-18 | Answers B8: open threads keep the agent version they started with; the version is recorded on every conversation | Sessions pin their version anyway; recording it explains behaviour later |
+| 60 | 2026-11-18 | Answers B9, in slice 2: you can stop the agent in a thread either with a 🛑 reaction on the message, or with a message that is only "@hippidy-bot stop". Both send an interrupt to that thread's session. Needs the `reaction_added` event and `reactions:read` scope (one reinstall, together with `users:read`) | Two ways that both feel natural in Slack. The message must be exactly "stop" (case-insensitive, after removing the mention) so "don't stop" never stops it |
+| 61 | 2026-11-18 | Answers B12: database migrations use the Supabase CLI with generated types, applied by CI on merge to `main`, never by hand or by the agent | Fewest moving parts; one path for every change |
+| 62 | 2026-11-18 | Answers B14: unit and database tests (PGlite) run everywhere; CI also builds and smoke-tests as now; no Docker yet | Fast feedback with no Docker; revisit when slice 4 shows what the agent's sandbox can run |
 
 ## Deferred on purpose
 

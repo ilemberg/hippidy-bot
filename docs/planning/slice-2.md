@@ -1,6 +1,6 @@
 # Slice 2: talk to one managed agent
 
-Status: **drafted after slice 1, not started.** Six questions are answered (decisions 51 to 55); seven are still open.
+Status: **drafted after slice 1, not started.** Every question but B13 is answered (decisions 51 to 62).
 
 **Demo:** mention `@hippidy-bot` with a question. 👀 appears at once. Within a minute or so the
 bot replies in a thread under your message, and 👀 becomes ✅. Reply in that thread (mentioning
@@ -73,8 +73,12 @@ record).
 - Implements the API's outbound delivery interface: post a reply in the thread, then set the
   reaction on the user's message (👀 received, ✅ answered, ❌ failed).
 - Converts the agent's Markdown to Slack's format and splits long replies.
-- Looks up the sender's display name (adds the `users:read` scope and a reinstall; decision 34)
-  and passes it in the message, so the agent can address people.
+- Looks up the sender's display name (adds the `users:read` scope; decision 34) and passes it
+  in the message, so the agent can address people.
+- Stop (decision 60): a 🛑 reaction on a message in a bot thread, or a message that is only
+  "@hippidy-bot stop", sends an interrupt to that thread's session and the bot confirms it
+  stopped. Adds the `reaction_added` event and `reactions:read` scope. The API gains an
+  interrupt route in the contract; the adapter stays free of agent logic.
 
 ### Tests
 
@@ -92,7 +96,7 @@ record).
 | Early | Create a Supabase project (free tier) and give its database URL to Vercel, Production only |
 | Early | Create an Anthropic API key for this project, set a monthly spend limit on its workspace (decision 55), and add the key to Vercel |
 | After the agent PR | Point Anthropic's webhook at `https://hippidy-bot.vercel.app/v1/webhooks/agent` and add its signing secret to Vercel |
-| After the Slack PR | Reinstall the Slack app for the new `users:read` scope |
+| After the Slack PR | Update the Slack app from the new manifest (scopes `users:read` and `reactions:read`, event `reaction_added`) and reinstall it, once |
 
 ## Decide before starting
 
@@ -104,16 +108,16 @@ Each question has a recommendation; "go with your picks" is a valid answer. B2 t
 | B2 | What is one conversation? | **Decided** (51): one Slack thread = one conversation = one agent session. A top-level mention starts a new one |
 | B3 | Must replies in a thread mention the bot? | **Decided** (52): yes, at first |
 | B4 | Backup for lost "finished" webhooks | **Decided** (54): a scheduled reconcile, as in the plan above |
-| B5 | Final answer only, or progress? | Final answer only, with reactions as status |
+| B5 | Final answer only, or progress? | **Decided** (57): final answer only, with reactions as status |
 | B6 | Cost cap | **Decided** (55): about $2 per session, plus a monthly spend limit on the Anthropic workspace |
-| B7 | Agent prompt and config | Files in the repo, synced by script, changed by pull request |
-| B8 | Open threads when the agent changes | Accept that old threads keep the old version; record the version per conversation |
-| B9 | Can you stop it? | A "stop" reaction (🛑) on the user's message sends an interrupt. Small; could slip to slice 3 |
+| B7 | Agent prompt and config | **Decided** (58): files in the repo, synced by script, changed by pull request |
+| B8 | Open threads when the agent changes | **Decided** (59): old threads keep their version; the version is recorded per conversation |
+| B9 | Can you stop it? | **Decided** (60): a 🛑 reaction, or a message that is only "@hippidy-bot stop", interrupts the thread's session. In this slice |
 | B10 | How does the API post back without knowing Slack? | **Decided** (53): the API defines a delivery interface keyed by source; `compose.ts` registers the Slack implementation; the API calls it in-process |
 | B11 | What runs the reconcile on a schedule? | **Decided** (54): Supabase `pg_cron` calls `/v1/reconcile` about every minute. Vercel's free plan limits cron jobs (*verify*) |
-| B12 | Migrations: Supabase CLI or Drizzle, and who applies them? (C2, C4 pulled forward) | Supabase CLI migrations with generated types, applied by CI on merge to `main`, never by hand |
-| B13 | Supabase environments (C3 pulled forward) | One hosted project for production; PGlite for tests; no separate dev project yet |
-| B14 | Testing split details (decision 17 said "revisit before implementing") | Unit and database tests (PGlite) run everywhere; CI also builds and smoke-tests as now; no Docker yet |
+| B12 | Migrations: Supabase CLI or Drizzle, and who applies them? (C2, C4 pulled forward) | **Decided** (61): Supabase CLI migrations with generated types, applied by CI on merge to `main` |
+| B13 | Supabase environments (C3 pulled forward) | One hosted project on the free plan for production; PGlite for tests; no separate dev project yet. Free plan (*verify* at start): 2 active projects, 500 MB database, no backups, and a project pauses after 7 days with no database requests. The reconcile job queries the database every minute through the API, which should keep it awake |
+| B14 | Testing split details (decision 17 said "revisit before implementing") | **Decided** (62): unit and database tests (PGlite) everywhere; CI also builds and smoke-tests; no Docker yet |
 
 ## Done when
 
@@ -128,4 +132,4 @@ Each question has a recommendation; "go with your picks" is a valid answer. B2 t
 ## Not in this slice
 
 Tools for the agent, the repo mount (slice 4), the full record of messages and agent events
-(slice 3), live progress updates, the UI.
+(slice 3), live progress updates (decision 57), the UI.
