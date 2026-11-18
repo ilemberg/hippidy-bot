@@ -212,7 +212,8 @@ changed (`decisions.md` 98 to 102):
   real Slack without touching the real bot.
 - The build session gets its eyes on production from Supabase and Vercel connectors.
 - Three questions were added: which GitHub tools the agent gets (D11), progress in the thread
-  (D12) and the budget of a coding session (D13).
+  (D12, since answered: notes on a fixed schedule, decision 103) and the budget of a coding
+  session (D13).
 
 ## Slice 5: work from a ticket instead of a sentence
 

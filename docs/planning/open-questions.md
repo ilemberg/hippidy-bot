@@ -110,12 +110,11 @@ and a new top-level mention starts clean from the latest `main`.
 
 **D11. Which GitHub MCP tools does the agent get, and do they ask first?** MCP tools pause
 for approval by default, and the loop has no approval step.
-*Recommendation:* only the tools the demo needs (open, update and read a pull request, read
-checks and job logs), each set to run without asking; everything else off.
+*Recommendation:* four tools (`create_pull_request`, `update_pull_request`,
+`pull_request_read`, `get_job_logs`), each set to run without asking; everything else off.
 
-**D12. What does the thread show during a long turn?** (decision 57 left this for slice 4.)
-*Recommendation:* 👀 as now, plus a short note at most every few minutes, built from the
-stored events.
+D12 (progress notes after 15 minutes, 1, 2, 4 and 8 hours, then every 4 hours) is answered:
+see `decisions.md` 103.
 
 **D13. Budget for a coding session.** *Recommendation:* about $5 to start, reset from the
 first ten measured sessions (decision 55 said the slice 4 cap is set from measurements).

@@ -3,7 +3,8 @@
 Status: **draft 2026-11-18, not started.** Decided so far: MCP servers first (decision 98), the
 agent opens the pull request through the GitHub MCP server (99), the problems of the bot
 developing itself are set aside (100), and the build session sees production through
-connectors (101). Still open: D2, D4 to D8 and D11 to D13, each with a pick below.
+connectors (101), and progress notes in the thread on a fixed schedule (103). Still open: D2,
+D4 to D8, D11 and D13, each with a pick below.
 
 **Demo:** `@hippidy-bot change the 👀 reaction to 🫡`. The agent works in a clone of this repo,
 makes the change, runs lint, typecheck and tests, pushes a branch and opens a pull request.
@@ -70,9 +71,14 @@ exists, unless that makes things worse. "Worse" means one of:
   gets a preview. CI logs read through MCP will hit this; it needs no work from us.
 - **A session can be given an outcome with a rubric**, checked by a separate grader before the
   agent stops.
-- _Verify:_ GitHub's remote MCP server (`https://api.githubcopilot.com/mcp/`) accepts a
-  fine-grained personal access token as a static bearer credential, and the exact names of
-  its tools for pull requests, checks and job logs.
+- **GitHub's remote MCP server** (`https://api.githubcopilot.com/mcp/`, read 2026-11-18 from
+  its own docs) takes a personal access token as a bearer credential. With no choice made it
+  serves its default toolsets (context, repos, issues, pull requests, users): dozens of
+  tools, including ones that merge and that write files. A URL path narrows it to one
+  toolset (`/x/pull_requests`, `/x/actions`, with `/readonly` after either). Its headers for
+  picking single tools cannot be used: an agent declares a server by URL only. So the narrow
+  list is made on our side, in the agent's `mcp_toolset` (D11).
+- _Verify:_ that a fine-grained token (not only a classic one) works as that credential.
 - _Verify:_ a fine-grained token without the Workflows permission cannot push a change to
   `.github/workflows`.
 
@@ -99,7 +105,8 @@ exists, unless that makes things worse. "Worse" means one of:
   - sync reads only new events (decision 95), after the experiment has probed the live API;
   - transcripts and event pages get a size budget, and retention is looked at again
     (decision 76) against the free plan's 500 MB.
-- Progress in the thread during a long turn (D12).
+- Progress notes in the thread on the schedule of decision 103, posted by reconcile and never
+  while the conversation's sync lease is held.
 - Each request is kept as a candidate eval case: the prompt, the base commit, the pull
   request and, later, your verdict. Most of it is already in the record.
 
@@ -137,9 +144,9 @@ hand in the `release` environment, or from your machine.
 | D7 | How do CI results reach the agent? | **Changed pick:** the agent reads them itself through the GitHub MCP server. After opening the pull request it waits for the checks in the same turn (a limit of about ten minutes), reads the log of a failed job, fixes and pushes again. No GitHub webhook in this slice. The cost: anything that happens after the turn ends reaches the agent only when someone mentions it in the thread. A webhook that wakes the session is added when that hurts |
 | D8 | Does the thread keep going? | Yes: one thread is one session (decision 51), so "also rename X" continues on the same branch and pull request. A new top-level mention starts from the latest `main` |
 | D9 | Not bricking the thing that fixes itself | **Set aside** (100). The fallback stays what it is today: this build session and Vercel's rollback |
-| D11 | Which GitHub MCP tools, and do they ask first? | Only what the demo needs: open and update a pull request, read a pull request, read checks and job logs. Each runs without asking. Everything else (merge, delete, issues, settings, starting workflows) is off. The token's rights are the hard limit; the tool list is the second one |
-| D12 | What does the thread show during a long turn? | 👀 as now, plus a short note at most every few minutes saying what the agent is doing, built from the stored events. The pull request link is the agent's own reply |
-| D13 | Budget for a coding session | About $5 to start (it is $2 for a talk-only thread, decision 55), reset from the first ten measured sessions. The workspace's monthly limit stays the backstop |
+| D11 | Which GitHub MCP tools, and do they ask first? | Four tools on, each running without asking: `create_pull_request`, `update_pull_request`, `pull_request_read` (the pull request, its diff, comments and check results) and `get_job_logs` (the log of a failed CI job). Everything else is off, among them `merge_pull_request`, `actions_run_trigger`, `push_files`, `create_or_update_file`, `delete_file`, `create_branch`, the review tools and the issue tools. The token's rights are the hard limit; the tool list is the second one. The other options, not picked: every tool on with the server judging each call (`auto`), which can pause a session the loop cannot yet un-pause; or every call approved by you in Slack, which needs an approval step built first |
+| D12 | What does the thread show during a long turn? | **Decided** (103): 👀 as now, and a note in the thread with the latest on what the agent is doing when a turn is still running after 15 minutes, 1 hour, 2 hours, 4 hours and 8 hours, then every 4 hours. Nothing before 15 minutes. How it is built (picks): reconcile posts it, so it is right to the minute; the text comes from the stored events (the agent's latest own words, else its latest step), with no extra model call; each note is a new message in the thread |
+| D13 | Budget for a coding session | About $5 to start (it is $2 for a talk-only thread, decision 55), reset from the first ten measured sessions. The workspace's monthly limit stays the backstop. Open against decision 103: its schedule expects turns of many hours, and a turn ends when its session reaches the cap, long before that at $5 |
 
 ## Order of work (proposed)
 
@@ -189,8 +196,8 @@ Each line gets its exact query or log search when the plan is made final (decisi
   `.claude/skills/` is loaded by the next session without review.
 - **Cost.** A coding turn costs many times a chat turn. The session budget and the monthly
   limit hold it; D13 is set from measurements, not guesses.
-- **Waiting for CI inside the turn** (D7) keeps the thread on 👀 for minutes. Stop still works,
-  and D12 says what is happening.
+- **Waiting for CI inside the turn** (D7) keeps the thread on 👀 for minutes, with no note
+  before the 15 minute mark (decision 103). Stop still works.
 - **Set aside, not solved** (decision 100): a merged change can break the bot, and new code
   cannot be tried against Slack without deploying it to the real bot.
 
