@@ -34,6 +34,8 @@ export const inboundMessageSchema = z.strictObject({
   actor: z.strictObject({
     /** The sender's id in the source system (Slack: user id). */
     id,
+    /** How the sender is called, when the source could tell (Slack: display name). */
+    displayName: z.string().min(1).max(255).optional(),
   }),
   /** Message text, with the bot's own mention removed. May be empty. */
   text: z.string().max(40_000),
@@ -50,3 +52,31 @@ export const acceptedMessageSchema = z.strictObject({
   duplicate: z.boolean().optional(),
 });
 export type AcceptedMessage = z.infer<typeof acceptedMessageSchema>;
+
+/**
+ * A request to stop the agent in a conversation (decision 60). Body of `POST /v1/stop`.
+ * Names the conversation by its thread, or by one of its messages (for Slack: the message a
+ * 🛑 reaction was put on).
+ */
+export const stopRequestSchema = z.strictObject({
+  source: messageSourceSchema,
+  /** The source's id for this delivery; also the correlation id. */
+  sourceEventId: id,
+  workspaceId: id,
+  channelId: id,
+  threadId: id.optional(),
+  /** A message in the conversation; required when `threadId` is not given. */
+  messageId: id.optional(),
+  /** The stop message itself, when the stop was a message: it is settled as stopped too. */
+  stopMessage: z
+    .strictObject({ messageId: id, sentAt: z.iso.datetime({ offset: true }) })
+    .optional(),
+  actor: z.strictObject({ id }),
+});
+export type StopRequest = z.infer<typeof stopRequestSchema>;
+
+/** Response body of `POST /v1/stop` (status 202). */
+export const stopResultSchema = z.strictObject({
+  status: z.enum(["stopped", "nothing_to_stop", "unknown_conversation"]),
+});
+export type StopResult = z.infer<typeof stopResultSchema>;

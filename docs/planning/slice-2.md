@@ -145,6 +145,11 @@ All answered on 2026-11-18. B2 to B9 are in
     pull request's own script with the API key (only people with write access can open one).
     Pin by commit and consider a protected GitHub environment before slice 4.
 
+## As built (pull request C)
+
+- Names and stop as in decisions 71 and 72. The Slack app needs its manifest updated and one
+  reinstall (README, "Slice 2 setup: names and stop").
+
 ## Not in this slice
 
 Tools for the agent, the repo mount (slice 4), the full record of messages and agent events

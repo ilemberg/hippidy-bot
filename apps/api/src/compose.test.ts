@@ -261,6 +261,40 @@ describe("correlation and logging", () => {
   });
 });
 
+describe("POST /v1/stop", () => {
+  function stop(app: ReturnType<typeof setup>["app"], body: unknown, auth = `Bearer ${token}`) {
+    return app.request("/v1/stop", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: auth },
+      body: JSON.stringify(body),
+    });
+  }
+  const request = {
+    source: "slack",
+    sourceEventId: "EvStop",
+    workspaceId: message.conversation.workspaceId,
+    channelId: message.conversation.channelId,
+    threadId: message.conversation.threadId,
+    actor: { id: "U1" },
+  };
+
+  it("stops the agent in the thread", async () => {
+    const { app } = setup();
+    await postMessage(app, message);
+    const res = await stop(app, request);
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ status: "stopped" });
+    expect(runtime.sessions.get(runtime.onlySessionId())?.interrupted).toBe(1);
+  });
+
+  it("needs a thread or a message, and the service token", async () => {
+    const { app } = setup();
+    const { threadId: _thread, ...noTarget } = request;
+    await expectError(await stop(app, noTarget), 400, "invalid_request");
+    await expectError(await stop(app, request, "Bearer nope"), 401, "unauthorized");
+  });
+});
+
 describe("POST /v1/webhooks/agent", () => {
   function webhook(app: ReturnType<typeof setup>["app"], body: Record<string, unknown>) {
     return app.request("/v1/webhooks/agent", { method: "POST", body: JSON.stringify(body) });

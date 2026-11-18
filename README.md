@@ -207,6 +207,22 @@ If no answer arrives: search the Vercel logs for `conversation.`, `webhook.` and
 `reconcile.`. The Console's session viewer (Managed Agents, Sessions) shows what the agent
 did. Each conversation is capped at $2; past that the bot says so and shows ❌.
 
+## Slice 2 setup: names and stop
+
+The bot now asks Slack for the sender's name and listens for 🛑 reactions, which needs two
+more permissions and one more event. After this pull request merges:
+
+1. At https://api.slack.com/apps, open **hippidy-bot**, then **App Manifest** in the left menu.
+2. Switch to **YAML**, replace everything with the contents of `slack/manifest.yaml`, and
+   click **Save Changes**.
+3. Slack shows a banner asking you to reinstall the app for the new permissions. Click
+   **reinstall your app** (or go to **Install App**, then **Reinstall to Workspace**) and
+   allow. The bot token stays the same, so nothing changes in Vercel.
+
+To stop the agent in a thread: put a 🛑 (`:octagonal_sign:`) reaction on any message of yours
+in that thread, or send a message that is only `@hippidy-bot stop`. The bot interrupts the
+agent, marks the pending messages 🛑 and says so in the thread. "Don't stop" never stops it.
+
 ## Planning docs
 
 | Doc                                                                  | What it is                                                                                 |

@@ -7,7 +7,7 @@ import type { Logger } from "../log.ts";
 import type { ApiClient } from "./api-client.ts";
 import { boltLogger } from "./bolt-logger.ts";
 import { readSlackConfig } from "./config.ts";
-import { handleMention, type SlackActions } from "./handler.ts";
+import { handleMention, handleReaction, type SlackActions } from "./handler.ts";
 
 export type SlackEventsHandler = (request: Request) => Promise<Response>;
 
@@ -19,9 +19,24 @@ export interface SlackRouteDeps {
   slackActions?: (client: webApi.WebClient) => SlackActions;
 }
 
+/** Display names by Slack user id, kept for an hour per server instance. */
+const names = new Map<string, { name: string | undefined; until: number }>();
+const NAME_TTL_MS = 60 * 60 * 1000;
+
 const realSlackActions = (client: webApi.WebClient): SlackActions => ({
   async addReaction(input) {
     await client.reactions.add(input);
+  },
+  async userName(userId) {
+    const cached = names.get(userId);
+    if (cached !== undefined && cached.until > Date.now()) return cached.name;
+    const { user } = await client.users.info({ user: userId });
+    const name =
+      [user?.profile?.display_name, user?.profile?.real_name, user?.name].find(
+        (candidate) => candidate !== undefined && candidate.trim() !== "",
+      ) ?? undefined;
+    names.set(userId, { name, until: Date.now() + NAME_TTL_MS });
+    return name;
   },
 });
 
@@ -82,6 +97,9 @@ export function createSlackEventsHandler(deps: SlackRouteDeps): SlackEventsHandl
         { body, retryNum: context.retryNum ?? 0, retryReason: context.retryReason ?? "" },
         { api: deps.api, slack: slackActions(client), log: deps.log },
       );
+    });
+    app.event("reaction_added", async ({ body }) => {
+      await handleReaction(body, { api: deps.api, log: deps.log });
     });
     app.error(async (error) => {
       deps.log.error("slack.bolt_error", { error });
