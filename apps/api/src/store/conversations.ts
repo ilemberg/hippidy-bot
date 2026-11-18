@@ -7,6 +7,7 @@ import {
 } from "@hippidy/contracts";
 import { z } from "zod";
 import type { Db, Row } from "./db.ts";
+import { toJsonText } from "./json.ts";
 
 export interface ConversationKey {
   source: MessageSource;
@@ -507,12 +508,12 @@ export async function enqueueDelivery(
   payload: OutboundDelivery,
 ): Promise<void> {
   await db.query(
-    // Cast from text: the production client would otherwise store the string itself as a
-    // JSON string, not the object it holds. Rows from before this cast are read both ways.
+    // Rows from before the payload was cast from text hold a JSON string, and are read both
+    // ways (decision 90).
     `insert into deliveries (conversation_id, agent_event_id, kind, payload)
      values ($1, $2, $3, $4::text::jsonb)
      on conflict (conversation_id, agent_event_id) do nothing`,
-    [conversationId, key, kind, JSON.stringify(payload)],
+    [conversationId, key, kind, toJsonText(payload)],
   );
 }
 

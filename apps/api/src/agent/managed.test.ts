@@ -49,7 +49,7 @@ describe("toAgentEventRecord", () => {
     expect(toAgentEventRecord(agentMessage)).toEqual({
       id: "sevt_2",
       type: "agent.message",
-      processedAt: new Date("2026-11-18T00:00:03.000Z"),
+      processedAt: "2026-11-18T00:00:03.000Z",
       payload: agentMessage,
       event: { kind: "agent_message", id: "sevt_2", text: "First.\n\nSecond." },
     });
@@ -59,10 +59,20 @@ describe("toAgentEventRecord", () => {
     expect(toAgentEventRecord(modelRequest)).toEqual({
       id: "sevt_1",
       type: "span.model_request_end",
-      processedAt: new Date("2026-11-18T00:00:02.000Z"),
+      processedAt: "2026-11-18T00:00:02.000Z",
       payload: modelRequest,
       event: undefined,
     });
+  });
+
+  it("keeps the processed time exactly as given, finer than a millisecond", () => {
+    const precise = { ...agentMessage, processed_at: "2026-11-18T00:00:03.123456Z" };
+    expect(toAgentEventRecord(precise).processedAt).toBe("2026-11-18T00:00:03.123456Z");
+  });
+
+  it("has no processed time when the runtime gives something that is not a time", () => {
+    const odd = { ...agentMessage, processed_at: "soon" };
+    expect(toAgentEventRecord(odd).processedAt).toBeNull();
   });
 
   it("has no processed time for a user message still in the queue", () => {

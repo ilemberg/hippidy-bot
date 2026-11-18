@@ -216,6 +216,7 @@ export async function syncConversation(
     log.info("conversation.sync_skipped", { conversationId: conversation.id, reason: "busy" });
     return;
   }
+  let sessionId: string | undefined;
   try {
     const current = await getConversation(deps.db, conversation.id);
     await forwardPending(deps, current, log);
@@ -223,12 +224,13 @@ export async function syncConversation(
     await readAgent(deps, forwarded, log);
     await giveUpIfTooLong(deps, await getConversation(deps.db, conversation.id), log);
     await flushDeliveries(deps, conversation.id, log);
-    // Last, so reading the usage never delays an answer.
-    const sessionId = sessionIdOf(forwarded);
-    if (sessionId !== undefined) await keepUsage(deps, conversation.id, sessionId, log);
+    sessionId = sessionIdOf(forwarded);
   } finally {
     await releaseSyncLease(deps.db, conversation.id);
   }
+  // After the conversation is free again: a slow usage read must not hold up the next sync,
+  // a stop, or this answer. Late or overlapping readings are safe (usage only grows).
+  if (sessionId !== undefined) await keepUsage(deps, conversation.id, sessionId, log);
 }
 
 /** Queues the agent's new messages and settles what the agent has finished with. */

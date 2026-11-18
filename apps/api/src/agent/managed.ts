@@ -125,12 +125,14 @@ export function toAgentEventRecord(event: BetaManagedAgentsSessionEvent): AgentE
   };
 }
 
-/** Every event carries `processed_at`; a user message still in the queue has none yet. */
-function processedAtOf(event: object): Date | null {
+/**
+ * Every event carries `processed_at`; a user message still in the queue has none yet. Kept
+ * as the string it came as, so no precision is lost on the way to the database.
+ */
+function processedAtOf(event: object): string | null {
   const value: unknown = "processed_at" in event ? event.processed_at : undefined;
-  if (typeof value !== "string") return null;
-  const at = new Date(value);
-  return Number.isNaN(at.getTime()) ? null : at;
+  if (typeof value !== "string" || Number.isNaN(Date.parse(value))) return null;
+  return value;
 }
 
 /** A session's cumulative usage and budget, in the runtime-independent shape. */

@@ -24,6 +24,8 @@ export interface RecordDeps {
 
 /** Conversations from before the record existed that one reconcile run catches up on. */
 export const BACKFILL_PER_RUN = 3;
+/** A conversation younger than this is left to its own first sync. */
+export const BACKFILL_AFTER_SECONDS = 600;
 
 function toStore(record: AgentEventRecord): AgentEventToStore {
   const event = record.event;
@@ -79,7 +81,11 @@ export async function keepUsage(
 export async function backfillRecord(deps: RecordDeps, log: Logger): Promise<number> {
   let done = 0;
   try {
-    for (const { id, sessionId } of await conversationsToBackfill(deps.db, BACKFILL_PER_RUN)) {
+    const conversations = await conversationsToBackfill(deps.db, {
+      olderThanSeconds: BACKFILL_AFTER_SECONDS,
+      limit: BACKFILL_PER_RUN,
+    });
+    for (const { id, sessionId } of conversations) {
       try {
         const records = await deps.runtime.listEvents(sessionId);
         if (!(await keepEvents(deps.db, id, sessionId, records, log))) continue;

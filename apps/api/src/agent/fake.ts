@@ -54,6 +54,8 @@ export class FakeAgentRuntime implements AgentRuntime {
     {};
   /** Set to make every send fail, as for a session paused at its budget. */
   rejectAllSends: Error | undefined;
+  /** Runs while a usage read is under way: to look at, or hold up, what happens meanwhile. */
+  onReadUsage: (() => Promise<void>) | undefined;
   private nextId = 1;
   private clock = Date.parse("2026-11-18T00:00:00.000Z");
   private readonly gone = new Set<string>();
@@ -80,12 +82,12 @@ export class FakeAgentRuntime implements AgentRuntime {
   /** A processed event, one second after the one before it. */
   private record(type: string, id: string, event: AgentEvent | undefined): AgentEventRecord {
     this.clock += 1000;
-    const processedAt = new Date(this.clock);
+    const processedAt = new Date(this.clock).toISOString();
     return {
       id,
       type,
       processedAt,
-      payload: { id, type, processed_at: processedAt.toISOString(), ...event },
+      payload: { id, type, processed_at: processedAt, ...event },
       event,
     };
   }
@@ -138,9 +140,11 @@ export class FakeAgentRuntime implements AgentRuntime {
     ]);
   }
 
-  readUsage(sessionId: string): Promise<SessionUsage> {
+  async readUsage(sessionId: string): Promise<SessionUsage> {
     this.takeFailure("readUsage");
-    return Promise.resolve(this.session(sessionId).usage);
+    const session = this.session(sessionId);
+    await this.onReadUsage?.();
+    return session.usage;
   }
 
   /** One turn: the oldest queued message is processed, the agent says each text, then idles. */

@@ -242,6 +242,29 @@ describe("a sync keeps the session's usage", () => {
     ]);
   });
 
+  it("reads the usage only after the conversation is free and the answer is out", async () => {
+    await receiveMessage(deps, message(1), log);
+    const sessionId = runtime.onlySessionId();
+    runtime.reply(sessionId, "First answer.");
+    await receiveMessage(deps, message(2), log);
+
+    // While the usage of the first sync is being read, the next turn ends and its webhook
+    // arrives: that sync must not find the conversation busy.
+    let during: Promise<void> | undefined;
+    runtime.onReadUsage = () => {
+      runtime.onReadUsage = undefined;
+      expect(slack.replies()).toEqual(["First answer."]);
+      runtime.reply(sessionId, "Second answer.");
+      during = sync(sessionId);
+      return during;
+    };
+    await sync(sessionId);
+    await during;
+
+    expect(slack.replies()).toEqual(["First answer.", "Second answer."]);
+    expect(lines.filter((line) => line.msg === "conversation.sync_skipped")).toEqual([]);
+  });
+
   it("still answers, and frees the conversation, when the usage cannot be read", async () => {
     await receiveMessage(deps, message(1), log);
     const sessionId = runtime.onlySessionId();
@@ -266,10 +289,24 @@ describe("backfillRecord", () => {
     await sync(sessionId);
     await db.query(`delete from agent_events`);
     await db.query(
-      `update conversations set agent_events_synced_at = null, usage_updated_at = null`,
+      `update conversations set agent_events_synced_at = null, usage_updated_at = null,
+         created_at = now() - interval '1 day'`,
     );
     return sessionId;
   }
+
+  it("leaves a conversation that has only just started to its own first sync", async () => {
+    await receiveMessage(deps, message(1), log);
+    const sessionId = runtime.onlySessionId();
+    runtime.reply(sessionId, "An answer.");
+
+    expect(await backfillRecord(deps, log)).toBe(0);
+    expect(await storedEvents()).toEqual([]);
+
+    await sync(sessionId);
+    expect(await storedEvents()).toHaveLength(6);
+    expect(await backfillRecord(deps, log)).toBe(0);
+  });
 
   it("stores the events and usage of a conversation that was never stored, once", async () => {
     const sessionId = await oldThread("100.000001");

@@ -188,7 +188,7 @@ describe("conversation_transcript", () => {
       `select role, text, actor_id, actor_name, ref, message_status, delivery_status, occurred_at
        from conversation_transcript
        where conversation_id = $1
-       order by occurred_at, recorded_at`,
+       order by occurred_at, recorded_at, position`,
       [conversation.id],
     );
     expect(rows).toEqual([
@@ -242,7 +242,7 @@ function event(id: string, overrides: Partial<AgentEventToStore> = {}): AgentEve
     type: "agent.message",
     kind: "agent_message",
     text: `text of ${id}`,
-    processedAt: new Date("2026-11-18T00:00:03.000Z"),
+    processedAt: "2026-11-18T00:00:03.000Z",
     payload: { id, type: "agent.message", content: [{ type: "text", text: `text of ${id}` }] },
     ...overrides,
   };
@@ -310,6 +310,14 @@ describe("storeAgentEvents", () => {
     ).toBe(0);
     const rows = await db.query(`select distinct updated_at from agent_events`);
     expect(rows).toEqual([{ updated_at: new Date("2026-01-01T00:00:00Z") }]);
+
+    // Not even attempted: a new event gets the next place in line, with no gap before it.
+    await storeAgentEvents(db, conversation.id, "sesn_1", [event("evt_1"), event("evt_3")]);
+    expect(await db.query(`select seq::int as seq from agent_events order by seq`)).toEqual([
+      { seq: 1 },
+      { seq: 2 },
+      { seq: 3 },
+    ]);
   });
 
   it("updates an event the runtime now reports differently, and only that one", async () => {
@@ -323,21 +331,47 @@ describe("storeAgentEvents", () => {
     });
     await storeAgentEvents(db, conversation.id, "sesn_1", [event("evt_1"), queued]);
 
-    const processedAt = new Date("2026-11-18T00:00:09.000Z");
+    const processedAt = "2026-11-18T00:00:09.000Z";
+    const processed = {
+      ...queued,
+      processedAt,
+      payload: { id: "evt_user", type: "user.message", processed_at: processedAt },
+    };
     const written = await storeAgentEvents(db, conversation.id, "sesn_1", [
       event("evt_1"),
-      { ...queued, processedAt, payload: { ...Object(queued.payload), processed_at: "later" } },
+      processed,
     ]);
     expect(written).toBe(1);
-    const rows = await db.query(
-      `select event_id, processed_at, payload from agent_events order by seq`,
-    );
-    expect(rows[1]).toEqual({
+    const stored = () =>
+      db.query(`select event_id, processed_at, payload from agent_events order by seq`);
+    const after = {
       event_id: "evt_user",
-      processed_at: processedAt,
-      payload: { id: "evt_user", type: "user.message", processed_at: "later" },
-    });
-    expect(rows).toHaveLength(2);
+      processed_at: new Date(processedAt),
+      payload: { id: "evt_user", type: "user.message", processed_at: processedAt },
+    };
+    expect((await stored())[1]).toEqual(after);
+    expect(await stored()).toHaveLength(2);
+
+    // A list read before the agent processed the message, but stored after: it changes
+    // nothing. A processed time is never taken away.
+    expect(await storeAgentEvents(db, conversation.id, "sesn_1", [queued])).toBe(0);
+    expect((await stored())[1]).toEqual(after);
+  });
+
+  it("keeps the runtime's time to the microsecond", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    await storeAgentEvents(db, conversation.id, "sesn_1", [
+      event("evt_b", { processedAt: "2026-11-18T00:00:03.123457Z" }),
+      event("evt_a", { processedAt: "2026-11-18T00:00:03.123456Z" }),
+    ]);
+    const rows = await db.query(
+      `select event_id, to_char(processed_at at time zone 'UTC', 'SS.US') as second
+       from agent_events order by processed_at`,
+    );
+    expect(rows).toEqual([
+      { event_id: "evt_a", second: "03.123456" },
+      { event_id: "evt_b", second: "03.123457" },
+    ]);
   });
 
   it("keeps the last report when a list names an event twice", async () => {
@@ -360,13 +394,21 @@ describe("storeAgentEvents", () => {
     expect(rows).toEqual([{ event_id: "evt_448" }, { event_id: "evt_449" }]);
   });
 
-  it("stores text Postgres cannot hold as it is, without the null character", async () => {
+  it("stores what Postgres cannot hold as it is: null characters and lone surrogates", async () => {
     const conversation = await findOrCreateConversation(db, key);
-    await storeAgentEvents(db, conversation.id, "sesn_1", [
-      event("evt_1", { text: "a\u0000b", payload: { output: "x\u0000y", path: "C:\\u0000" } }),
+    const written = await storeAgentEvents(db, conversation.id, "sesn_1", [
+      event("evt_1", {
+        text: "a\u0000b \ud83d",
+        payload: { output: "x\u0000y", "ke\u0000y": "half \ude00", path: "C:\\u0000", ok: "😀" },
+      }),
+      event("evt_2"),
     ]);
-    expect(await db.query(`select text, payload from agent_events`)).toEqual([
-      { text: "ab", payload: { output: "xy", path: "C:\\u0000" } },
+    expect(written).toBe(2);
+    expect(await db.query(`select text, payload from agent_events order by seq limit 1`)).toEqual([
+      {
+        text: "ab \ufffd",
+        payload: { output: "xy", key: "half \ufffd", path: "C:\\u0000", ok: "😀" },
+      },
     ]);
   });
 
@@ -424,6 +466,15 @@ describe("recordUsage", () => {
     expect(await usageOf(conversation.id)).toMatchObject({ input: 25, cost: 3 });
   });
 
+  it("never puts an older reading back: usage only grows", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    const later = { ...noUsage, inputTokens: 900, activeSeconds: 30.5, listCostMinor: 12 };
+    const earlier = { ...noUsage, inputTokens: 400, activeSeconds: 9.25, listCostMinor: 5 };
+    await recordUsage(db, conversation.id, later);
+    await recordUsage(db, conversation.id, earlier);
+    expect(await usageOf(conversation.id)).toMatchObject({ input: 900, active: 30.5, cost: 12 });
+  });
+
   it("writes nothing when the runtime reported nothing", async () => {
     const conversation = await findOrCreateConversation(db, key);
     expect(await recordUsage(db, conversation.id, { ...noUsage, currency: "USD" })).toBe(false);
@@ -442,6 +493,8 @@ describe("recordUsage", () => {
 });
 
 describe("conversationsToBackfill", () => {
+  const anyAge = { olderThanSeconds: 0, limit: 10 };
+
   it("finds conversations with a session whose events were never stored", async () => {
     const stored = await findOrCreateConversation(db, key);
     const never = await findOrCreateConversation(db, { ...key, threadId: "200.000001" });
@@ -461,12 +514,26 @@ describe("conversationsToBackfill", () => {
     );
     await markAgentEventsSynced(db, stored.id);
 
-    expect(await conversationsToBackfill(db, 10)).toEqual([
+    expect(await conversationsToBackfill(db, anyAge)).toEqual([
       { id: never.id, sessionId: "sesn_200.000001" },
     ]);
 
     await markAgentEventsSynced(db, never.id);
-    expect(await conversationsToBackfill(db, 10)).toEqual([]);
+    expect(await conversationsToBackfill(db, anyAge)).toEqual([]);
+  });
+
+  it("leaves a young conversation to its own first sync", async () => {
+    const young = await findOrCreateConversation(db, key);
+    const old = await findOrCreateConversation(db, { ...key, threadId: "200.000001" });
+    await db.query(`update conversations set agent_session_id = 'sesn_' || thread_id`);
+    await db.query(
+      `update conversations set created_at = now() - interval '11 minutes' where id = $1`,
+      [old.id],
+    );
+
+    const found = await conversationsToBackfill(db, { olderThanSeconds: 600, limit: 10 });
+    expect(found.map((conversation) => conversation.id)).toEqual([old.id]);
+    expect(young.id).not.toBe(old.id);
   });
 
   it("returns no more than the limit", async () => {
@@ -474,7 +541,7 @@ describe("conversationsToBackfill", () => {
       await findOrCreateConversation(db, { ...key, threadId });
     }
     await db.query(`update conversations set agent_session_id = 'sesn_' || thread_id`);
-    expect(await conversationsToBackfill(db, 2)).toHaveLength(2);
+    expect(await conversationsToBackfill(db, { olderThanSeconds: 0, limit: 2 })).toHaveLength(2);
   });
 });
 

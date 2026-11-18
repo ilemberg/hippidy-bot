@@ -60,8 +60,11 @@ export interface AgentEventRecord {
   id: string;
   /** The runtime's own name for the event, for example "agent.message". */
   type: string;
-  /** The runtime's clock. Null while a user message still waits in the session's queue. */
-  processedAt: Date | null;
+  /**
+   * The runtime's clock, as an ISO 8601 timestamp exactly as it was given (it can be finer
+   * than a JavaScript Date). Null while a user message still waits in the session's queue.
+   */
+  processedAt: string | null;
   /** The event as the runtime sent it: plain JSON. */
   payload: unknown;
   /** What the API acts on; undefined for events it only records. */

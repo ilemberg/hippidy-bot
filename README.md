@@ -242,7 +242,7 @@ To look, open the Supabase dashboard, then **SQL Editor**, and run for example:
 select role, actor_name, text, occurred_at
 from conversation_transcript
 where conversation_id = (select id from conversations order by created_at desc limit 1)
-order by occurred_at, recorded_at;
+order by occurred_at, recorded_at, position;
 
 -- What each conversation cost
 select created_at, usage_list_cost_minor / 100.0 as dollars, usage_input_tokens,

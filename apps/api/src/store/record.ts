@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { STARTING_PREFIX } from "./conversations.ts";
 import type { Db } from "./db.ts";
+import { toJsonText } from "./json.ts";
 
 // The record (slice 3): the agent runtime's events and usage, kept so a conversation can be
 // rebuilt from the database alone (decision 75). Nothing here decides what the conversation
@@ -15,8 +16,8 @@ export interface AgentEventToStore {
   kind: string | null;
   /** The text of an agent message; null for everything else. */
   text: string | null;
-  /** The runtime's clock. Null while a user message waits in the session's queue. */
-  processedAt: Date | null;
+  /** The runtime's clock, as an ISO 8601 timestamp. Null while a user message is queued. */
+  processedAt: string | null;
   /** The event as the runtime sent it: anything JSON can hold. */
   payload: unknown;
 }
@@ -25,10 +26,11 @@ export interface AgentEventToStore {
 const STORE_BATCH = 200;
 
 /**
- * Keeps a session's events. An event is stored once; storing it again updates the row only
- * if the runtime now reports it differently (a queued user message gains its processed time
- * later, decision 85) and otherwise changes nothing. Returns how many rows were added or
- * changed.
+ * Keeps a session's events. An event is stored once. Storing it again updates the row only if
+ * the runtime now reports it differently (a queued user message gains its processed time
+ * later, decision 85); an event that has not changed is not touched at all. A processed time
+ * is never taken away again, so a list read earlier cannot undo one read later. Returns how
+ * many rows were added or changed.
  */
 export async function storeAgentEvents(
   db: Db,
@@ -45,40 +47,38 @@ export async function storeAgentEvents(
       type: event.type,
       kind: event.kind,
       text: event.text,
-      processed_at: event.processedAt === null ? null : event.processedAt.toISOString(),
+      processed_at: event.processedAt,
       payload: event.payload ?? null,
     }));
-    // The parameter is cast from text: the production client would otherwise send a string
-    // as a JSON string, not as the JSON it holds.
     const rows = await db.query(
-      `insert into agent_events
+      `with given as (
+         select e.item ->> 'event_id' as event_id, e.item ->> 'type' as type,
+                e.item ->> 'kind' as kind, e.item ->> 'text' as text,
+                (e.item ->> 'processed_at')::timestamptz as processed_at,
+                e.item -> 'payload' as payload, e.position
+         from jsonb_array_elements($3::text::jsonb) with ordinality as e(item, position)
+       )
+       insert into agent_events
          (conversation_id, agent_session_id, event_id, type, kind, text, processed_at, payload)
-       select $1::uuid, $2::text, e.item ->> 'event_id', e.item ->> 'type', e.item ->> 'kind',
-              e.item ->> 'text', (e.item ->> 'processed_at')::timestamptz, e.item -> 'payload'
-       from jsonb_array_elements($3::text::jsonb) with ordinality as e(item, position)
-       order by e.position
+       select $1::uuid, $2::text, g.event_id, g.type, g.kind, g.text, g.processed_at, g.payload
+       from given g
+       where not exists (
+         select 1 from agent_events a
+         where a.conversation_id = $1::uuid and a.event_id = g.event_id
+           and (a.type, a.kind, a.text, a.processed_at, a.payload)
+               is not distinct from (g.type, g.kind, g.text, g.processed_at, g.payload))
+       order by g.position
        on conflict (conversation_id, event_id) do update
          set type = excluded.type, kind = excluded.kind, text = excluded.text,
              processed_at = excluded.processed_at, payload = excluded.payload,
              updated_at = now()
-         where (agent_events.type, agent_events.kind, agent_events.text,
-                agent_events.processed_at, agent_events.payload)
-               is distinct from
-               (excluded.type, excluded.kind, excluded.text,
-                excluded.processed_at, excluded.payload)
+         where not (agent_events.processed_at is not null and excluded.processed_at is null)
        returning event_id`,
-      [conversationId, sessionId, toJson(items)],
+      [conversationId, sessionId, toJsonText(items)],
     );
     written += rows.length;
   }
   return written;
-}
-
-/** JSON text Postgres accepts: it cannot store the null character inside a string. */
-function toJson(value: unknown): string {
-  return JSON.stringify(value, (_key, item: unknown) =>
-    typeof item === "string" ? item.replaceAll("\u0000", "") : item,
-  );
 }
 
 /**
@@ -108,9 +108,10 @@ export interface UsageToStore {
 }
 
 /**
- * Keeps the latest usage of the conversation's session. A number the runtime did not report
- * keeps its earlier value; if it reported nothing at all, nothing changes. Returns whether
- * anything was written.
+ * Keeps the usage of the conversation's session. Usage only ever grows, so each number keeps
+ * the larger of what is stored and what is given: a reading that arrives late cannot put an
+ * older figure back, and a number the runtime did not report keeps its earlier value. If the
+ * runtime reported nothing at all, nothing changes. Returns whether anything was written.
  */
 export async function recordUsage(
   db: Db,
@@ -121,13 +122,13 @@ export async function recordUsage(
   if (Object.values(numbers).every((value) => value === null)) return false;
   await db.query(
     `update conversations
-     set usage_input_tokens = coalesce($2, usage_input_tokens),
-         usage_output_tokens = coalesce($3, usage_output_tokens),
-         usage_cache_read_tokens = coalesce($4, usage_cache_read_tokens),
-         usage_cache_creation_tokens = coalesce($5, usage_cache_creation_tokens),
-         usage_active_seconds = coalesce($6, usage_active_seconds),
-         usage_list_cost_minor = coalesce($7, usage_list_cost_minor),
-         budget_list_cost_minor = coalesce($8, budget_list_cost_minor),
+     set usage_input_tokens = greatest(usage_input_tokens, $2::bigint),
+         usage_output_tokens = greatest(usage_output_tokens, $3::bigint),
+         usage_cache_read_tokens = greatest(usage_cache_read_tokens, $4::bigint),
+         usage_cache_creation_tokens = greatest(usage_cache_creation_tokens, $5::bigint),
+         usage_active_seconds = greatest(usage_active_seconds, $6::double precision),
+         usage_list_cost_minor = greatest(usage_list_cost_minor, $7::bigint),
+         budget_list_cost_minor = coalesce($8::bigint, budget_list_cost_minor),
          cost_currency = coalesce($9, cost_currency),
          usage_updated_at = now()
      where id = $1`,
@@ -153,21 +154,24 @@ export interface ConversationToBackfill {
 
 /**
  * Conversations with an agent session whose events were never stored (decision 80): the ones
- * from before the record existed. In no particular order, so one that keeps failing cannot
- * hold up the rest. Conversations being synced right now are skipped; the sync stores them.
+ * from before the record existed, or whose record could not be written. A conversation
+ * younger than `olderThanSeconds` is left alone: its own first sync stores it. In no
+ * particular order, so one that keeps failing cannot hold up the rest. Conversations being
+ * synced right now are skipped; the sync stores them.
  */
 export async function conversationsToBackfill(
   db: Db,
-  limit: number,
+  options: { olderThanSeconds: number; limit: number },
 ): Promise<ConversationToBackfill[]> {
   const rows = await db.query(
     `select id, agent_session_id from conversations
      where agent_events_synced_at is null
        and agent_session_id is not null and agent_session_id not like $1
+       and created_at < now() - make_interval(secs => $2)
        and (sync_lease_until is null or sync_lease_until < now())
      order by random()
-     limit $2`,
-    [`${STARTING_PREFIX}%`, limit],
+     limit $3`,
+    [`${STARTING_PREFIX}%`, options.olderThanSeconds, options.limit],
   );
   return rows.map((row) => {
     const r = z.object({ id: z.string(), agent_session_id: z.string() }).parse(row);

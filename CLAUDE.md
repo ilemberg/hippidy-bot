@@ -64,10 +64,13 @@ all pass. CI runs these, then `pnpm build && pnpm smoke`.
 - Database tests use `createTestDb()` from `src/store/testing.ts`: an in-process Postgres
   (PGlite) with every migration applied from scratch. No Docker.
 - The production client (postgres.js) does not behave exactly like PGlite. Pass JSON as text
-  and cast it in the SQL (`$1::text::jsonb`): bound straight to a jsonb parameter, a string is
-  stored as a JSON string. `bigint` columns come back as strings; cast (`::int`) or parse.
-  Anything touching JSON or number types gets a test in `src/store/db.test.ts`, which runs
-  through postgres.js.
+  made by `toJsonText` (`src/store/json.ts`) and cast it in the SQL (`$1::text::jsonb`): bound
+  straight to a jsonb parameter, a string is stored as a JSON string. `toJsonText` also removes
+  what Postgres cannot hold (null characters, lone surrogates), which agent output may contain.
+  `bigint` columns come back as strings; cast (`::int`) or parse. Anything touching JSON or
+  number types gets a test in `src/store/db.test.ts`, which runs through postgres.js.
+- Nothing slow or optional runs while a conversation's sync lease is held: it would make the
+  next webhook or a stop find the conversation busy.
 - Tests sit next to the code as `*.test.ts` (Vitest). Slack, Anthropic and the network are
   faked; no test talks to a real service. Pass dependencies in, rather than mocking modules.
 
