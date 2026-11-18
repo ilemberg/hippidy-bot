@@ -16,6 +16,8 @@ const config: AgentConfig = {
   agentName: "hippidy-bot",
   environmentName: "hippidy",
   sessionBudgetCents: 200,
+  repository: { url: "https://github.com/ilemberg/hippidy-bot", token: "github_pat_test" },
+  vaultName: "hippidy-bot",
 };
 
 const agentMessage: BetaManagedAgentsSessionEvent = {
@@ -198,5 +200,74 @@ describe("a session the runtime no longer has", () => {
     const runtime = runtimeFailingWith(unavailable);
     await expect(runtime.listEvents("sesn_1")).rejects.toBe(unavailable);
     await expect(runtime.readUsage("sesn_1")).rejects.toBe(unavailable);
+  });
+});
+
+describe("starting a session", () => {
+  function fakeClient() {
+    const created: unknown[] = [];
+    const list = (items: object[]) =>
+      async function* () {
+        for (const item of items) yield await Promise.resolve(item);
+      };
+    const client = {
+      beta: {
+        agents: { list: list([{ id: "agent_1", name: "hippidy-bot", archived_at: null }]) },
+        environments: { list: list([{ id: "env_1", name: "hippidy", archived_at: null }]) },
+        vaults: {
+          list: list([
+            { id: "vlt_old", display_name: "hippidy-bot", archived_at: "2026-11-01T00:00:00Z" },
+            { id: "vlt_1", display_name: "hippidy-bot", archived_at: null },
+          ]),
+        },
+        sessions: {
+          create: (body: unknown) => {
+            created.push(body);
+            return Promise.resolve({ id: "sesn_1", agent: { id: "agent_1", version: 3 } });
+          },
+        },
+      },
+    } as unknown as Anthropic;
+    return { client, created };
+  }
+
+  it("mounts the repo with the token and attaches the vault, found by name", async () => {
+    const { client, created } = fakeClient();
+    const runtime = createManagedAgentRuntime(config, client);
+    expect(await runtime.startSession({ title: "t", metadata: {} })).toEqual({
+      sessionId: "sesn_1",
+      agentId: "agent_1",
+      agentVersion: 3,
+    });
+    expect(created).toEqual([
+      expect.objectContaining({
+        agent: "agent_1",
+        environment_id: "env_1",
+        vault_ids: ["vlt_1"],
+        resources: [
+          {
+            type: "github_repository",
+            url: "https://github.com/ilemberg/hippidy-bot",
+            authorization_token: "github_pat_test",
+          },
+        ],
+      }),
+    ]);
+  });
+
+  it("starts no session without the GitHub token", async () => {
+    const { client, created } = fakeClient();
+    const runtime = createManagedAgentRuntime({ ...config, repository: undefined }, client);
+    await expect(runtime.startSession({ title: "t", metadata: {} })).rejects.toThrow(
+      /AGENT_GITHUB_TOKEN/,
+    );
+    expect(created).toEqual([]);
+  });
+
+  it("starts no session when the vault has not been made", async () => {
+    const { client, created } = fakeClient();
+    const runtime = createManagedAgentRuntime({ ...config, vaultName: "missing" }, client);
+    await expect(runtime.startSession({ title: "t", metadata: {} })).rejects.toThrow(/vault/);
+    expect(created).toEqual([]);
   });
 });

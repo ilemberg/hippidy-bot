@@ -323,8 +323,9 @@ works without the token entering its sandbox. The agent sync keeps the same toke
 Anthropic vault for GitHub's MCP server, which the agent uses to open pull requests and read
 CI results.
 
-Done on 2026-11-18. Nothing reads the token yet: the slice 4 experiment and pull request C
-will. To make it again:
+Done on 2026-11-18. From pull request C, the API reads it in Vercel to mount the repo in each
+session, and the agent sync reads the `release` copy to fill the vault. Without it, no session
+starts: a message gets the note that it could not be passed on. To make it again:
 
 1. Open https://github.com/settings/personal-access-tokens/new (**Settings**, **Developer
    settings**, **Personal access tokens**, **Fine-grained tokens**).

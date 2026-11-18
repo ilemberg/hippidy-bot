@@ -1,10 +1,16 @@
 # The environment hippidy-bot's sessions run in. Synced by `pnpm agent:sync`.
-# The agent has no tools in slice 2, so the sandbox needs no network access at all.
+# From slice 4 the agent works in a clone of the repo (decision 15): it installs packages, runs
+# the checks and reaches GitHub's MCP server. Still no general web access (decision 128).
 name: hippidy-bot
-description: Sandbox for hippidy-bot sessions. No network until the agent gets tools.
+description: Sandbox for hippidy-bot sessions, working in a clone of the hippidy-bot repo.
 config:
   type: cloud
   networking:
     type: limited
-    allow_package_managers: false
-    allow_mcp_servers: false
+    allow_package_managers: true
+    allow_mcp_servers: true
+    # github.com for git through the repo mount; nodejs.org for Node 26, which the sandbox
+    # lacks and an environment cannot install (decisions 121, 128).
+    allowed_hosts:
+      - github.com
+      - nodejs.org

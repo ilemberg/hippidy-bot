@@ -170,6 +170,23 @@ request is closed without merging.
 | Decision 95 | Whether a list of events filtered by time includes messages still waiting in the queue |
 | 121 | Whether the agent sync makes a new agent version when nothing changed |
 
+### What it found (run 44421656532, 2026-11-18; decisions 127 to 129)
+
+| Question | Finding |
+|---|---|
+| D4 | `CLAUDE.md` is not loaded by itself; the agent reads it when the prompt says so. Skills in `.claude/skills/` of the mounted repo are loaded (the probe's codeword came through) |
+| D6 | Node 22.23.5 and pnpm 10.34.9 are installed. Node 26.13.1 from nodejs.org in about 5 s, no root. Install 5 s, lint 9 s, format 2 s, typecheck 6 s, tests 108 s (312 pass) |
+| D11, 116 | `/mcp/x/all` serves all four tools (114 in all, narrowed by the toolset). `/x/pull_requests` lacks `get_job_logs`; a comma list of toolsets serves nothing |
+| 122 | The token mounts, pushes and works as the MCP credential; a push changing a workflow is refused ("without `workflow` scope") |
+| 121 | `git` commits as Claude (noreply@anthropic.com). An agent update with nothing changed makes no new version |
+| D13, 115 | Sandbox report $0.14 (3 min); question with outcome $0.43 (2 grader passes); demo $0.52 (7 min, 3 grader passes, `satisfied`); session $1.09 |
+| 95 | A list filtered by `created_at[gt]` includes a message still in the queue |
+| Eval view | The pull request is an `agent.mcp_tool_use` named `create_pull_request` whose `agent.mcp_tool_result` text is JSON with `html_url` |
+
+For pull request D (decision 129): an outcome sent before its message starts a turn on its
+own, the grader reads files in `/mnt/session/outputs/`, and the agent's last message after a
+verdict talks about the grader.
+
 ## Decide before starting
 
 | # | Question | Pick, or the answer |

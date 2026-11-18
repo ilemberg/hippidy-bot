@@ -58,4 +58,6 @@ jobs:
         if: steps.configured.outputs.ready == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Written into the vault for GitHub's MCP server (decision 122).
+          AGENT_GITHUB_TOKEN: ${{ secrets.AGENT_GITHUB_TOKEN }}
         run: pnpm agent:sync
