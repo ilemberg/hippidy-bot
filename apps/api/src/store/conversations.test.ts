@@ -21,12 +21,15 @@ import {
   recordInbound,
   releaseSessionStart,
   releaseSyncLease,
+  renewSyncLease,
   sessionIdOf,
   setAgentEventCursor,
   setSessionState,
   settleMessages,
+  SYNC_LEASE_SECONDS,
   unsentDeliveries,
   type ConversationKey,
+  type SyncLease,
 } from "./conversations.ts";
 import { createTestDb } from "./testing.ts";
 
@@ -108,19 +111,110 @@ describe("conversations", () => {
 });
 
 describe("sync lease", () => {
+  async function claim(conversationId: string): Promise<SyncLease> {
+    const lease = await claimSyncLease(db, conversationId);
+    if (lease === undefined) throw new Error("expected to get the lease");
+    return lease;
+  }
+
+  /** Moves the expiry of whatever lease is on the conversation, as if time had passed. */
+  async function leaseEndsIn(conversationId: string, seconds: number): Promise<void> {
+    await db.query(
+      `update conversations set sync_lease_until = now() + make_interval(secs => $2)
+       where id = $1`,
+      [conversationId, seconds],
+    );
+  }
+
+  /** The lease on the conversation as its holder would know it after `leaseEndsIn`. */
+  async function leaseNow(conversationId: string): Promise<SyncLease> {
+    const rows = await db.query(
+      `select to_char(sync_lease_until at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as until
+       from conversations where id = $1`,
+      [conversationId],
+    );
+    return { conversationId, until: String(rows[0]?.until) };
+  }
+
+  async function secondsLeft(conversationId: string): Promise<number> {
+    const rows = await db.query(
+      `select extract(epoch from sync_lease_until - now())::float8 as seconds
+       from conversations where id = $1`,
+      [conversationId],
+    );
+    return Number(rows[0]?.seconds);
+  }
+
   it("lets one sync hold a conversation until it releases it", async () => {
     const conversation = await findOrCreateConversation(db, key);
-    expect(await claimSyncLease(db, conversation.id)).toBe(true);
-    expect(await claimSyncLease(db, conversation.id)).toBe(false);
-    await releaseSyncLease(db, conversation.id);
-    expect(await claimSyncLease(db, conversation.id)).toBe(true);
+    const lease = await claim(conversation.id);
+    expect(await claimSyncLease(db, conversation.id)).toBeUndefined();
+    expect(await releaseSyncLease(db, lease)).toBe(true);
+    expect(await claimSyncLease(db, conversation.id)).toBeDefined();
   });
 
   it("can be taken over once it has expired", async () => {
     const conversation = await findOrCreateConversation(db, key);
-    await claimSyncLease(db, conversation.id);
-    await db.query(`update conversations set sync_lease_until = now() - interval '1 second'`);
-    expect(await claimSyncLease(db, conversation.id)).toBe(true);
+    await claim(conversation.id);
+    await leaseEndsIn(conversation.id, -1);
+    expect(await claimSyncLease(db, conversation.id)).toBeDefined();
+  });
+
+  it("is not freed by a late release from the sync it was taken over from", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    const slow = await claim(conversation.id); // sync A, which runs too long
+    await leaseEndsIn(conversation.id, -1);
+    const takeover = await claim(conversation.id); // sync B takes over
+
+    expect(await releaseSyncLease(db, slow)).toBe(false); // A finishes at last
+    expect(await secondsLeft(conversation.id)).toBeGreaterThan(SYNC_LEASE_SECONDS - 10);
+    expect(await claimSyncLease(db, conversation.id)).toBeUndefined(); // no room for a sync C
+
+    expect(await releaseSyncLease(db, takeover)).toBe(true);
+    expect(await claimSyncLease(db, conversation.id)).toBeDefined();
+  });
+
+  it("is extended by its holder, and only the extended lease then counts", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    await claim(conversation.id);
+    await leaseEndsIn(conversation.id, 1);
+    const nearlyOut = await leaseNow(conversation.id);
+
+    const renewed = await renewSyncLease(db, nearlyOut);
+    expect(renewed).toBeDefined();
+    expect(await secondsLeft(conversation.id)).toBeGreaterThan(SYNC_LEASE_SECONDS - 10);
+
+    expect(await releaseSyncLease(db, nearlyOut)).toBe(false); // the expiry it knew is gone
+    expect(renewed !== undefined && (await releaseSyncLease(db, renewed))).toBe(true);
+  });
+
+  it("can still be extended after it ran out, as long as nobody took over", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    await claim(conversation.id);
+    await leaseEndsIn(conversation.id, -1);
+    expect(await renewSyncLease(db, await leaseNow(conversation.id))).toBeDefined();
+    expect(await secondsLeft(conversation.id)).toBeGreaterThan(SYNC_LEASE_SECONDS - 10);
+  });
+
+  it("cannot be extended once another sync has taken over", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    const slow = await claim(conversation.id);
+    await leaseEndsIn(conversation.id, -1);
+    const takeover = await claim(conversation.id);
+
+    expect(await renewSyncLease(db, slow)).toBeUndefined();
+    expect(await releaseSyncLease(db, takeover)).toBe(true); // untouched by the failed renewal
+  });
+
+  it("cannot be extended or released after it was given back", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    const lease = await claim(conversation.id);
+    await releaseSyncLease(db, lease);
+    const next = await claim(conversation.id);
+
+    expect(await renewSyncLease(db, lease)).toBeUndefined();
+    expect(await releaseSyncLease(db, lease)).toBe(false);
+    expect(await releaseSyncLease(db, next)).toBe(true);
   });
 });
 

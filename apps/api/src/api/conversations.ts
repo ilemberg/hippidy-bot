@@ -31,6 +31,7 @@ import {
   recordInbound,
   releaseSessionStart,
   releaseSyncLease,
+  renewSyncLease,
   sessionIdOf,
   setAgentEventCursor,
   setSessionState,
@@ -199,28 +200,69 @@ async function ensureSession(
 }
 
 /**
+ * The right to sync one conversation, held by one sync at a time. It runs out
+ * SYNC_LEASE_SECONDS after it was last extended, and another sync may then take the
+ * conversation over (decision 92).
+ */
+interface HeldLease {
+  /**
+   * Extends the lease for another full term. False once it ran out and another sync took the
+   * conversation over: that sync now does the work, and this one must send nothing more.
+   * Called before every step that cannot be taken back (a message to the agent, a delivery).
+   */
+  extend(): Promise<boolean>;
+  /** Gives the lease back, if it is still ours; never frees a lease taken over since. */
+  release(): Promise<void>;
+}
+
+/** Takes a conversation's sync lease; undefined if another sync holds it. */
+async function takeSyncLease(
+  deps: ConversationDeps,
+  conversationId: string,
+  log: Logger,
+): Promise<HeldLease | undefined> {
+  let lease = await claimSyncLease(deps.db, conversationId);
+  if (lease === undefined) return undefined;
+  return {
+    extend: async () => {
+      if (lease === undefined) return false;
+      lease = await renewSyncLease(deps.db, lease);
+      if (lease === undefined) log.warn("conversation.sync_lease_lost", { conversationId });
+      return lease !== undefined;
+    },
+    release: async () => {
+      if (lease !== undefined) await releaseSyncLease(deps.db, lease);
+    },
+  };
+}
+
+/**
  * Brings a conversation up to date with its agent session: queues every new agent message for
  * delivery, settles the messages the agent has finished with, then sends whatever is queued,
  * in order. Only one sync of a conversation runs at a time; a sync that finds another running
- * leaves the work to it (reconcile picks up anything left over).
+ * leaves the work to it (reconcile picks up anything left over). So does a sync that took so
+ * long that another has taken the conversation over.
  */
 export async function syncConversation(
   deps: ConversationDeps,
   conversation: Conversation,
   log: Logger,
 ): Promise<void> {
-  if (!(await claimSyncLease(deps.db, conversation.id))) {
+  const lease = await takeSyncLease(deps, conversation.id, log);
+  if (lease === undefined) {
     log.info("conversation.sync_skipped", { conversationId: conversation.id, reason: "busy" });
     return;
   }
   try {
     const current = await getConversation(deps.db, conversation.id);
-    await forwardPending(deps, current, log);
+    await forwardPending(deps, current, log, lease);
+    // Handing messages over can take long: go on only if the conversation is still ours.
+    if (!(await lease.extend())) return;
     await readAgent(deps, await getConversation(deps.db, conversation.id), log);
     await giveUpIfTooLong(deps, await getConversation(deps.db, conversation.id), log);
-    await flushDeliveries(deps, conversation.id, log);
+    await flushDeliveries(deps, conversation.id, log, lease);
   } finally {
-    await releaseSyncLease(deps.db, conversation.id);
+    await lease.release();
   }
 }
 
@@ -370,14 +412,17 @@ async function refuseClosed(
 /**
  * Sends the conversation's queued deliveries in order. Stops at the first failure so replies
  * never arrive out of order; the failed one is retried by the next sync or reconcile. A
- * delivery that keeps failing is abandoned and logged as an error, and the rest go on.
+ * delivery that keeps failing is abandoned and logged as an error, and the rest go on. Stops
+ * too if the lease is lost: the sync that took over sends the rest.
  */
 async function flushDeliveries(
   deps: ConversationDeps,
   conversationId: string,
   log: Logger,
+  lease: HeldLease,
 ): Promise<void> {
   for (const delivery of await unsentDeliveries(deps.db, conversationId)) {
+    if (!(await lease.extend())) return;
     const deliverer = deps.deliverers[delivery.payload.target.source];
     try {
       if (deliverer === undefined) {
@@ -413,6 +458,7 @@ async function forwardPending(
   deps: ConversationDeps,
   conversation: Conversation,
   log: Logger,
+  lease: HeldLease,
 ): Promise<void> {
   const pending = await pendingForwards(deps.db, conversation.id, RECONCILE_AFTER_SECONDS);
   if (pending.length === 0) return;
@@ -426,6 +472,7 @@ async function forwardPending(
     return;
   }
   for (const message of pending) {
+    if (!(await lease.extend())) return;
     try {
       const sessionId = await ensureSession(deps, conversation, log);
       const agentEventId = await deps.runtime.sendMessage(
@@ -579,11 +626,12 @@ export async function stopConversation(
 async function flushSoon(deps: ConversationDeps, conversationId: string, log: Logger) {
   const sleep = deps.sleep ?? defaultSleep;
   for (let attempt = 0; attempt < 10; attempt++) {
-    if (await claimSyncLease(deps.db, conversationId)) {
+    const lease = await takeSyncLease(deps, conversationId, log);
+    if (lease !== undefined) {
       try {
-        await flushDeliveries(deps, conversationId, log);
+        await flushDeliveries(deps, conversationId, log, lease);
       } finally {
-        await releaseSyncLease(deps.db, conversationId);
+        await lease.release();
       }
       return;
     }

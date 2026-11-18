@@ -9,6 +9,7 @@ import {
   MAX_FORWARD_ATTEMPTS,
   notes,
   reconcile,
+  RECONCILE_AFTER_SECONDS,
   receiveMessage,
   stopConversation,
   syncConversation,
@@ -66,6 +67,50 @@ async function onlyConversation() {
 
 async function sync(sessionId: string) {
   await syncConversation(deps, await conversationOf(sessionId), log);
+}
+
+/** A gate that holds up the first call to pass through it until `release()` is called. */
+function gate() {
+  let release: () => void = () => undefined;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let reach: () => void = () => undefined;
+  const reached = new Promise<void>((resolve) => {
+    reach = resolve;
+  });
+  let used = false;
+  const pass = async () => {
+    if (used) return;
+    used = true;
+    reach();
+    await released;
+  };
+  return { reached, release, pass };
+}
+
+/** Holds up the runtime's answer to the next read of a session's events. */
+function stallNextRead() {
+  const held = gate();
+  const listEvents = runtime.listEvents.bind(runtime);
+  runtime.listEvents = async (sessionId) => {
+    const events = await listEvents(sessionId);
+    await held.pass();
+    return events;
+  };
+  return held;
+}
+
+/** Holds up the runtime's answer to the next message sent to it (the message has arrived). */
+function stallNextSend() {
+  const held = gate();
+  const sendMessage = runtime.sendMessage.bind(runtime);
+  runtime.sendMessage = async (sessionId, text) => {
+    const eventId = await sendMessage(sessionId, text);
+    await held.pass();
+    return eventId;
+  };
+  return held;
 }
 
 /** Makes every waiting conversation and recorded message look `seconds` older. */
@@ -191,6 +236,68 @@ describe("syncConversation", () => {
     await first;
     expect(slack.replies()).toEqual(["First.", "Second."]);
     expect(lines).toContainEqual(expect.objectContaining({ msg: "conversation.sync_skipped" }));
+  });
+
+  it("stops a sync that outlived its lease, and keeps the lease of the sync that took over", async () => {
+    await receiveMessage(deps, message(1), log);
+    const sessionId = runtime.onlySessionId();
+    runtime.reply(sessionId, "First.", "Second.");
+
+    const reading = stallNextRead();
+    const slow = sync(sessionId); // sync A is held up reading the agent...
+    await reading.reached;
+    await db.query(`update conversations set sync_lease_until = now() - interval '1 second'`);
+    // ...for so long that its lease runs out, and sync B takes the conversation over.
+    const posting = slack.stallNext();
+    const takeover = sync(sessionId); // stalls while posting "First."
+    await posting;
+
+    reading.release();
+    await slow;
+    // A found its lease gone: it posted nothing itself, and did not free B's lease.
+    expect(lines).toContainEqual(expect.objectContaining({ msg: "conversation.sync_lease_lost" }));
+    expect(slack.replies()).toEqual([]);
+    lines.length = 0;
+    await sync(sessionId); // so a sync C still finds the conversation busy
+    expect(lines).toContainEqual(expect.objectContaining({ msg: "conversation.sync_skipped" }));
+    expect(slack.replies()).toEqual([]);
+
+    slack.release();
+    await takeover;
+    expect(slack.replies()).toEqual(["First.", "Second."]);
+    expect(slack.statuses()).toEqual([{ messageIds: ["100.000001"], status: "answered" }]);
+    await sync(sessionId); // and B gave the conversation back when it was done
+    expect(lines).not.toContainEqual(
+      expect.objectContaining({ msg: "conversation.sync_lease_lost" }),
+    );
+  });
+
+  it("hands nothing more to the agent once a sync has lost its lease", async () => {
+    await receiveMessage(deps, message(1), log);
+    const sessionId = runtime.onlySessionId();
+    runtime.rejectAllSends = new Error("anthropic down");
+    await expect(receiveMessage(deps, message(2), log)).rejects.toThrow("anthropic down");
+    await expect(receiveMessage(deps, message(3), log)).rejects.toThrow("anthropic down");
+    runtime.rejectAllSends = undefined;
+    await age(RECONCILE_AFTER_SECONDS + 1);
+
+    const sending = stallNextSend();
+    const slow = sync(sessionId); // sync A is held up handing over message 2...
+    await sending.reached;
+    await db.query(`update conversations set sync_lease_until = now() - interval '1 second'`);
+    await sync(sessionId); // ...so long that sync B takes over, and hands over 2 and 3
+    sending.release();
+    await slow;
+
+    // Message 2 went twice: A's was already on its way when its lease ran out, which no lease
+    // can call back. But A stopped there, and message 3 went once.
+    expect(runtime.sessions.get(sessionId)?.sent).toEqual([
+      formatForAgent("U1", "question 1"),
+      formatForAgent("U1", "question 2"),
+      formatForAgent("U1", "question 2"),
+      formatForAgent("U1", "question 3"),
+    ]);
+    expect(lines).toContainEqual(expect.objectContaining({ msg: "conversation.sync_lease_lost" }));
   });
 
   it("posts several messages of one turn in order", async () => {

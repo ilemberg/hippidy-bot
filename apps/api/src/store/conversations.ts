@@ -198,27 +198,75 @@ export async function setAgentEventCursor(
   );
 }
 
-/** A sync that has not finished after this long is assumed dead; another may take over. */
+/**
+ * A sync that has not extended its lease for this long is assumed dead; another may take over.
+ */
 export const SYNC_LEASE_SECONDS = 120;
 
 /**
- * Takes the right to sync a conversation, so a webhook and reconcile never sync the same
- * conversation at once. Returns false if someone else holds it.
+ * Proof of holding a conversation's sync lease. `until` is the exact expiry the database
+ * stored, to the microsecond, and is what makes the lease owned: every claim and renewal
+ * stores a later expiry than any before it, so only the holder knows the current one.
  */
-export async function claimSyncLease(db: Db, conversationId: string): Promise<boolean> {
+export interface SyncLease {
+  conversationId: string;
+  until: string;
+}
+
+// The expiry travels as text, exact to the microsecond, and is cast in the SQL
+// (`$n::text::timestamptz`), so it never passes through a JavaScript date, which keeps only
+// milliseconds: an expiry rounded on the way would never match again.
+const leaseUntil = `to_char(sync_lease_until at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as until`;
+
+function toSyncLease(conversationId: string, rows: Row[]): SyncLease | undefined {
+  if (rows[0] === undefined) return undefined;
+  return { conversationId, until: z.object({ until: z.string() }).parse(rows[0]).until };
+}
+
+/**
+ * Takes the right to sync a conversation, so a webhook and reconcile never sync the same
+ * conversation at once. Returns the lease, or undefined if someone else holds it.
+ */
+export async function claimSyncLease(
+  db: Db,
+  conversationId: string,
+): Promise<SyncLease | undefined> {
   const rows = await db.query(
     `update conversations set sync_lease_until = now() + make_interval(secs => $2)
      where id = $1 and (sync_lease_until is null or sync_lease_until < now())
-     returning id`,
+     returning ${leaseUntil}`,
     [conversationId, SYNC_LEASE_SECONDS],
   );
-  return rows.length > 0;
+  return toSyncLease(conversationId, rows);
 }
 
-export async function releaseSyncLease(db: Db, conversationId: string): Promise<void> {
-  await db.query(`update conversations set sync_lease_until = null where id = $1`, [
-    conversationId,
-  ]);
+/**
+ * Extends a lease for another full term, if it is still ours. Returns the lease to use from
+ * now on, or undefined if it expired and another sync has taken the conversation since: the
+ * caller must then stop, because that sync is doing the work.
+ */
+export async function renewSyncLease(db: Db, lease: SyncLease): Promise<SyncLease | undefined> {
+  const rows = await db.query(
+    `update conversations set sync_lease_until = now() + make_interval(secs => $3)
+     where id = $1 and sync_lease_until = $2::text::timestamptz
+     returning ${leaseUntil}`,
+    [lease.conversationId, lease.until, SYNC_LEASE_SECONDS],
+  );
+  return toSyncLease(lease.conversationId, rows);
+}
+
+/**
+ * Gives a lease back, if it is still ours. A sync that outlived its lease frees nothing: the
+ * lease now on the conversation belongs to whoever took over. Returns whether it was freed.
+ */
+export async function releaseSyncLease(db: Db, lease: SyncLease): Promise<boolean> {
+  const rows = await db.query(
+    `update conversations set sync_lease_until = null
+     where id = $1 and sync_lease_until = $2::text::timestamptz
+     returning id`,
+    [lease.conversationId, lease.until],
+  );
+  return rows.length > 0;
 }
 
 // ---------------------------------------------------------------------------------------

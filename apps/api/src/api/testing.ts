@@ -5,34 +5,34 @@ export class RecordingDeliverer implements Deliverer {
   readonly delivered: OutboundDelivery[] = [];
   /** Number of upcoming deliveries that fail. */
   failures = 0;
-  /** When set, the next delivery waits until `release()` is called. */
-  private gate: { promise: Promise<void>; release: () => void } | undefined;
-  private reached: (() => void) | undefined;
-  private releaseGate: (() => void) | undefined;
+  /** Deliveries to hold up, one each, in order; `reached` tells the test one is waiting. */
+  private gates: { opened: Promise<void>; reached: () => void }[] = [];
+  /** What opens each gate, oldest first. */
+  private openers: (() => void)[] = [];
 
-  /** Makes the next delivery wait; resolves once a delivery is actually waiting. */
+  /**
+   * Makes the next delivery wait (called twice: the next two, and so on); resolves once that
+   * delivery is actually waiting.
+   */
   stallNext(): Promise<void> {
-    let release: () => void = () => undefined;
-    const promise = new Promise<void>((resolve) => {
-      release = resolve;
+    const opened = new Promise<void>((resolve) => {
+      this.openers.push(resolve);
     });
-    this.gate = { promise, release };
-    this.releaseGate = release;
-    return new Promise<void>((resolve) => {
-      this.reached = resolve;
+    return new Promise<void>((reached) => {
+      this.gates.push({ opened, reached });
     });
   }
 
+  /** Lets the delivery that has been held up longest go on. */
   release(): void {
-    this.releaseGate?.();
+    this.openers.shift()?.();
   }
 
   async deliver(delivery: OutboundDelivery): Promise<void> {
-    const gate = this.gate;
-    this.gate = undefined;
+    const gate = this.gates.shift();
     if (gate !== undefined) {
-      this.reached?.();
-      await gate.promise;
+      gate.reached();
+      await gate.opened;
     }
     if (this.failures > 0) {
       this.failures--;
