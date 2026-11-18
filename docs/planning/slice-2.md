@@ -1,6 +1,6 @@
 # Slice 2: talk to one managed agent
 
-Status: **drafted after slice 1, not started.** Every question but B13 is answered (decisions 51 to 62).
+Status: **ready to start, not started.** Every question is answered (decisions 51 to 63).
 
 **Demo:** mention `@hippidy-bot` with a question. 👀 appears at once. Within a minute or so the
 bot replies in a thread under your message, and 👀 becomes ✅. Reply in that thread (mentioning
@@ -92,7 +92,7 @@ record).
 
 | When | Step |
 |---|---|
-| Before work starts | Answer the questions below |
+| Before work starts | Nothing: all questions are answered |
 | Early | Create a Supabase project (free tier) and give its database URL to Vercel, Production only |
 | Early | Create an Anthropic API key for this project, set a monthly spend limit on its workspace (decision 55), and add the key to Vercel |
 | After the agent PR | Point Anthropic's webhook at `https://hippidy-bot.vercel.app/v1/webhooks/agent` and add its signing secret to Vercel |
@@ -100,7 +100,7 @@ record).
 
 ## Decide before starting
 
-Each question has a recommendation; "go with your picks" is a valid answer. B2 to B9 are in
+All answered on 2026-11-18. B2 to B9 are in
 `open-questions.md`; B10 to B14 are new from slice 1.
 
 | # | Question | Recommendation, or the answer |
@@ -116,7 +116,7 @@ Each question has a recommendation; "go with your picks" is a valid answer. B2 t
 | B10 | How does the API post back without knowing Slack? | **Decided** (53): the API defines a delivery interface keyed by source; `compose.ts` registers the Slack implementation; the API calls it in-process |
 | B11 | What runs the reconcile on a schedule? | **Decided** (54): Supabase `pg_cron` calls `/v1/reconcile` about every minute. Vercel's free plan limits cron jobs (*verify*) |
 | B12 | Migrations: Supabase CLI or Drizzle, and who applies them? (C2, C4 pulled forward) | **Decided** (61): Supabase CLI migrations with generated types, applied by CI on merge to `main` |
-| B13 | Supabase environments (C3 pulled forward) | One hosted project on the free plan for production; PGlite for tests; no separate dev project yet. Free plan (*verify* at start): 2 active projects, 500 MB database, no backups, and a project pauses after 7 days with no database requests. The reconcile job queries the database every minute through the API, which should keep it awake |
+| B13 | Supabase environments (C3 pulled forward) | **Decided** (63): one free-plan project for production; PGlite for tests; no dev project yet. Free plan (*verify* at start): 2 active projects, 500 MB, no backups, pauses after 7 days without database requests; the every-minute reconcile should keep it awake |
 | B14 | Testing split details (decision 17 said "revisit before implementing") | **Decided** (62): unit and database tests (PGlite) everywhere; CI also builds and smoke-tests; no Docker yet |
 
 ## Done when

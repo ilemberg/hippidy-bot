@@ -69,6 +69,8 @@ entries are not edited.
 | 60 | 2026-11-18 | Answers B9, in slice 2: you can stop the agent in a thread either with a 🛑 reaction on the message, or with a message that is only "@hippidy-bot stop". Both send an interrupt to that thread's session. Needs the `reaction_added` event and `reactions:read` scope (one reinstall, together with `users:read`) | Two ways that both feel natural in Slack. The message must be exactly "stop" (case-insensitive, after removing the mention) so "don't stop" never stops it |
 | 61 | 2026-11-18 | Answers B12: database migrations use the Supabase CLI with generated types, applied by CI on merge to `main`, never by hand or by the agent | Fewest moving parts; one path for every change |
 | 62 | 2026-11-18 | Answers B14: unit and database tests (PGlite) run everywhere; CI also builds and smoke-tests as now; no Docker yet | Fast feedback with no Docker; revisit when slice 4 shows what the agent's sandbox can run |
+| 63 | 2026-11-18 | Answers B13: one Supabase project on the free plan for production; PGlite for tests; no separate dev project yet. Free-plan limits are checked against Supabase's own pricing page when the slice starts | Fits the budget. The free plan pauses a project after 7 days without database requests; the every-minute reconcile should keep it awake, to be confirmed when it is built |
+| 64 | 2026-11-18 | All slice 2 questions (B2 to B14) are answered (decisions 51 to 63). Slice 2 is ready to start but has not started | Planning only until told to begin |
 
 ## Deferred on purpose
 

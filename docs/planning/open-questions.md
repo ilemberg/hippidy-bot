@@ -39,8 +39,8 @@ taking the real bot offline. A leading candidate is recorded with it in `decisio
 
 ## B. Blocks slice 2
 
-`slice-2.md` collects these with five new ones (B10 to B14) in one table. Answered: everything
-but B13 (`decisions.md` 51 to 62).
+`slice-2.md` collects these with five new ones (B10 to B14) in one table. All answered
+(`decisions.md` 51 to 63); B13 (one free Supabase project, PGlite for tests) is decision 63.
 
 B1 (storage before slice 3) is answered: see `decisions.md` 8.
 
