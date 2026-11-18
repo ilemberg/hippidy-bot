@@ -376,10 +376,12 @@ slice 2 conversation was never backfilled (see below), so the slice is not close
   migration shipped with code, safely, because both old and new code read both forms.
 - **One session carried four pull requests** by restarting its branch from `main` after each
   merge (decision 88). The friction of slice 2 did not come back.
-- **The build session cannot see production.** It took three screenshots from you to learn
-  that the write path worked and the backfill did not. The live check also showed two
-  slice 2 leftovers nobody had noticed: reconcile is probably not being called, and the bot
-  does not get the sender's name. "Merged and green" had been standing in for "works".
+- **The build session cannot see production.** It took four screenshots from you to learn
+  that the write path worked and the backfill did not. The cause was a slice 2 leftover
+  nobody had noticed: Supabase has called `/v1/reconcile` every minute since slice 2 and
+  been answered 401 every time, because the token in Vault is not the one the API has. The
+  safety net for lost webhooks was never on. A second leftover: the bot does not get the
+  sender's name. "Merged and green" had been standing in for "works".
 - **A repository secret is open to any workflow a pull request adds.** Protecting the agent
   sync's dry run, as planned, would not have closed that. The secrets now belong in an
   environment only `main` may use, which needs your hands to finish.
@@ -398,26 +400,27 @@ reply that fails partway is re-posted from the start; lazy-load Bolt; Dependabot
 
 **To do by hand before the slice closes:**
 
-1. In Supabase's SQL Editor, run the following and act on what it shows. Fewer than two
-   `secret` rows: add the Vault secrets (README, "Slice 2 setup: the agent loop", step 4).
-   `http response` rows with 401: the token in Vault does not match `RECONCILE_TOKEN` in
-   Vercel.
+1. Give the reconcile job a token the API accepts. Make a new one (`openssl rand -hex 32`)
+   and set the same value in both places, with no space or line break around it:
+   - Vercel: Settings, Environment Variables, `RECONCILE_TOKEN`, Production only. Then
+     redeploy: a changed variable only reaches new deployments.
+   - Supabase: Project Settings, Vault, `hippidy_reconcile_token`.
+
+   If you want to know what was wrong first, search Vercel's logs for `auth.rejected` and
+   read the `reason`: `service_token_not_configured` (the variable is missing in Production
+   or shorter than 32 characters), `wrong_token` (the two differ) or `malformed_header` (the
+   Vault value has a space or line break in it).
+
+2. Two minutes later, this should show `http response` rows starting with 200:
 
    ```sql
-   select 'secret' as what, name as detail, null::timestamptz as at
-   from vault.secrets where name like 'hippidy_%'
-   union all
-   select 'cron run', status || ': ' || left(coalesce(return_message, ''), 60), start_time
-   from (select * from cron.job_run_details order by start_time desc limit 3) r
-   union all
-   select 'http response',
-          coalesce(status_code::text, 'no status') || ' '
-            || left(coalesce(content, error_msg, ''), 80),
+   select coalesce(status_code::text, 'no status') || ' '
+            || left(coalesce(content, error_msg, ''), 80) as response,
           created
-   from (select * from net._http_response order by created desc limit 3) h;
+   from net._http_response order by created desc limit 3;
    ```
 
-2. A few minutes after reconcile answers 200, this should be 0:
+3. A few minutes after that, this should be 0:
 
    ```sql
    select count(*) from conversations

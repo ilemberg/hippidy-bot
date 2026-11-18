@@ -203,11 +203,12 @@ Checked live on 2026-11-18, after the write path deployed: events, usage and cos
 for a new conversation, the transcript reads correctly, and no note has an empty text. Two
 things were not right, and neither is in this slice's code:
 
-- **The slice 2 conversation was not backfilled**, and the log shows no backfill line of any
-  kind. The backfill runs from `/v1/reconcile`, so the likeliest cause is that Supabase is
-  not calling it (missing Vault secrets, or a token that does not match). If so, the safety
-  net for lost webhooks is not running either. To check: in Vercel's logs, look for one
-  `POST /v1/reconcile` a minute; in Supabase, the query in the retro's "to do" list.
+- **The slice 2 conversation was not backfilled.** The backfill runs from `/v1/reconcile`.
+  Supabase does call it every minute, and every call is answered 401: the token in Supabase
+  Vault (`hippidy_reconcile_token`) is not the `RECONCILE_TOKEN` the API has. Confirmed
+  2026-11-18 from Supabase's own record of the calls. So the safety net for lost webhooks
+  has not been running since slice 2. The fix is by hand: one new token, set in both places
+  (retro, "to do by hand").
 - **The bot does not know the sender's name** (`actor_name` is null). Most likely the Slack
   app was not updated and reinstalled after slice 2's "names and stop" (README).
 
