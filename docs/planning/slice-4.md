@@ -210,8 +210,8 @@ Schema ships before the code that uses it (decision 86); one branch per pull req
 | Before anything | Update and reinstall the Slack app, so the bot gets the sender's name | Done; checked in the record |
 | Before anything | Add the Supabase and Vercel connectors to the build session | Done; both checked from the build session |
 | Before the experiment | Create the GitHub token (D2) and save it as `AGENT_GITHUB_TOKEN` in Vercel (Production) and in the `release` environment (README, "Slice 4 setup: the GitHub token") | Done; seen in Vercel (sensitive, Production only) |
-| Before the experiment | Make sure the rule on `main` (pull request and CI required) allows no bypass, including for you: the token acts as you | To confirm |
-| Before the experiment | Make sure the Anthropic workspace has a monthly spend limit | To confirm |
+| Before the experiment | Make sure the rule on `main` (pull request and CI required) allows no bypass, including for you: the token acts as you | Done (confirmed by you) |
+| Before the experiment | Make sure the Anthropic workspace has a monthly spend limit | Done (confirmed by you) |
 | After A2 merges | Actions, the experiment's workflow, **Run workflow** on `main` | - |
 | After C | Mention the bot with the demo request | - |
 

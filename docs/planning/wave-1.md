@@ -226,9 +226,9 @@ Revised 2026-11-18 after the plan was checked against the code and the SDK
   tool list is what stops a merge.
 - The experiment gets its own pull request and runs in `release`, with a throwaway agent.
 - Everything is kept; the database size is read at each slice's close (13 MB at the start).
-- The steps by hand are done (CI secrets in `release`, Slack app, connectors, the GitHub
-  token as `AGENT_GITHUB_TOKEN`), except confirming the rule on `main` and the workspace's
-  spend limit.
+- Every step by hand before the experiment is done: CI secrets in `release`, the Slack app,
+  the connectors, the GitHub token as `AGENT_GITHUB_TOKEN`, no bypass on `main`, and a
+  monthly spend limit on the workspace.
 
 ## Slice 5: work from a ticket instead of a sentence
 
