@@ -12,7 +12,8 @@
     "build": "pnpm --filter @hippidy/contracts build",
     "smoke": "node scripts/smoke.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.vercel.json",
-    "agent:sync": "node scripts/sync-agent.ts"
+    "agent:sync": "node scripts/sync-agent.ts",
+    "agent:experiment": "node scripts/experiment.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.10.0",

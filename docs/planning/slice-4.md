@@ -1,7 +1,7 @@
 # Slice 4: the agent gets a development environment
 
-Status: **plan revised 2026-11-18 after a review against the code (decisions 112 to 124), not
-started.** Every question is answered (decisions 98 to 110 and 113 to 122). The experiment
+Status: **started 2026-11-18 (decision 125).** Pull request A2, the experiment, is up; the
+plan was revised after a review against the code (decisions 112 to 124). Every question is answered (decisions 98 to 110 and 113 to 122). The experiment
 that opens the slice confirms what the docs cannot settle; its list is under "Experiment
 first".
 
@@ -193,7 +193,7 @@ Schema ships before the code that uses it (decision 86); one branch per pull req
 | # | Pull request | Depends on |
 |---|---|---|
 | A | This plan and its decisions (done, ilemberg/hippidy-bot 16), then the review's revisions | - |
-| A2 | The experiment's script and its workflow, run by hand in `release` | - |
+| A2 | The experiment's script and its workflow, run by hand in `release` (`apps/api/scripts/experiment.ts`, `.github/workflows/experiment.yml`; decision 125) | - |
 | A3 | Migration only: the sync lease's owner column | - |
 | - | The experiment | A2 merged; the token saved (done) |
 | B | The loop for long turns: lease owner check, read only new events, give up on silence, post only the last message, deny a call that waits | A3 merged and applied; the experiment (for decision 95) |
