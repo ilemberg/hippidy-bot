@@ -107,6 +107,10 @@ D13 (a coding session starts at about $5, raised when turns need more) is answer
 D10 (browser for the agent) is answered: try Playwright in the sandbox first, see
 `decisions.md` 24.
 
+The review of the plan on 2026-11-18 asked three more: when the outcome is sent (with every
+message), what is stored (everything; the size is watched) and where the experiment runs (a
+workflow in `release`). All answered: see `decisions.md` 115, 120 and 118.
+
 ## E. Blocks slice 5
 
 **E1. External tools or internal ones?** Jira and Confluence (what your real teams use, free
