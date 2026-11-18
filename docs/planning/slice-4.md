@@ -148,8 +148,7 @@ exists, unless that makes things worse. "Worse" means one of:
 ### Build session
 
 - Supabase and Vercel connectors, used read-only, so "done when" checks (decision 96) are run
-  by the session and not by screenshot. Supabase works; Vercel waits for you to approve its
-  access to the team.
+  by the session and not by screenshot. Both work (checked 2026-11-18).
 
 ## Experiment first
 
@@ -209,8 +208,8 @@ Schema ships before the code that uses it (decision 86); one branch per pull req
 |---|---|---|
 | Before anything | Move the CI secrets into the `release` environment and delete the repository ones (README) | Done (decision 123) |
 | Before anything | Update and reinstall the Slack app, so the bot gets the sender's name | Done; checked in the record |
-| Before anything | Add the Supabase and Vercel connectors to the build session | Done. Vercel still needs you to approve access to the team, from a link the build session gives you |
-| Before the experiment | Create the GitHub token (D2) and save it as `AGENT_GITHUB_TOKEN` in Vercel (Production) and in the `release` environment (README, "Slice 4 setup: the GitHub token") | Done |
+| Before anything | Add the Supabase and Vercel connectors to the build session | Done; both checked from the build session |
+| Before the experiment | Create the GitHub token (D2) and save it as `AGENT_GITHUB_TOKEN` in Vercel (Production) and in the `release` environment (README, "Slice 4 setup: the GitHub token") | Done; seen in Vercel (sensitive, Production only) |
 | Before the experiment | Make sure the rule on `main` (pull request and CI required) allows no bypass, including for you: the token acts as you | To confirm |
 | Before the experiment | Make sure the Anthropic workspace has a monthly spend limit | To confirm |
 | After A2 merges | Actions, the experiment's workflow, **Run workflow** on `main` | - |
