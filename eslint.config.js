@@ -36,9 +36,9 @@ export default defineConfig(
         {
           patterns: [
             {
-              regex: String.raw`(^|/)(api(/|$)|(compose|index)(\.[cm]?[jt]s)?$)`,
+              regex: String.raw`(^|/)((api|store)(/|$)|(compose|index)(\.[cm]?[jt]s)?$)`,
               message:
-                "The Slack adapter may not import the API, compose.ts or index.ts. Use @hippidy/contracts.",
+                "The Slack adapter may not import the API, its store, compose.ts or index.ts. Use @hippidy/contracts.",
             },
           ],
         },
@@ -46,9 +46,9 @@ export default defineConfig(
       "no-restricted-syntax": [
         "error",
         {
-          selector: String.raw`ImportExpression[source.value=/(^|\/)(api(\/|$)|(compose|index)(\.[cm]?[jt]s)?$)/]`,
+          selector: String.raw`ImportExpression[source.value=/(^|\/)((api|store)(\/|$)|(compose|index)(\.[cm]?[jt]s)?$)/]`,
           message:
-            "The Slack adapter may not import the API, compose.ts or index.ts. Use @hippidy/contracts.",
+            "The Slack adapter may not import the API, its store, compose.ts or index.ts. Use @hippidy/contracts.",
         },
       ],
     },

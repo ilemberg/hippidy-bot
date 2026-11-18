@@ -29,6 +29,11 @@ all pass. CI runs these, then `pnpm build && pnpm smoke`.
   dispatches in-process through the API's own route.
 - `packages/contracts` holds every request, response and error schema (Zod). A change to the
   API's shape starts there.
+- `apps/api/src/store` is the API's storage (Supabase Postgres): plain SQL with `$1` parameters
+  through the small `Db` interface, rows checked with Zod. Only the API uses it.
+- `supabase/migrations` holds the schema. Add a new timestamped file for every change; never
+  edit one that has been merged. CI applies them on merge to `main`. Every table has row level
+  security on and no policies: only the API's direct connection can read it.
 
 ## Conventions
 
@@ -43,6 +48,8 @@ all pass. CI runs these, then `pnpm build && pnpm smoke`.
   correlation id. Message names are `area.event`, for example `message.received`.
 - Errors returned by the API use the shape in `packages/contracts` (`errorResponse` in
   `src/api/errors.ts`).
+- Database tests use `createTestDb()` from `src/store/testing.ts`: an in-process Postgres
+  (PGlite) with every migration applied from scratch. No Docker.
 - Tests sit next to the code as `*.test.ts` (Vitest). Slack, Anthropic and the network are
   faked; no test talks to a real service. Pass dependencies in, rather than mocking modules.
 
