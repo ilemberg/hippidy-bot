@@ -5,9 +5,9 @@ explore how an AI teammate fits into a SaaS product engineering team: engineers 
 team lead, senior, mid, junior), product manager, designer, QA, engineering manager and other
 stakeholders.
 
-**Status: slice 1 in progress.** The API and the Slack adapter are built; the live Slack demo is
-next. See
-[docs/planning/slice-1.md](docs/planning/slice-1.md).
+**Status: slice 1 done.** Mention `@hippidy-bot` in Slack and the message goes through the API
+and gets a 👀 reaction. Slice 2 (replies from a Claude agent) is drafted in
+[docs/planning/slice-2.md](docs/planning/slice-2.md) and waiting on decisions.
 
 ## Layout
 
@@ -149,7 +149,8 @@ reaching the URL (check Event Subscriptions).
 | Doc                                                                  | What it is                                                                                 |
 | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | [docs/planning/wave-1.md](docs/planning/wave-1.md)                   | The wave 1 plan: six slices, each with a demo, exit criteria, and what is known to be hard |
-| [docs/planning/slice-1.md](docs/planning/slice-1.md)                 | The current slice in full: what gets built, the manual steps, how the work is done         |
+| [docs/planning/slice-1.md](docs/planning/slice-1.md)                 | Slice 1 as built: what was built, the manual steps, how the work was done                  |
+| [docs/planning/slice-2.md](docs/planning/slice-2.md)                 | The next slice: flow, what gets built, manual steps, and the questions to answer first     |
 | [docs/planning/open-questions.md](docs/planning/open-questions.md)   | The grill: decisions that are open, grouped by when they block                             |
 | [docs/planning/decisions.md](docs/planning/decisions.md)             | Decision log. Things move here from open-questions once decided                            |
 | [docs/planning/stack-and-tools.md](docs/planning/stack-and-tools.md) | Stack options, MCP servers, and off-the-shelf pieces that make this cheaper or better      |

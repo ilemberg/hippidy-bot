@@ -39,6 +39,9 @@ taking the real bot offline. A leading candidate is recorded with it in `decisio
 
 ## B. Blocks slice 2
 
+`slice-2.md` collects these with five new ones (B10 to B14) in one table to answer before the
+slice starts.
+
 B1 (storage before slice 3) is answered: see `decisions.md` 8.
 
 **B2. What is one conversation?**

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import fixture from "./fixtures/app-mention.json" with { type: "json" };
+import recorded from "./fixtures/recorded-app-mention.json" with { type: "json" };
 import {
   appMentionEnvelopeSchema,
   slackTsToIso,
@@ -8,6 +9,26 @@ import {
 } from "./map.ts";
 
 describe("toInboundMessage", () => {
+  // Captured from production on 2026-11-18 (the slice 1 demo), from the slack.mention.raw log
+  // line. Slack's `token` was already redacted by the adapter; `blocks` is left out because the
+  // log viewer collapsed it and the adapter does not read it.
+  it("maps a real recorded app_mention to the API's message", () => {
+    const envelope = appMentionEnvelopeSchema.parse(recorded);
+    expect(toInboundMessage(envelope)).toEqual({
+      source: "slack",
+      sourceEventId: "Ev0CJTQ9C4AY",
+      conversation: {
+        workspaceId: "T0CHY9BFQ5Q",
+        channelId: "C0CHT679Y1K",
+        threadId: "1794971036.957189",
+        messageId: "1794971036.957189",
+      },
+      actor: { id: "U0CHWFTRRJS" },
+      text: "did it work?",
+      sentAt: "2026-11-18T03:03:56.957Z",
+    });
+  });
+
   it("maps Slack's documented app_mention example to the API's message", () => {
     const envelope = appMentionEnvelopeSchema.parse(fixture);
     expect(toInboundMessage(envelope)).toEqual({

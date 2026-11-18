@@ -1,6 +1,6 @@
 # Slice 1: mention goes to the API, bot reacts
 
-Status: **finalized after review, not started.**
+Status: **done 2026-11-18.** Retro in `wave-1.md`. The plan below is kept as it was built.
 
 **Demo:** mention `@hippidy-bot` in a Slack channel. Within a couple of seconds the message
 gets an 👀 reaction, and the API log shows the message with who sent it and where.

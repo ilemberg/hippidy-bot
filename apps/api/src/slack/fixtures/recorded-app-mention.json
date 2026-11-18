@@ -1,0 +1,29 @@
+{
+  "token": "[redacted]",
+  "team_id": "T0CHY9BFQ5Q",
+  "api_app_id": "A0CJHRERNQ3",
+  "event": {
+    "type": "app_mention",
+    "user": "U0CHWFTRRJS",
+    "ts": "1794971036.957189",
+    "client_msg_id": "bfcf4b61-6338-4d76-9968-f0d80f1af0d9",
+    "text": "<@U0CKJDUK8E4> did it work?",
+    "team": "T0CHY9BFQ5Q",
+    "channel": "C0CHT679Y1K",
+    "event_ts": "1794971036.957189"
+  },
+  "type": "event_callback",
+  "event_id": "Ev0CJTQ9C4AY",
+  "event_time": 1794971036,
+  "authorizations": [
+    {
+      "enterprise_id": null,
+      "team_id": "T0CHY9BFQ5Q",
+      "user_id": "U0CKJDUK8E4",
+      "is_bot": true,
+      "is_enterprise_install": false
+    }
+  ],
+  "is_ext_shared_channel": false,
+  "event_context": "4-eyJldCI6ImFwcF9tZW50aW9uIiwidGlkIjoiVDBDSFk5QkZRNVEiLCJhaWQiOiJBMENKSFJFUk5RMyIsImNpZCI6IkMwQ0hUNjc5WTFLIn0"
+}

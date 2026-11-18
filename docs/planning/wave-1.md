@@ -116,7 +116,8 @@ expands it into the full record.
 when the agent asks a question or finishes. An agent question and a finished answer look the
 same to the API (the session goes idle with a message), so one path covers both.
 
-Decide before starting: questions B1 to B8.
+Full draft, flow and open questions: `slice-2.md`. Decide before starting: questions B2 to B14
+there.
 
 ## Slice 3: Supabase as the record
 
@@ -239,3 +240,45 @@ What makes this work for an agent:
 ## Retros
 
 Appended after each slice: what was learned, what changed in the slices that follow.
+
+### Slice 1 (finished 2026-11-18)
+
+**Shipped:** ilemberg/hippidy-bot pull requests 2 (scaffold, CI, API) and 3 (Slack adapter),
+plus a last one with the real recorded event as a fixture and this retro. Demo done:
+`@hippidy-bot did it work?` got 👀 in about two seconds, and the API logged the message with
+sender, channel, thread and correlation id.
+
+**What was learned:**
+
+- **Local `vercel build` was the most valuable check of the slice.** Run on a copy of the repo
+  and then loaded the way Vercel loads it, it caught three problems that would each have broken
+  the first deploy:
+  - Vercel picks `src/app.ts` over `src/index.ts` as the entry, and only accepts an entry file
+    that creates the Hono app itself.
+  - Vercel cannot run a workspace package that exports raw `.ts`, so packages export source
+    under a `source` condition and compiled `dist/` by default.
+  - Vercel's build type-checks with an empty global `Response` type, unlike `tsc`.
+- **Libraries do things the docs do not mention.** With a plain `token`, Bolt calls Slack's
+  `auth.test` before acknowledging the first event on every cold start, which eats into
+  Slack's 3 second limit. Every Events API body also carries Slack's legacy verification
+  token, which would have been logged and committed as a fixture.
+- **Independent review agents earned their cost.** Given the code and not the author's
+  summary, they found four must-fix problems across the two pull requests.
+- **Setup friction was in the dashboards, not the code.** Slack's manifest editor opens on the
+  JSON tab; Vercel's `git-main` address sits behind a login wall, so Slack needs the production
+  domain. The README now says both.
+- **This build session cannot reach `*.vercel.app`**, so live checks are done by you. Fine
+  for now; it matters more from slice 4.
+
+**What changes for the next slices:**
+
+- Slice 2 is drafted in `slice-2.md`, with B10 to B14 added from what slice 1 showed: outbound
+  delivery without Slack knowledge in the API, scheduling the reconcile on the free plans,
+  and migration tooling and environments pulled forward from slice 3, since storage arrives
+  in slice 2.
+- Keep the local `vercel build` check for any change to entry files, packaging or types;
+  consider adding it to CI.
+- Real deduplication with storage in slice 2 replaces "drop retries after a timeout".
+
+**Carried forward:** pin CI actions to commit SHAs (before slice 4); lazy-load Bolt to cut
+about 280 ms from cold starts (when it matters); turn on Dependabot alerts.
