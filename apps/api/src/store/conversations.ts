@@ -7,6 +7,7 @@ import {
 } from "@hippidy/contracts";
 import { z } from "zod";
 import type { Db, Row } from "./db.ts";
+import { toJsonText } from "./json.ts";
 
 export interface ConversationKey {
   source: MessageSource;
@@ -225,7 +226,7 @@ export async function releaseSyncLease(db: Db, conversationId: string): Promise<
 // Agent sessions
 
 /** Marks a session as being started; never a real session id. */
-const STARTING_PREFIX = "starting:";
+export const STARTING_PREFIX = "starting:";
 /** A session start not finished after this long is assumed lost (above the runtime's retries). */
 const STALE_START_SECONDS = 180;
 
@@ -507,10 +508,12 @@ export async function enqueueDelivery(
   payload: OutboundDelivery,
 ): Promise<void> {
   await db.query(
+    // Rows from before the payload was cast from text hold a JSON string, and are read both
+    // ways (decision 90).
     `insert into deliveries (conversation_id, agent_event_id, kind, payload)
-     values ($1, $2, $3, $4)
+     values ($1, $2, $3, $4::text::jsonb)
      on conflict (conversation_id, agent_event_id) do nothing`,
-    [conversationId, key, kind, JSON.stringify(payload)],
+    [conversationId, key, kind, toJsonText(payload)],
   );
 }
 

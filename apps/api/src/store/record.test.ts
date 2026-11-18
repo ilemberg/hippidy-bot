@@ -8,6 +8,14 @@ import {
   unsentDeliveries,
   type ConversationKey,
 } from "./conversations.ts";
+import {
+  conversationsToBackfill,
+  markAgentEventsSynced,
+  recordUsage,
+  storeAgentEvents,
+  type AgentEventToStore,
+  type UsageToStore,
+} from "./record.ts";
 import { createTestDb } from "./testing.ts";
 
 // The schema of the record (slice 3), before any code writes it: these tests insert rows
@@ -180,7 +188,7 @@ describe("conversation_transcript", () => {
       `select role, text, actor_id, actor_name, ref, message_status, delivery_status, occurred_at
        from conversation_transcript
        where conversation_id = $1
-       order by occurred_at, recorded_at`,
+       order by occurred_at, recorded_at, position`,
       [conversation.id],
     );
     expect(rows).toEqual([
@@ -225,6 +233,315 @@ describe("conversation_transcript", () => {
         occurred_at: new Date("2026-11-18T00:00:05.000Z"),
       },
     ]);
+  });
+});
+
+function event(id: string, overrides: Partial<AgentEventToStore> = {}): AgentEventToStore {
+  return {
+    id,
+    type: "agent.message",
+    kind: "agent_message",
+    text: `text of ${id}`,
+    processedAt: "2026-11-18T00:00:03.000Z",
+    payload: { id, type: "agent.message", content: [{ type: "text", text: `text of ${id}` }] },
+    ...overrides,
+  };
+}
+
+const noUsage: UsageToStore = {
+  inputTokens: null,
+  outputTokens: null,
+  cacheReadTokens: null,
+  cacheCreationTokens: null,
+  activeSeconds: null,
+  listCostMinor: null,
+  budgetMinor: null,
+  currency: null,
+};
+
+describe("storeAgentEvents", () => {
+  it("stores events in the order given, with their payload as JSON", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    const written = await storeAgentEvents(db, conversation.id, "sesn_1", [
+      event("evt_2", { type: "span.model_request_end", kind: null, text: null, payload: { n: 1 } }),
+      event("evt_1"),
+    ]);
+    expect(written).toBe(2);
+    const rows = await db.query(
+      `select agent_session_id, event_id, type, kind, text, processed_at, payload,
+              jsonb_typeof(payload) as payload_type
+       from agent_events order by seq`,
+    );
+    expect(rows).toEqual([
+      {
+        agent_session_id: "sesn_1",
+        event_id: "evt_2",
+        type: "span.model_request_end",
+        kind: null,
+        text: null,
+        processed_at: new Date("2026-11-18T00:00:03.000Z"),
+        payload: { n: 1 },
+        payload_type: "object",
+      },
+      {
+        agent_session_id: "sesn_1",
+        event_id: "evt_1",
+        type: "agent.message",
+        kind: "agent_message",
+        text: "text of evt_1",
+        processed_at: new Date("2026-11-18T00:00:03.000Z"),
+        payload: {
+          id: "evt_1",
+          type: "agent.message",
+          content: [{ type: "text", text: "text of evt_1" }],
+        },
+        payload_type: "object",
+      },
+    ]);
+  });
+
+  it("changes nothing when the same events are stored again", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    await storeAgentEvents(db, conversation.id, "sesn_1", [event("evt_1"), event("evt_2")]);
+    await db.query(`update agent_events set updated_at = '2026-01-01T00:00:00Z'`);
+
+    expect(
+      await storeAgentEvents(db, conversation.id, "sesn_1", [event("evt_1"), event("evt_2")]),
+    ).toBe(0);
+    const rows = await db.query(`select distinct updated_at from agent_events`);
+    expect(rows).toEqual([{ updated_at: new Date("2026-01-01T00:00:00Z") }]);
+
+    // Not even attempted: a new event gets the next place in line, with no gap before it.
+    await storeAgentEvents(db, conversation.id, "sesn_1", [event("evt_1"), event("evt_3")]);
+    expect(await db.query(`select seq::int as seq from agent_events order by seq`)).toEqual([
+      { seq: 1 },
+      { seq: 2 },
+      { seq: 3 },
+    ]);
+  });
+
+  it("updates an event the runtime now reports differently, and only that one", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    const queued = event("evt_user", {
+      type: "user.message",
+      kind: "user_message",
+      text: null,
+      processedAt: null,
+      payload: { id: "evt_user", type: "user.message" },
+    });
+    await storeAgentEvents(db, conversation.id, "sesn_1", [event("evt_1"), queued]);
+
+    const processedAt = "2026-11-18T00:00:09.000Z";
+    const processed = {
+      ...queued,
+      processedAt,
+      payload: { id: "evt_user", type: "user.message", processed_at: processedAt },
+    };
+    const written = await storeAgentEvents(db, conversation.id, "sesn_1", [
+      event("evt_1"),
+      processed,
+    ]);
+    expect(written).toBe(1);
+    const stored = () =>
+      db.query(`select event_id, processed_at, payload from agent_events order by seq`);
+    const after = {
+      event_id: "evt_user",
+      processed_at: new Date(processedAt),
+      payload: { id: "evt_user", type: "user.message", processed_at: processedAt },
+    };
+    expect((await stored())[1]).toEqual(after);
+    expect(await stored()).toHaveLength(2);
+
+    // A list read before the agent processed the message, but stored after: it changes
+    // nothing. A processed time is never taken away.
+    expect(await storeAgentEvents(db, conversation.id, "sesn_1", [queued])).toBe(0);
+    expect((await stored())[1]).toEqual(after);
+  });
+
+  it("keeps the runtime's time to the microsecond", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    await storeAgentEvents(db, conversation.id, "sesn_1", [
+      event("evt_b", { processedAt: "2026-11-18T00:00:03.123457Z" }),
+      event("evt_a", { processedAt: "2026-11-18T00:00:03.123456Z" }),
+    ]);
+    const rows = await db.query(
+      `select event_id, to_char(processed_at at time zone 'UTC', 'SS.US') as second
+       from agent_events order by processed_at`,
+    );
+    expect(rows).toEqual([
+      { event_id: "evt_a", second: "03.123456" },
+      { event_id: "evt_b", second: "03.123457" },
+    ]);
+  });
+
+  it("keeps the last report when a list names an event twice", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    const written = await storeAgentEvents(db, conversation.id, "sesn_1", [
+      event("evt_1", { text: "first" }),
+      event("evt_1", { text: "second" }),
+    ]);
+    expect(written).toBe(1);
+    expect(await db.query(`select text from agent_events`)).toEqual([{ text: "second" }]);
+  });
+
+  it("stores more events than fit in one statement", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    const many = Array.from({ length: 450 }, (_, n) => event(`evt_${n}`));
+    expect(await storeAgentEvents(db, conversation.id, "sesn_1", many)).toBe(450);
+    const rows = await db.query(
+      `select event_id from agent_events order by seq offset 448 limit 2`,
+    );
+    expect(rows).toEqual([{ event_id: "evt_448" }, { event_id: "evt_449" }]);
+  });
+
+  it("stores what Postgres cannot hold as it is: null characters and lone surrogates", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    const written = await storeAgentEvents(db, conversation.id, "sesn_1", [
+      event("evt_1", {
+        text: "a\u0000b \ud83d",
+        payload: { output: "x\u0000y", "ke\u0000y": "half \ude00", path: "C:\\u0000", ok: "😀" },
+      }),
+      event("evt_2"),
+    ]);
+    expect(written).toBe(2);
+    expect(await db.query(`select text, payload from agent_events order by seq limit 1`)).toEqual([
+      {
+        text: "ab \ufffd",
+        payload: { output: "xy", key: "half \ufffd", path: "C:\\u0000", ok: "😀" },
+      },
+    ]);
+  });
+
+  it("does nothing for an empty list", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    expect(await storeAgentEvents(db, conversation.id, "sesn_1", [])).toBe(0);
+  });
+});
+
+describe("recordUsage", () => {
+  async function usageOf(conversationId: string) {
+    const rows = await db.query(
+      `select usage_input_tokens::int as input, usage_output_tokens::int as output,
+              usage_cache_read_tokens::int as cache_read,
+              usage_cache_creation_tokens::int as cache_creation,
+              usage_active_seconds as active, usage_list_cost_minor::int as cost,
+              budget_list_cost_minor::int as budget, cost_currency as currency,
+              usage_updated_at is not null as stamped
+       from conversations where id = $1`,
+      [conversationId],
+    );
+    return rows[0];
+  }
+
+  it("stores what the runtime reports", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    const stored = await recordUsage(db, conversation.id, {
+      inputTokens: 1200,
+      outputTokens: 340,
+      cacheReadTokens: 900,
+      cacheCreationTokens: 50,
+      activeSeconds: 12.5,
+      listCostMinor: 7,
+      budgetMinor: 200,
+      currency: "USD",
+    });
+    expect(stored).toBe(true);
+    expect(await usageOf(conversation.id)).toEqual({
+      input: 1200,
+      output: 340,
+      cache_read: 900,
+      cache_creation: 50,
+      active: 12.5,
+      cost: 7,
+      budget: 200,
+      currency: "USD",
+      stamped: true,
+    });
+  });
+
+  it("keeps an earlier value for a number the runtime did not report this time", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    await recordUsage(db, conversation.id, { ...noUsage, inputTokens: 10, listCostMinor: 3 });
+    await recordUsage(db, conversation.id, { ...noUsage, inputTokens: 25 });
+    expect(await usageOf(conversation.id)).toMatchObject({ input: 25, cost: 3 });
+  });
+
+  it("never puts an older reading back: usage only grows", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    const later = { ...noUsage, inputTokens: 900, activeSeconds: 30.5, listCostMinor: 12 };
+    const earlier = { ...noUsage, inputTokens: 400, activeSeconds: 9.25, listCostMinor: 5 };
+    await recordUsage(db, conversation.id, later);
+    await recordUsage(db, conversation.id, earlier);
+    expect(await usageOf(conversation.id)).toMatchObject({ input: 900, active: 30.5, cost: 12 });
+  });
+
+  it("writes nothing when the runtime reported nothing", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    expect(await recordUsage(db, conversation.id, { ...noUsage, currency: "USD" })).toBe(false);
+    expect(await usageOf(conversation.id)).toMatchObject({ currency: null, stamped: false });
+  });
+
+  it("leaves the conversation's place in the reconcile order alone", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    await db.query(`update conversations set updated_at = '2026-01-01T00:00:00Z'`);
+    await recordUsage(db, conversation.id, { ...noUsage, inputTokens: 1 });
+    await markAgentEventsSynced(db, conversation.id);
+    expect(await db.query(`select updated_at from conversations`)).toEqual([
+      { updated_at: new Date("2026-01-01T00:00:00Z") },
+    ]);
+  });
+});
+
+describe("conversationsToBackfill", () => {
+  const anyAge = { olderThanSeconds: 0, limit: 10 };
+
+  it("finds conversations with a session whose events were never stored", async () => {
+    const stored = await findOrCreateConversation(db, key);
+    const never = await findOrCreateConversation(db, { ...key, threadId: "200.000001" });
+    const noSession = await findOrCreateConversation(db, { ...key, threadId: "300.000001" });
+    const starting = await findOrCreateConversation(db, { ...key, threadId: "400.000001" });
+    const busy = await findOrCreateConversation(db, { ...key, threadId: "500.000001" });
+    await db.query(`update conversations set agent_session_id = 'sesn_' || thread_id`);
+    await db.query(`update conversations set agent_session_id = null where id = $1`, [
+      noSession.id,
+    ]);
+    await db.query(`update conversations set agent_session_id = 'starting:abc' where id = $1`, [
+      starting.id,
+    ]);
+    await db.query(
+      `update conversations set sync_lease_until = now() + interval '1 minute' where id = $1`,
+      [busy.id],
+    );
+    await markAgentEventsSynced(db, stored.id);
+
+    expect(await conversationsToBackfill(db, anyAge)).toEqual([
+      { id: never.id, sessionId: "sesn_200.000001" },
+    ]);
+
+    await markAgentEventsSynced(db, never.id);
+    expect(await conversationsToBackfill(db, anyAge)).toEqual([]);
+  });
+
+  it("leaves a young conversation to its own first sync", async () => {
+    const young = await findOrCreateConversation(db, key);
+    const old = await findOrCreateConversation(db, { ...key, threadId: "200.000001" });
+    await db.query(`update conversations set agent_session_id = 'sesn_' || thread_id`);
+    await db.query(
+      `update conversations set created_at = now() - interval '11 minutes' where id = $1`,
+      [old.id],
+    );
+
+    const found = await conversationsToBackfill(db, { olderThanSeconds: 600, limit: 10 });
+    expect(found.map((conversation) => conversation.id)).toEqual([old.id]);
+    expect(young.id).not.toBe(old.id);
+  });
+
+  it("returns no more than the limit", async () => {
+    for (const threadId of ["1.1", "2.2", "3.3"]) {
+      await findOrCreateConversation(db, { ...key, threadId });
+    }
+    await db.query(`update conversations set agent_session_id = 'sesn_' || thread_id`);
+    expect(await conversationsToBackfill(db, { olderThanSeconds: 0, limit: 2 })).toHaveLength(2);
   });
 });
 

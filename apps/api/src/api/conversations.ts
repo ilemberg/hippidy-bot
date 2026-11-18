@@ -7,7 +7,7 @@ import type {
   StopRequest,
   StopResult,
 } from "@hippidy/contracts";
-import type { AgentRuntime } from "../agent/runtime.ts";
+import { actedOn, type AgentRuntime } from "../agent/runtime.ts";
 import type { Logger } from "../log.ts";
 import {
   attachSession,
@@ -43,6 +43,7 @@ import {
   type SettledStatus,
 } from "../store/conversations.ts";
 import type { Db } from "../store/db.ts";
+import { keepEvents, keepUsage } from "./record.ts";
 
 export interface ConversationDeps {
   db: Db;
@@ -203,6 +204,8 @@ async function ensureSession(
  * delivery, settles the messages the agent has finished with, then sends whatever is queued,
  * in order. Only one sync of a conversation runs at a time; a sync that finds another running
  * leaves the work to it (reconcile picks up anything left over).
+ *
+ * Along the way it keeps the record: every event the session lists, and its usage so far.
  */
 export async function syncConversation(
   deps: ConversationDeps,
@@ -213,15 +216,21 @@ export async function syncConversation(
     log.info("conversation.sync_skipped", { conversationId: conversation.id, reason: "busy" });
     return;
   }
+  let sessionId: string | undefined;
   try {
     const current = await getConversation(deps.db, conversation.id);
     await forwardPending(deps, current, log);
-    await readAgent(deps, await getConversation(deps.db, conversation.id), log);
+    const forwarded = await getConversation(deps.db, conversation.id);
+    await readAgent(deps, forwarded, log);
     await giveUpIfTooLong(deps, await getConversation(deps.db, conversation.id), log);
     await flushDeliveries(deps, conversation.id, log);
+    sessionId = sessionIdOf(forwarded);
   } finally {
     await releaseSyncLease(deps.db, conversation.id);
   }
+  // After the conversation is free again: a slow usage read must not hold up the next sync,
+  // a stop, or this answer. Late or overlapping readings are safe (usage only grows).
+  if (sessionId !== undefined) await keepUsage(deps, conversation.id, sessionId, log);
 }
 
 /** Queues the agent's new messages and settles what the agent has finished with. */
@@ -235,7 +244,10 @@ async function readAgent(
   // Taken before the session is read: only messages handed over before it can be settled
   // by the fallback rule for messages without a recorded agent event id.
   const cutoff = await databaseNow(deps.db);
-  const events = await deps.runtime.listEvents(sessionId);
+  const records = await deps.runtime.listEvents(sessionId);
+  // Everything the session lists goes into the record; the loop acts on the few it knows.
+  await keepEvents(deps.db, conversation.id, sessionId, records, log);
+  const events = actedOn(records);
 
   const cursorIndex =
     conversation.agentEventCursor === null

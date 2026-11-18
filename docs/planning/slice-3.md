@@ -1,7 +1,7 @@
 # Slice 3: Supabase as the record
 
 Status: **started 2026-11-18.** Pull request A (this plan, the decisions and the migration) is
-the first step. Nothing that writes or reads the record is built yet.
+merged and applied. Pull request B (the write path) is built; the read path is next.
 
 **Demo:** ask `@hippidy-bot` a question and get an answer, as in slice 2. Then read the whole
 conversation back from the API with Anthropic out of the picture: who wrote what, what the
@@ -130,6 +130,39 @@ All answered on 2026-11-18 ("go with your picks").
 - A conversation's usage and list cost can be read from the database.
 - Slice 2's conversations are backfilled, as far as Anthropic still has them.
 - Lint, typecheck, tests and the Vercel build check pass in CI.
+
+## As built (pull request B)
+
+- Decision 89: storing sits beside the loop and never fails it. `agents/` and the contract are
+  unchanged; the only visible difference is `backfilled` in the reconcile route's answer.
+- Usage is read from the session object after the deliveries have gone out and the
+  conversation's lease is released, so it never delays an answer, the next sync or a stop.
+  The "verify" above (usage events in the history) did not need answering.
+- Backfill: three conversations per reconcile run, picked at random so one that keeps failing
+  cannot hold up the rest. A session Anthropic no longer has is marked as visited. A
+  conversation younger than ten minutes is left to its own first sync.
+- After the independent review (decision 91): two must-fix findings and five smaller ones,
+  all addressed except the two listed under known limits. The worst: once payloads were
+  stored as real JSON, a reply containing a null character would have blocked its thread for
+  good. Text Postgres cannot hold is now cleaned before anything is stored.
+- The transcript view gained a `position` column to break ties: order by
+  `(occurred_at, recorded_at, position)`.
+- Found on the way (decision 90): the production client stored delivery payloads as JSON
+  strings, so the transcript view from pull request A showed no text for notes. Fixed by a
+  second migration (`20261118000500_transcript_notes.sql`) and a cast in the SQL. The tests
+  that matter for this now run through the production client, not PGlite alone.
+- Known limits, accepted for now:
+  - Every sync still reads the session's whole event list (pull request E). Events that have
+    not changed are no longer written again.
+  - An event that cannot be stored for a reason not yet seen fails its batch of 200. The
+    conversation is then retried by the backfill every minute, with an error in the log, and
+    there is no cap on those retries.
+  - A sync that runs longer than its 120 second lease can release a lease another sync has
+    taken since. This was already so in slice 2; not changed here.
+  - Usage is read at each sync, so the last turn's figures can lag until the next sync of
+    that conversation.
+  - The fake agent's clock in tests is not the messages' clock, so tests do not show a
+    realistic interleaving of people and agent in the transcript.
 
 ## Risks
 

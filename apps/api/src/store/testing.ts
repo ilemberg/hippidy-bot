@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import type { Db } from "./db.ts";
 
@@ -33,12 +33,27 @@ const SUPABASE_BASELINE = `
   alter default privileges in schema public grant all on functions to anon, authenticated;
 `;
 
-/** Applies the Supabase baseline, then every migration in order. */
-export async function applyMigrations(pg: Pick<PGlite, "exec">): Promise<void> {
+/**
+ * Applies the Supabase baseline, then every migration in order. With `before`, stops ahead
+ * of the first migration whose file name starts with it, so a test can put rows in place as
+ * they were and then run that migration with `applyMigration`.
+ */
+export async function applyMigrations(
+  pg: Pick<PGlite, "exec">,
+  options: { before?: string } = {},
+): Promise<void> {
   await pg.exec(SUPABASE_BASELINE);
   for (const file of migrationFiles()) {
+    if (options.before !== undefined && basename(file).startsWith(options.before)) return;
     await pg.exec(readFileSync(file, "utf8"));
   }
+}
+
+/** Applies the one migration whose file name starts with `prefix`. */
+export async function applyMigration(pg: Pick<PGlite, "exec">, prefix: string): Promise<void> {
+  const file = migrationFiles().find((path) => basename(path).startsWith(prefix));
+  if (file === undefined) throw new Error(`no migration starts with ${prefix}`);
+  await pg.exec(readFileSync(file, "utf8"));
 }
 
 /**

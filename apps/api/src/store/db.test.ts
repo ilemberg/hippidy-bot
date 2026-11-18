@@ -1,9 +1,19 @@
 import { PGlite } from "@electric-sql/pglite";
 import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { findOrCreateConversation } from "./conversations.ts";
+import { FakeAgentRuntime } from "../agent/fake.ts";
+import { receiveMessage, syncConversation } from "../api/conversations.ts";
+import { RecordingDeliverer } from "../api/testing.ts";
+import { memoryLogger } from "../testing.ts";
+import {
+  enqueueDelivery,
+  findConversationBySession,
+  findOrCreateConversation,
+  unsentDeliveries,
+} from "./conversations.ts";
 import { createPostgresDb, type Db } from "./db.ts";
-import { applyMigrations } from "./testing.ts";
+import { recordUsage, storeAgentEvents } from "./record.ts";
+import { applyMigration, applyMigrations } from "./testing.ts";
 
 // The production client (postgres.js) over a real Postgres connection, served by PGlite.
 let pg: PGlite;
@@ -36,6 +46,179 @@ describe("createPostgresDb", () => {
     expect(conversation.waitingSince).toBeNull();
   });
 
+  // This client sends a string bound to a jsonb parameter as a JSON string, not as the JSON
+  // it holds. PGlite on its own does not, so these run through the real client.
+  it("stores a delivery's payload as an object, and the transcript shows a note's text", async () => {
+    const key = { source: "slack" as const, workspaceId: "T", channelId: "C", threadId: "2.2" };
+    const conversation = await findOrCreateConversation(db, key);
+    const note = { kind: "reply" as const, target: key, text: "Stopped." };
+    await enqueueDelivery(db, conversation.id, "note:stop", "note", note);
+
+    expect(await db.query(`select jsonb_typeof(payload) as type from deliveries`)).toEqual([
+      { type: "object" },
+    ]);
+    expect((await unsentDeliveries(db, conversation.id)).map((d) => d.payload)).toEqual([note]);
+    expect(
+      await db.query(`select role, text from conversation_transcript where conversation_id = $1`, [
+        conversation.id,
+      ]),
+    ).toEqual([{ role: "note", text: "Stopped." }]);
+  });
+
+  it("still reads, and shows, a payload stored the old way as a JSON string", async () => {
+    const key = { source: "slack" as const, workspaceId: "T", channelId: "C", threadId: "3.3" };
+    const conversation = await findOrCreateConversation(db, key);
+    const note = { kind: "reply" as const, target: key, text: "An old note." };
+    await db.query(
+      `insert into deliveries (conversation_id, agent_event_id, kind, payload)
+       values ($1, 'note:old', 'note', to_jsonb($2::text))`,
+      [conversation.id, JSON.stringify(note)],
+    );
+    expect(
+      await db.query(
+        `select jsonb_typeof(payload) as type from deliveries where conversation_id = $1`,
+        [conversation.id],
+      ),
+    ).toEqual([{ type: "string" }]);
+
+    expect((await unsentDeliveries(db, conversation.id)).map((d) => d.payload)).toEqual([note]);
+    expect(
+      await db.query(`select text from conversation_transcript where conversation_id = $1`, [
+        conversation.id,
+      ]),
+    ).toEqual([{ text: "An old note." }]);
+  });
+
+  it("stores agent events and usage", async () => {
+    const key = { source: "slack" as const, workspaceId: "T", channelId: "C", threadId: "4.4" };
+    const conversation = await findOrCreateConversation(db, key);
+    const events = [
+      {
+        id: "evt_1",
+        type: "agent.message",
+        kind: "agent_message",
+        text: "Hello.",
+        processedAt: "2026-11-18T00:00:03.000Z",
+        payload: { id: "evt_1", content: [{ type: "text", text: "Hello." }] },
+      },
+      {
+        id: "evt_2",
+        type: "user.message",
+        kind: "user_message",
+        text: null,
+        processedAt: null,
+        payload: { id: "evt_2" },
+      },
+    ];
+    expect(await storeAgentEvents(db, conversation.id, "sesn_1", events)).toBe(2);
+    expect(await storeAgentEvents(db, conversation.id, "sesn_1", events)).toBe(0);
+    expect(
+      await db.query(
+        `select event_id, text, processed_at, payload, jsonb_typeof(payload) as type
+         from agent_events order by seq`,
+      ),
+    ).toEqual([
+      {
+        event_id: "evt_1",
+        text: "Hello.",
+        processed_at: new Date("2026-11-18T00:00:03.000Z"),
+        payload: { id: "evt_1", content: [{ type: "text", text: "Hello." }] },
+        type: "object",
+      },
+      {
+        event_id: "evt_2",
+        text: null,
+        processed_at: null,
+        payload: { id: "evt_2" },
+        type: "object",
+      },
+    ]);
+
+    await recordUsage(db, conversation.id, {
+      inputTokens: 1200,
+      outputTokens: 340,
+      cacheReadTokens: null,
+      cacheCreationTokens: 0,
+      activeSeconds: 12.5,
+      listCostMinor: 7,
+      budgetMinor: 200,
+      currency: "USD",
+    });
+    expect(
+      await db.query(
+        `select usage_input_tokens::int as input, usage_cache_read_tokens as cache_read,
+                usage_cache_creation_tokens::int as cache_creation,
+                usage_active_seconds as active, usage_list_cost_minor::int as cost,
+                budget_list_cost_minor::int as budget, cost_currency as currency
+         from conversations where id = $1`,
+        [conversation.id],
+      ),
+    ).toEqual([
+      {
+        input: 1200,
+        cache_read: null,
+        cache_creation: 0,
+        active: 12.5,
+        cost: 7,
+        budget: 200,
+        currency: "USD",
+      },
+    ]);
+  });
+
+  it("runs the conversation loop, and keeps a reply Postgres cannot store as it is", async () => {
+    const runtime = new FakeAgentRuntime();
+    const slack = new RecordingDeliverer();
+    const { log, lines } = memoryLogger();
+    const deps = { db, runtime, deliverers: { slack }, sleep: () => Promise.resolve() };
+    await receiveMessage(
+      deps,
+      {
+        source: "slack",
+        sourceEventId: "EvLoop",
+        conversation: { workspaceId: "T", channelId: "C", threadId: "5.5", messageId: "5.5" },
+        actor: { id: "U1" },
+        text: "a question",
+        sentAt: "2026-11-18T00:00:01.000Z",
+      },
+      log,
+    );
+    const sessionId = runtime.onlySessionId();
+    // A null character and half a surrogate pair: valid in JavaScript, not in jsonb.
+    runtime.reply(sessionId, "before a\u0000b \ud83d after");
+    runtime.setUsage(sessionId, { inputTokens: 1200, listCostMinor: 7, currency: "USD" });
+    const conversation = await findConversationBySession(db, sessionId);
+    if (conversation === undefined) throw new Error("expected a conversation");
+
+    await syncConversation(deps, conversation, log);
+
+    expect(lines.filter((line) => line.level === "error")).toEqual([]);
+    expect(slack.replies()).toEqual(["before ab \ufffd after"]);
+    expect(slack.statuses()).toEqual([{ messageIds: ["5.5"], status: "answered" }]);
+    expect(
+      await db.query(
+        `select role, text, message_status, delivery_status from conversation_transcript
+         where conversation_id = $1 order by occurred_at, recorded_at, position`,
+        [conversation.id],
+      ),
+    ).toEqual([
+      { role: "user", text: "a question", message_status: "answered", delivery_status: null },
+      {
+        role: "agent",
+        text: "before ab \ufffd after",
+        message_status: null,
+        delivery_status: "sent",
+      },
+    ]);
+    expect(
+      await db.query(
+        `select usage_input_tokens::int as input, usage_list_cost_minor::int as cost
+         from conversations where id = $1`,
+        [conversation.id],
+      ),
+    ).toEqual([{ input: 1200, cost: 7 }]);
+  });
+
   it("commits a transaction, and rolls back when the work throws", async () => {
     await db.transaction((tx) => tx.query("create table t (n int)"));
     await db.transaction((tx) => tx.query("insert into t values (1)"));
@@ -46,5 +229,58 @@ describe("createPostgresDb", () => {
       }),
     ).rejects.toThrow("abort");
     expect(await db.query("select n from t")).toEqual([{ n: 1 }]);
+  });
+});
+
+describe("the migration that repairs delivery payloads", () => {
+  it("turns payloads stored as JSON strings into objects, whatever they hold", async () => {
+    const old = new PGlite();
+    try {
+      await applyMigrations(old, { before: "20261118000500" });
+      await old.exec(
+        `insert into conversations (id, source, workspace_id, channel_id, thread_id)
+         values ('00000000-0000-0000-0000-000000000001', 'slack', 'T', 'C', '1.1')`,
+      );
+      const payloads: Record<string, string> = {
+        // As the old code stored them: the JSON text of the payload, kept as a JSON string.
+        "note:plain": JSON.stringify({ kind: "reply", text: "Stopped." }),
+        // A reply whose text had a null character: the escape is not valid inside jsonb.
+        evt_nul: JSON.stringify({ kind: "reply", text: "a\u0000b" }),
+        // Half a surrogate pair cannot be repaired by the migration: the row is left as it is.
+        evt_half: JSON.stringify({ kind: "reply", text: "half \ud83d" }),
+      };
+      for (const [key, text] of Object.entries(payloads)) {
+        await old.query(
+          `insert into deliveries (conversation_id, agent_event_id, kind, payload)
+           values ('00000000-0000-0000-0000-000000000001', $1, $2, to_jsonb($3::text))`,
+          [key, key.startsWith("note") ? "note" : "reply", text],
+        );
+      }
+      // One stored the new way already.
+      await old.query(
+        `insert into deliveries (conversation_id, agent_event_id, kind, payload)
+         values ('00000000-0000-0000-0000-000000000001', 'evt_new', 'reply', $1::text::jsonb)`,
+        [JSON.stringify({ kind: "reply", text: "new" })],
+      );
+
+      await applyMigration(old, "20261118000500");
+
+      const rows = await old.query<{ key: string; type: string; text: string | null }>(
+        `select agent_event_id as key, jsonb_typeof(payload) as type, payload ->> 'text' as text
+         from deliveries order by seq`,
+      );
+      expect(rows.rows).toEqual([
+        { key: "note:plain", type: "object", text: "Stopped." },
+        { key: "evt_nul", type: "object", text: "ab" },
+        { key: "evt_half", type: "string", text: null },
+        { key: "evt_new", type: "object", text: "new" },
+      ]);
+      const transcript = await old.query(
+        `select role, text, position from conversation_transcript`,
+      );
+      expect(transcript.rows).toEqual([{ role: "note", text: "Stopped.", position: 1 }]);
+    } finally {
+      await old.close();
+    }
   });
 });

@@ -20,6 +20,7 @@ import {
   type ConversationDeps,
 } from "./conversations.ts";
 import { errorResponse } from "./errors.ts";
+import { backfillRecord } from "./record.ts";
 import type { ApiEnv } from "./types.ts";
 
 export interface ApiDeps {
@@ -152,8 +153,12 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
       return errorResponse(c, 503, "not_configured", "Conversations are not configured");
     }
     const result = await reconcile(deps.conversations, c.var.log);
-    if (result.checked > 0) c.var.log.info("reconcile.done", { ...result });
-    return c.json(result);
+    // Then catch up a few conversations from before the record existed (decision 80).
+    const backfilled = await backfillRecord(deps.conversations, c.var.log);
+    if (result.checked > 0 || backfilled > 0) {
+      c.var.log.info("reconcile.done", { ...result, backfilled });
+    }
+    return c.json({ ...result, backfilled });
   });
 
   return api;
