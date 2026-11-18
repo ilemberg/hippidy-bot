@@ -178,7 +178,8 @@ Do steps 1 to 4 **before merging** the agent loop pull request: once it is deplo
 1. **API key.** In the Anthropic Console (platform.claude.com), in the `hippidy-bot`
    workspace with its monthly spend limit, create an API key. Add it as `ANTHROPIC_API_KEY`
    in two places: Vercel (Production only), and GitHub (Settings, Secrets and variables,
-   Actions, repository secret). GitHub uses it to sync the agent.
+   Actions, repository secret). GitHub uses it to sync the agent. (Later moved to the
+   `release` environment: see "Slice 3 setup: keep the CI secrets to `main`".)
 2. **Webhook.** In the Console, go to Manage, then Webhooks, and add an endpoint:
    - URL: `https://hippidy-bot.vercel.app/v1/webhooks/agent`
    - Events: `session.status_idled` and `session.status_terminated`
@@ -268,6 +269,36 @@ curl -s -H "Authorization: Bearer $TOKEN" https://hippidy-bot.vercel.app/v1/conv
 
 Keep the token out of chat and out of your shell history (for example, read it into the
 variable with `read -s TOKEN`).
+
+## Slice 3 setup: keep the CI secrets to `main`
+
+GitHub gives a repository secret to any workflow run from a branch of this repo, including a
+workflow a pull request adds or changes. From slice 4 the agent opens pull requests, so the
+secrets that can change production move into an environment only `main` may use. The
+workflows already ask for it; until you do the steps below they keep working from the
+repository secrets, exactly as before.
+
+1. In GitHub, open the repo's **Settings**, then **Environments**. If `release` is not listed
+   yet, click **New environment** and name it `release`.
+2. Open `release`. Under **Deployment branches and tags**, choose **Selected branches and
+   tags**, click **Add deployment branch or tag rule**, and enter `main`.
+3. Still in `release`, under **Environment secrets**, add the four secrets with the same
+   values as the repository secrets of the same names:
+   - `ANTHROPIC_API_KEY`
+   - `SUPABASE_ACCESS_TOKEN`
+   - `SUPABASE_DB_PASSWORD`
+   - `SUPABASE_PROJECT_REF`
+
+   GitHub never shows a stored secret, so take the values from your password manager. If you
+   no longer have one: make a new Anthropic key or Supabase access token and delete the old
+   one where it was made. Do not reset the database password for this: `DATABASE_URL` in
+   Vercel contains it, and the bot would lose its database.
+
+4. Check it works: **Actions**, **Database migrations**, **Run workflow** on `main`. It should
+   be green and say there is nothing to apply.
+5. Then delete the four **repository secrets** (Settings, Secrets and variables, Actions).
+   Run **Database migrations** once more: still green means the environment's secrets are the
+   ones in use.
 
 ## Planning docs
 

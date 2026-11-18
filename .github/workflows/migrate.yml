@@ -1,8 +1,9 @@
 name: Database migrations
 
 # Applies supabase/migrations to the production Supabase project after a merge to main
-# (decision 61): never by hand, never by the agent. Pull requests never get these secrets;
-# their migrations are checked from scratch by the tests (PGlite).
+# (decision 61): never by hand, never by the agent. The Supabase secrets live in the `release`
+# environment, which only `main` may use (decision 94), so no pull request can run code with
+# them; a pull request's migrations are checked from scratch by the tests (PGlite).
 on:
   push:
     branches: [main]
@@ -23,6 +24,7 @@ jobs:
     name: Apply migrations to Supabase
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    environment: release
     steps:
       # Secrets are given only to the steps that need them, never to third-party actions.
       - name: Check Supabase is configured
@@ -38,10 +40,9 @@ jobs:
           else
             echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         if: steps.configured.outputs.ready == 'true'
-      # Pinned to the commit of v1.7.3: a moving tag could change what runs here.
-      - uses: supabase/setup-cli@1dedf2c611547ede7232d26866dd3c56ab903bbb
+      - uses: supabase/setup-cli@1dedf2c611547ede7232d26866dd3c56ab903bbb # v1.7.3
         if: steps.configured.outputs.ready == 'true'
         with:
           version: 3.2.0
