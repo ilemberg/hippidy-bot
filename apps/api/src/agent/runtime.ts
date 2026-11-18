@@ -13,6 +13,11 @@ export interface AgentRuntime {
   /** Stops the agent's current turn. */
   interrupt(sessionId: string): Promise<void>;
   /**
+   * Answers tool calls that wait for approval with a denial, so the session carries on
+   * (decision 119). The ids are those an idle event is blocked on.
+   */
+  denyToolCalls(sessionId: string, toolUseIds: readonly string[], message: string): Promise<void>;
+  /**
    * Every event of the session so far, oldest first, exactly as the runtime reported it, each
    * with what the API makes of it. Throws SessionNotFoundError if the runtime no longer has
    * the session.
@@ -48,7 +53,10 @@ export type AgentEvent =
   | { kind: "user_message"; id: string; processed: boolean }
   | { kind: "agent_message"; id: string; text: string }
   | { kind: "running"; id: string }
-  | { kind: "idle"; id: string; reason: IdleReason }
+  /** `blockedOn`: for `requires_action`, the tool calls waiting for approval. */
+  | { kind: "idle"; id: string; reason: IdleReason; blockedOn?: string[] }
+  /** An answer to a tool call that waited for approval. */
+  | { kind: "tool_confirmation"; id: string; toolUseId: string }
   | { kind: "terminated"; id: string }
   | { kind: "error"; id: string; message: string };
 

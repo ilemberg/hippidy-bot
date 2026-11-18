@@ -7,7 +7,12 @@ import type {
   StopRequest,
   StopResult,
 } from "@hippidy/contracts";
-import { actedOn, type AgentRuntime } from "../agent/runtime.ts";
+import {
+  actedOn,
+  type AgentEvent,
+  type AgentEventRecord,
+  type AgentRuntime,
+} from "../agent/runtime.ts";
 import type { Logger } from "../log.ts";
 import {
   attachSession,
@@ -31,6 +36,7 @@ import {
   recordInbound,
   releaseSessionStart,
   releaseSyncLease,
+  renewSyncLease,
   sessionIdOf,
   setAgentEventCursor,
   setSessionState,
@@ -56,8 +62,14 @@ export interface ConversationDeps {
 
 /** How long a message may wait for the agent before reconcile looks at it. */
 export const RECONCILE_AFTER_SECONDS = 60;
-/** After this long without an answer, the turn is stopped and reported as failed. */
+/**
+ * After this long with no new event from the session, a turn is taken to be stuck: it is
+ * stopped and reported as failed (decision 113). A long turn that keeps working is not.
+ */
 export const GIVE_UP_AFTER_MINUTES = 30;
+/** Sent with each denial of a tool call that waited for approval (decision 119). */
+export const DENY_MESSAGE =
+  "Tool calls cannot be approved in this conversation. Carry on without this one, or explain what you need in your answer.";
 /** Failed hand-overs to the agent before a message is reported as failed. */
 export const MAX_FORWARD_ATTEMPTS = 5;
 const SESSION_START_WAIT_MS = 300;
@@ -72,6 +84,8 @@ export const notes = {
   retries_exhausted:
     "Something went wrong on my side and I couldn't finish. Please try again in a new message.",
   refusal: "I can't help with that one.",
+  // Not reached since decision 119 (a waiting call is denied and the turn carries on); kept so
+  // every way a turn can stop has a note.
   requires_action: "I got stuck waiting for something I can't do yet. Please try again.",
   terminated: "This conversation's session has ended. Start a new thread to carry on.",
   timeout:
@@ -212,7 +226,8 @@ export async function syncConversation(
   conversation: Conversation,
   log: Logger,
 ): Promise<void> {
-  if (!(await claimSyncLease(deps.db, conversation.id))) {
+  const lease = await claimSyncLease(deps.db, conversation.id);
+  if (lease === undefined) {
     log.info("conversation.sync_skipped", { conversationId: conversation.id, reason: "busy" });
     return;
   }
@@ -221,26 +236,35 @@ export async function syncConversation(
     const current = await getConversation(deps.db, conversation.id);
     await forwardPending(deps, current, log);
     const forwarded = await getConversation(deps.db, conversation.id);
-    await readAgent(deps, forwarded, log);
-    await giveUpIfTooLong(deps, await getConversation(deps.db, conversation.id), log);
+    const lastEventAt = await readAgent(deps, forwarded, log);
+    // A sync slow enough to lose its lease stops here: another sync has the conversation now.
+    if (!(await renewSyncLease(deps.db, lease))) {
+      log.warn("conversation.sync_lease_lost", { conversationId: conversation.id });
+      return;
+    }
+    await giveUpIfStuck(deps, await getConversation(deps.db, conversation.id), lastEventAt, log);
     await flushDeliveries(deps, conversation.id, log);
     sessionId = sessionIdOf(forwarded);
   } finally {
-    await releaseSyncLease(deps.db, conversation.id);
+    await releaseSyncLease(deps.db, lease);
   }
   // After the conversation is free again: a slow usage read must not hold up the next sync,
   // a stop, or this answer. Late or overlapping readings are safe (usage only grows).
   if (sessionId !== undefined) await keepUsage(deps, conversation.id, sessionId, log);
 }
 
-/** Queues the agent's new messages and settles what the agent has finished with. */
+/**
+ * Queues the last message of each turn that has ended, answers tool calls waiting for
+ * approval, and settles what the agent has finished with. Returns when the session's latest
+ * event happened, if it has any.
+ */
 async function readAgent(
   deps: ConversationDeps,
   conversation: Conversation,
   log: Logger,
-): Promise<void> {
+): Promise<Date | undefined> {
   const sessionId = sessionIdOf(conversation);
-  if (sessionId === undefined) return;
+  if (sessionId === undefined) return undefined;
   // Taken before the session is read: only messages handed over before it can be settled
   // by the fallback rule for messages without a recorded agent event id.
   const cutoff = await databaseNow(deps.db);
@@ -248,19 +272,30 @@ async function readAgent(
   // Everything the session lists goes into the record; the loop acts on the few it knows.
   await keepEvents(deps.db, conversation.id, sessionId, records, log);
   const events = actedOn(records);
+  const lastEventAt = latestTime(records);
 
   const cursorIndex =
     conversation.agentEventCursor === null
       ? -1
       : events.findIndex((event) => event.id === conversation.agentEventCursor);
-  for (const event of events.slice(cursorIndex + 1)) {
-    if (event.kind === "agent_message") {
-      await enqueueDelivery(deps.db, conversation.id, event.id, "reply", {
-        kind: "reply",
-        target: targetOf(conversation),
-        text: event.text,
-      });
+  // Decision 114: nothing the agent writes is posted while its turn runs. When a turn ends,
+  // its last message is posted; the rest stay in the record.
+  let turnStart = -1;
+  for (const [index, event] of events.entries()) {
+    if (!endsTurn(event)) continue;
+    if (index > cursorIndex) {
+      const last = events
+        .slice(turnStart + 1, index)
+        .findLast((candidate) => candidate.kind === "agent_message");
+      if (last?.kind === "agent_message") {
+        await enqueueDelivery(deps.db, conversation.id, last.id, "reply", {
+          kind: "reply",
+          target: targetOf(conversation),
+          text: last.text,
+        });
+      }
     }
+    turnStart = index;
   }
   const lastProcessed = [...events]
     .reverse()
@@ -273,7 +308,14 @@ async function readAgent(
     (event) => event.kind === "idle" || event.kind === "terminated",
   );
   const state = events[stateIndex];
-  if (state === undefined || (state.kind !== "idle" && state.kind !== "terminated")) return;
+  if (state === undefined || (state.kind !== "idle" && state.kind !== "terminated")) {
+    return lastEventAt;
+  }
+  if (state.kind === "idle" && state.reason === "requires_action") {
+    // The turn is not over: a tool call waits for approval, which the loop cannot give.
+    await denyWaitingCalls(deps, sessionId, events, state.blockedOn ?? [], log);
+    return lastEventAt;
+  }
 
   const processedBefore = events
     .slice(0, stateIndex)
@@ -291,7 +333,7 @@ async function readAgent(
       key: state.id,
       note: notes[ending],
     });
-    return;
+    return lastEventAt;
   }
 
   const status: SettledStatus = ending === "end_turn" ? "answered" : "failed";
@@ -319,6 +361,42 @@ async function readAgent(
       { key: `${state.id}:untracked`, note },
     );
   }
+  return lastEventAt;
+}
+
+/** Whether an event ends a turn. Waiting for a tool call's approval does not (decision 119). */
+function endsTurn(event: AgentEvent): boolean {
+  return (
+    event.kind === "terminated" || (event.kind === "idle" && event.reason !== "requires_action")
+  );
+}
+
+/** When the latest of the events was processed, by the runtime's clock. */
+function latestTime(records: readonly AgentEventRecord[]): Date | undefined {
+  let latest: number | undefined;
+  for (const record of records) {
+    if (record.processedAt === null) continue;
+    const time = Date.parse(record.processedAt);
+    if (!Number.isNaN(time) && (latest === undefined || time > latest)) latest = time;
+  }
+  return latest === undefined ? undefined : new Date(latest);
+}
+
+/** Denies each blocked tool call not answered yet, so the session carries on (decision 119). */
+async function denyWaitingCalls(
+  deps: ConversationDeps,
+  sessionId: string,
+  events: readonly AgentEvent[],
+  blockedOn: readonly string[],
+  log: Logger,
+): Promise<void> {
+  const answered = new Set(
+    events.flatMap((event) => (event.kind === "tool_confirmation" ? [event.toolUseId] : [])),
+  );
+  const waiting = blockedOn.filter((id) => !answered.has(id));
+  if (waiting.length === 0) return;
+  await deps.runtime.denyToolCalls(sessionId, waiting, DENY_MESSAGE);
+  log.warn("conversation.tool_calls_denied", { sessionId, toolUseIds: waiting });
 }
 
 /**
@@ -468,14 +546,22 @@ async function forwardPending(
   }
 }
 
-async function giveUpIfTooLong(
+/**
+ * Stops a turn that has gone quiet: nothing new from the session for GIVE_UP_AFTER_MINUTES
+ * since the message was handed over or since its latest event, whichever is later.
+ */
+async function giveUpIfStuck(
   deps: ConversationDeps,
   conversation: Conversation,
+  lastEventAt: Date | undefined,
   log: Logger,
 ): Promise<void> {
   if (conversation.status !== "waiting" || conversation.waitingSince === null) return;
-  const waitedMs = (await databaseNow(deps.db)).getTime() - conversation.waitingSince.getTime();
-  if (waitedMs < GIVE_UP_AFTER_MINUTES * 60_000) return;
+  const quietSince = Math.max(conversation.waitingSince.getTime(), lastEventAt?.getTime() ?? 0);
+  const now = (await databaseNow(deps.db)).getTime();
+  const quietMs = now - quietSince;
+  if (quietMs < GIVE_UP_AFTER_MINUTES * 60_000) return;
+  const waitedMs = now - conversation.waitingSince.getTime();
 
   const sessionId = sessionIdOf(conversation);
   if (sessionId !== undefined) await deps.runtime.interrupt(sessionId);
@@ -483,7 +569,10 @@ async function giveUpIfTooLong(
     key: `timeout:${conversation.waitingSince.toISOString()}`,
     note: notes.timeout,
   });
-  log.warn("reconcile.gave_up", { waitedMinutes: Math.round(waitedMs / 60_000) });
+  log.warn("reconcile.gave_up", {
+    waitedMinutes: Math.round(waitedMs / 60_000),
+    quietMinutes: Math.round(quietMs / 60_000),
+  });
 }
 
 /**
@@ -591,11 +680,12 @@ export async function stopConversation(
 async function flushSoon(deps: ConversationDeps, conversationId: string, log: Logger) {
   const sleep = deps.sleep ?? defaultSleep;
   for (let attempt = 0; attempt < 10; attempt++) {
-    if (await claimSyncLease(deps.db, conversationId)) {
+    const lease = await claimSyncLease(deps.db, conversationId);
+    if (lease !== undefined) {
       try {
         await flushDeliveries(deps, conversationId, log);
       } finally {
-        await releaseSyncLease(deps.db, conversationId);
+        await releaseSyncLease(deps.db, lease);
       }
       return;
     }

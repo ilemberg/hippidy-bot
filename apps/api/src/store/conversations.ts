@@ -203,24 +203,52 @@ export async function setAgentEventCursor(
 /** A sync that has not finished after this long is assumed dead; another may take over. */
 export const SYNC_LEASE_SECONDS = 120;
 
+/** Proof of holding a conversation's sync lease: only its holder can renew or release it. */
+export interface SyncLease {
+  conversationId: string;
+  owner: string;
+}
+
 /**
  * Takes the right to sync a conversation, so a webhook and reconcile never sync the same
- * conversation at once. Returns false if someone else holds it.
+ * conversation at once. Returns undefined if someone else holds it. Each claim gets a new
+ * owner, so a sync that outlived its lease cannot release or renew the next holder's.
  */
-export async function claimSyncLease(db: Db, conversationId: string): Promise<boolean> {
+export async function claimSyncLease(
+  db: Db,
+  conversationId: string,
+): Promise<SyncLease | undefined> {
   const rows = await db.query(
-    `update conversations set sync_lease_until = now() + make_interval(secs => $2)
+    `update conversations
+     set sync_lease_until = now() + make_interval(secs => $2),
+         sync_lease_owner = gen_random_uuid()
      where id = $1 and (sync_lease_until is null or sync_lease_until < now())
-     returning id`,
+     returning sync_lease_owner::text as owner`,
     [conversationId, SYNC_LEASE_SECONDS],
+  );
+  const row = rows[0];
+  if (row === undefined) return undefined;
+  return { conversationId, owner: z.object({ owner: z.string() }).parse(row).owner };
+}
+
+/** Extends the lease. False if it is no longer this holder's (it expired and was taken). */
+export async function renewSyncLease(db: Db, lease: SyncLease): Promise<boolean> {
+  const rows = await db.query(
+    `update conversations set sync_lease_until = now() + make_interval(secs => $3)
+     where id = $1 and sync_lease_owner = $2::uuid and sync_lease_until >= now()
+     returning id`,
+    [lease.conversationId, lease.owner, SYNC_LEASE_SECONDS],
   );
   return rows.length > 0;
 }
 
-export async function releaseSyncLease(db: Db, conversationId: string): Promise<void> {
-  await db.query(`update conversations set sync_lease_until = null where id = $1`, [
-    conversationId,
-  ]);
+/** Releases the lease, unless another sync has taken it since. */
+export async function releaseSyncLease(db: Db, lease: SyncLease): Promise<void> {
+  await db.query(
+    `update conversations set sync_lease_until = null, sync_lease_owner = null
+     where id = $1 and sync_lease_owner = $2::uuid`,
+    [lease.conversationId, lease.owner],
+  );
 }
 
 // ---------------------------------------------------------------------------------------

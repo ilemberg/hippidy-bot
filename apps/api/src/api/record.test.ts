@@ -137,7 +137,8 @@ describe("a sync keeps the record", () => {
         text: "An answer.",
         actor_name: null,
         message_status: null,
-        delivery_status: "sent",
+        // Not posted: only a turn's last message is (decision 114). It stays in the record.
+        delivery_status: null,
       },
       {
         role: "agent",

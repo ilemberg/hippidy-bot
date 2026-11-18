@@ -16,6 +16,8 @@ interface FakeSession {
   /** User messages still waiting in the session's queue; listed after everything else. */
   queued: { id: string }[];
   interrupted: number;
+  /** Tool calls the API denied, in order (decision 119). */
+  denied: string[];
   usage: SessionUsage;
 }
 
@@ -27,6 +29,7 @@ const TYPE_OF: Record<AgentEvent["kind"], string> = {
   idle: "session.status_idle",
   terminated: "session.status_terminated",
   error: "session.error",
+  tool_confirmation: "user.tool_confirmation",
 };
 
 const NO_USAGE: SessionUsage = {
@@ -105,6 +108,7 @@ export class FakeAgentRuntime implements AgentRuntime {
       events: [],
       queued: [],
       interrupted: 0,
+      denied: [],
       usage: NO_USAGE,
     });
     return Promise.resolve({ sessionId, agentId: "agent_fake", agentVersion: 1 });
@@ -122,6 +126,15 @@ export class FakeAgentRuntime implements AgentRuntime {
 
   interrupt(sessionId: string): Promise<void> {
     this.session(sessionId).interrupted++;
+    return Promise.resolve();
+  }
+
+  denyToolCalls(sessionId: string, toolUseIds: readonly string[]): Promise<void> {
+    const session = this.session(sessionId);
+    for (const toolUseId of toolUseIds) {
+      session.denied.push(toolUseId);
+      this.push(session, { kind: "tool_confirmation", id: this.id("sevt"), toolUseId });
+    }
     return Promise.resolve();
   }
 
@@ -145,6 +158,51 @@ export class FakeAgentRuntime implements AgentRuntime {
     const session = this.session(sessionId);
     await this.onReadUsage?.();
     return session.usage;
+  }
+
+  /** The time the next event is processed at (each event moves it on by a second). */
+  setClock(at: Date): void {
+    this.clock = at.getTime() - 1000;
+  }
+
+  /**
+   * The start of a turn that is still running: the oldest queued message is processed and the
+   * agent says each text, but does not idle. End it with `idle` or `reply`.
+   */
+  work(sessionId: string, ...texts: string[]): void {
+    const session = this.session(sessionId);
+    const next = session.queued.shift();
+    if (next !== undefined) {
+      this.push(session, { kind: "user_message", id: next.id, processed: true });
+    }
+    this.push(session, { kind: "running", id: this.id("sevt") });
+    for (const text of texts) {
+      this.push(session, { kind: "agent_message", id: this.id("sevt"), text });
+    }
+  }
+
+  /** The agent says each text (in a turn already running) and ends the turn. */
+  finish(sessionId: string, ...texts: string[]): void {
+    const session = this.session(sessionId);
+    for (const text of texts) {
+      this.push(session, { kind: "agent_message", id: this.id("sevt"), text });
+    }
+    this.push(session, { kind: "idle", id: this.id("sevt"), reason: "end_turn" });
+  }
+
+  /** The agent waits for approval of new tool calls; returns their ids. */
+  waitForApproval(sessionId: string, count = 1): string[] {
+    const session = this.session(sessionId);
+    const toolUseIds = Array.from({ length: count }, () =>
+      this.other(sessionId, "agent.mcp_tool_use"),
+    );
+    this.push(session, {
+      kind: "idle",
+      id: this.id("sevt"),
+      reason: "requires_action",
+      blockedOn: toolUseIds,
+    });
+    return toolUseIds;
   }
 
   /** One turn: the oldest queued message is processed, the agent says each text, then idles. */
