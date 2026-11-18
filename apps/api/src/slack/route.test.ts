@@ -6,6 +6,7 @@ import { configureApp } from "../compose.ts";
 import type { Env } from "../config.ts";
 import { memoryLogger } from "../testing.ts";
 import fixture from "./fixtures/app-mention.json" with { type: "json" };
+import recorded from "./fixtures/recorded-app-mention.json" with { type: "json" };
 import type { SlackActions } from "./handler.ts";
 
 const signingSecret = "8f742231b10e8888abcd99yyyzzz85a5";
@@ -140,6 +141,23 @@ describe("POST /slack/events", () => {
     await app.request(signed(JSON.stringify(fixture), "wrong-secret-0000000000000000"));
     expect(lines).toContainEqual(expect.objectContaining({ msg: "slack.request_rejected" }));
     expect(lines.some((line) => line.level === "error")).toBe(false);
+  });
+
+  it("handles the real recorded event end to end, ignoring nothing it should not", async () => {
+    const { app, lines, reaction } = setup();
+    expect((await app.request(signed(JSON.stringify(recorded)))).status).toBe(200);
+    expect(await reaction).toEqual({
+      channel: "C0CHT679Y1K",
+      timestamp: "1794971036.957189",
+      name: "eyes",
+    });
+    expect(lines).toContainEqual(
+      expect.objectContaining({
+        msg: "message.received",
+        correlationId: "Ev0CJTQ9C4AY",
+        message: expect.objectContaining({ text: "did it work?" }) as unknown,
+      }),
+    );
   });
 
   it("returns 503 when Slack is not configured, and the API keeps working", async () => {

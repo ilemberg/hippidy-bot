@@ -55,6 +55,8 @@ entries are not edited.
 | 46 | 2026-11-17 | Slice 1 plan is finalized after review (decisions 30 to 45). Not started | Planning only until told to begin |
 | 47 | 2026-11-18 | Refines 30: the API client is wired in `apps/api/src/compose.ts`, the composition root, which the entry file `src/index.ts` calls. The entry file only creates the Hono app | Vercel only accepts an entry file that creates the Hono app itself and prefers `src/app.ts`, found while building slice 1 |
 | 48 | 2026-11-18 | Node 26 (Vercel's current LTS) is the pinned version, per decision 32 | Vercel lists Node 26 as generally available and the default for new projects |
+| 49 | 2026-11-18 | Slice 1 is done: the demo works in production. Slice 2 is drafted in `slice-2.md` and has not started | Retro in `wave-1.md` |
+| 50 | 2026-11-18 | The production domain is `hippidy-bot.vercel.app`; Slack's events URL points there | Vercel's branch addresses sit behind a login wall Slack cannot pass |
 
 ## Deferred on purpose
 
