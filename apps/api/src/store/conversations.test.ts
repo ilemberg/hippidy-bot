@@ -122,6 +122,15 @@ describe("sync lease", () => {
     await db.query(`update conversations set sync_lease_until = now() - interval '1 second'`);
     expect(await claimSyncLease(db, conversation.id)).toBe(true);
   });
+
+  it("has an owner column, empty until pull request B writes it", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    await claimSyncLease(db, conversation.id);
+    const rows = await db.query(`select sync_lease_owner from conversations where id = $1`, [
+      conversation.id,
+    ]);
+    expect(rows).toEqual([{ sync_lease_owner: null }]);
+  });
 });
 
 describe("session starts", () => {
