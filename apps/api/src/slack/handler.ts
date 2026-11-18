@@ -49,9 +49,10 @@ export async function handleMention(
     return "dropped_retry";
   }
 
-  // Kept so a real event can be copied from the log for the test fixture.
+  // Kept so a real event can be copied from the log for the test fixture. A processed retry
+  // logs it again, which is harmless.
   log.info("slack.mention.raw", {
-    body: delivery.body,
+    body: redactBody(delivery.body),
     retryNum: delivery.retryNum,
     retryReason: delivery.retryReason,
   });
@@ -91,6 +92,15 @@ export async function handleMention(
   }
   log.info("slack.mention.handled", { messageId: result.accepted.id });
   return "reacted";
+}
+
+/**
+ * Every Events API body carries Slack's legacy verification `token` at the top level. It is a
+ * credential, so it never reaches the logs.
+ */
+export function redactBody(body: unknown): unknown {
+  if (typeof body !== "object" || body === null || !("token" in body)) return body;
+  return { ...body, token: "[redacted]" };
 }
 
 /** The `error` string from a Slack Web API error (for example `already_reacted`), if any. */

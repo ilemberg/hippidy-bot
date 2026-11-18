@@ -1,4 +1,4 @@
-import { LogLevel, type Logger as BoltLogger } from "@slack/bolt";
+import { LogLevel, ReceiverAuthenticityError, type Logger as BoltLogger } from "@slack/bolt";
 import type { Logger } from "../log.ts";
 
 /** Routes Bolt's and the receiver's own log output into our JSON logger. */
@@ -16,6 +16,13 @@ export function boltLogger(log: Logger): BoltLogger {
     (...parts: unknown[]): void => {
       if (order[at] < order[level]) return;
       const errors = parts.filter((part) => part instanceof Error);
+      // Unsigned or badly signed requests (internet scanners, misconfiguration) are expected
+      // on a public URL: a warning without a stack, not an error.
+      const rejected = errors.find((error) => error instanceof ReceiverAuthenticityError);
+      if (rejected !== undefined) {
+        log.warn("slack.request_rejected", { logger: name, reason: rejected.message });
+        return;
+      }
       const text = parts
         .filter((part) => !(part instanceof Error))
         .map((part) => (typeof part === "string" ? part : JSON.stringify(part)))

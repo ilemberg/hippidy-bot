@@ -48,6 +48,18 @@ describe("handleMention", () => {
     );
   });
 
+  it("never logs Slack's verification token", async () => {
+    const { deps, lines } = setup();
+    await handleMention(first, deps);
+    expect(JSON.stringify(lines)).not.toContain(fixture.token);
+    expect(lines).toContainEqual(
+      expect.objectContaining({
+        msg: "slack.mention.raw",
+        body: expect.objectContaining({ token: "[redacted]" }) as unknown,
+      }),
+    );
+  });
+
   it("adds no reaction when the API rejects the message", async () => {
     const { deps, reactions, lines } = setup({
       api: () =>

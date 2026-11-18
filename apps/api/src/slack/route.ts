@@ -1,6 +1,7 @@
 import type { ErrorResponse } from "@hippidy/contracts";
 import { App, type webApi } from "@slack/bolt";
 import { createHandler, VercelReceiver } from "@vercel/slack-bolt";
+import { z } from "zod";
 import type { Env } from "../config.ts";
 import type { Logger } from "../log.ts";
 import type { ApiClient } from "./api-client.ts";
@@ -22,6 +23,15 @@ const realSlackActions = (client: webApi.WebClient): SlackActions => ({
   async addReaction(input) {
     await client.reactions.add(input);
   },
+});
+
+function botUserIdFromBody(body: unknown): string | undefined {
+  const parsed = authorizationsSchema.safeParse(body);
+  return parsed.success ? parsed.data.authorizations[0]?.user_id : undefined;
+}
+
+const authorizationsSchema = z.object({
+  authorizations: z.array(z.object({ user_id: z.string().min(1) })),
 });
 
 function notConfigured(): Response {
@@ -49,10 +59,21 @@ export function createSlackEventsHandler(deps: SlackRouteDeps): SlackEventsHandl
       // Hands Bolt the token directly. With `token`, Bolt calls Slack's auth.test before it
       // acknowledges the first event on every cold start, which eats into Slack's 3 second
       // limit. The bot's own user id comes from each event's `authorizations` instead.
-      authorize: () => Promise.resolve({ botToken: config.botToken }),
+      // Returning the bot's user id keeps Bolt's ignoreSelf filter working.
+      authorize: (_source, body) => {
+        const botUserId = botUserIdFromBody(body);
+        return Promise.resolve(
+          botUserId === undefined
+            ? { botToken: config.botToken }
+            : { botToken: config.botToken, botUserId },
+        );
+      },
       receiver,
       logger,
       deferInitialization: true,
+      // The default retries Slack API calls for up to about 30 minutes, which would keep the
+      // function running long after the event. One retry, then the failure is logged.
+      clientOptions: { retryConfig: { retries: 1 } },
     });
     const slackActions = deps.slackActions ?? realSlackActions;
 

@@ -49,8 +49,9 @@ Vercel does and checks it starts (`pnpm build && pnpm smoke`).
 | `POST /v1/messages`  | service token   | Accepts one inbound message, returns 202 with an id. Logs it                                                                          |
 | `POST /slack/events` | Slack signature | Slack's Events API. On `app_mention`: sends the message through `/v1/messages`, then reacts 👀. Answers 503 until Slack is configured |
 
-The request and response shapes are in `packages/contracts`. Every error has the body
-`{"error":{"code":"...","message":"..."}}`. Send `x-correlation-id` to tie log lines to one event;
+The request and response shapes are in `packages/contracts`. Every error from the API has the
+body `{"error":{"code":"...","message":"..."}}`. The one exception is `/slack/events`: errors there
+(a bad signature, for example) come from the Slack library in its own shape; only Slack calls it. Send `x-correlation-id` to tie log lines to one event;
 the API generates one if it is missing and returns it in the same header.
 
 The service token is sent as `Authorization: Bearer <token>`. If the API has no token configured,
@@ -115,7 +116,9 @@ push protection.
    production domain (keep `/slack/events` on the end).
 2. At https://api.slack.com/apps choose **Create New App**, then **From a manifest**, pick your
    workspace, choose YAML, paste, and create. If Slack says the request URL is not verified,
-   that is expected for now.
+   that is expected for now. If Slack refuses to create the app because of the URL, delete the
+   `request_url:` line from what you pasted and try again; you will add the URL in step 2 under
+   "Then".
 3. On the app's **Install App** page, install it to your workspace.
 4. In Vercel, Settings, Environment Variables, add two variables, for **Production only**:
    - `SLACK_BOT_TOKEN`: the **Bot User OAuth Token** from the app's OAuth & Permissions page
@@ -125,15 +128,16 @@ push protection.
 ### Then
 
 1. Merge the second pull request. Vercel deploys it to production with the Slack variables.
-2. In the Slack app, open **Event Subscriptions**. Check the request URL is
-   `https://YOUR-APP.vercel.app/slack/events` and click **Retry** (or re-enter it). Slack should
-   show **Verified**. Save if asked.
+2. In the Slack app, open **Event Subscriptions**. Check it is switched on and the request URL is
+   `https://YOUR-APP.vercel.app/slack/events`, then click **Retry** (or enter it). Slack should
+   show **Verified**. Check `app_mention` is listed under bot events, and save.
 3. In Slack, invite the bot to a channel (`/invite @hippidy-bot`) and mention it:
    `@hippidy-bot hello`. Within a couple of seconds the message gets a 👀 reaction, and the Vercel
    logs show a `message.received` line with who sent it and where.
 4. Soon after, while Vercel still has the logs: find the `slack.mention.raw` line for that
    mention and copy its `body`. It becomes the test fixture in the last pull request of the
-   slice. It contains Slack ids and your message text, but no secrets.
+   slice. It contains Slack ids and your message text. Slack's verification `token` in it is
+   replaced with `[redacted]` before logging; if you ever see a real value there, do not share it.
 
 If there is no reaction: check the Vercel logs for `slack.` and `auth.` lines. `auth.rejected`
 means `API_SERVICE_TOKEN` is missing or changed without a redeploy; `slack.reaction_failed` with

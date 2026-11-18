@@ -15,7 +15,12 @@ const env: Env = {
   SLACK_SIGNING_SECRET: signingSecret,
 };
 
-function signed(body: string, secret = signingSecret, timestamp = Math.floor(Date.now() / 1000)) {
+function signed(
+  body: string,
+  secret = signingSecret,
+  timestamp = Math.floor(Date.now() / 1000),
+  extraHeaders: Record<string, string> = {},
+) {
   const signature = `v0=${createHmac("sha256", secret).update(`v0:${timestamp}:${body}`).digest("hex")}`;
   return new Request("http://test/slack/events", {
     method: "POST",
@@ -23,6 +28,7 @@ function signed(body: string, secret = signingSecret, timestamp = Math.floor(Dat
       "content-type": "application/json",
       "x-slack-request-timestamp": String(timestamp),
       "x-slack-signature": signature,
+      ...extraHeaders,
     },
     body,
   });
@@ -30,18 +36,29 @@ function signed(body: string, secret = signingSecret, timestamp = Math.floor(Dat
 
 function setup(appEnv: Env = env) {
   const { log, lines } = memoryLogger();
+  const reactions: unknown[] = [];
   let reacted: (input: unknown) => void = () => undefined;
   const reaction = new Promise((resolve) => {
     reacted = resolve;
   });
   const slackActions = (): SlackActions => ({
     addReaction: (input) => {
+      reactions.push(input);
       reacted(input);
       return Promise.resolve();
     },
   });
   const app = configureApp(new Hono<ApiEnv>(), { env: appEnv, log, slackActions });
-  return { app, lines, reaction };
+  return { app, lines, reaction, reactions };
+}
+
+/** Waits for background work (Slack events are processed after the response is sent). */
+async function waitFor(condition: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error("timed out waiting for condition");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 describe("POST /slack/events", () => {
@@ -91,6 +108,38 @@ describe("POST /slack/events", () => {
     expect(lines).toContainEqual(
       expect.objectContaining({ msg: "message.received", correlationId: "Ev0LAN670R" }),
     );
+  });
+
+  it("passes Slack's retry headers through: a retry after a timeout is dropped", async () => {
+    const { app, lines } = setup();
+    const now = Math.floor(Date.now() / 1000);
+    const res = await app.request(
+      signed(JSON.stringify(fixture), signingSecret, now, {
+        "x-slack-retry-num": "1",
+        "x-slack-retry-reason": "http_timeout",
+      }),
+    );
+    expect(res.status).toBe(200);
+    await waitFor(() => lines.some((line) => line.msg === "slack.retry_dropped"));
+    expect(lines.some((line) => line.msg === "message.received")).toBe(false);
+  });
+
+  it("adds no reaction when the API has no service token configured", async () => {
+    const { API_SERVICE_TOKEN: _omitted, ...withoutToken } = env;
+    const { app, lines, reactions } = setup(withoutToken);
+    expect((await app.request(signed(JSON.stringify(fixture)))).status).toBe(200);
+    await waitFor(() => lines.some((line) => line.msg === "slack.api_rejected"));
+    expect(lines).toContainEqual(
+      expect.objectContaining({ msg: "slack.api_rejected", status: 401 }),
+    );
+    expect(reactions).toEqual([]);
+  });
+
+  it("logs a bad signature as a warning, not an error", async () => {
+    const { app, lines } = setup();
+    await app.request(signed(JSON.stringify(fixture), "wrong-secret-0000000000000000"));
+    expect(lines).toContainEqual(expect.objectContaining({ msg: "slack.request_rejected" }));
+    expect(lines.some((line) => line.level === "error")).toBe(false);
   });
 
   it("returns 503 when Slack is not configured, and the API keeps working", async () => {
