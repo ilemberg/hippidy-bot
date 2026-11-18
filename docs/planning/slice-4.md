@@ -116,7 +116,7 @@ exists, unless that makes things worse. "Worse" means one of:
 
 ## Experiment first
 
-One throwaway session, started by hand with the real agent settings, before anything is built. It answers what cannot be decided from the docs:
+One throwaway session, started by hand with the real agent settings. It needs the GitHub token, so it runs when the token exists (decision 112), not necessarily before the first code. It answers what cannot be decided from the docs:
 
 | Question | What the experiment shows |
 |---|---|
@@ -153,8 +153,8 @@ Schema ships before the code that uses it (decision 86); one branch per pull req
 | # | Pull request | Depends on |
 |---|---|---|
 | A | This plan and its decisions (done); then any migration, on its own | - |
-| - | The experiment | The manual steps marked "before the experiment" |
-| B | Loop hardening: lease owner check, read only new events, size budgets | The experiment (for decision 95) |
+| - | The experiment | The GitHub token (decision 112) |
+| B | Loop hardening: lease owner check, size budgets; reading only new events waits for the experiment (decision 95) | - |
 | C | The agent gets the repo, the sandbox tools and the GitHub MCP server; sessions mount the repo and attach the vault | B |
 | D | Instructions, the skill, the outcome and its rubric | C |
 | E | Progress in the thread; eval cases | C |
@@ -162,14 +162,22 @@ Schema ships before the code that uses it (decision 86); one branch per pull req
 
 ## What you will need to do by hand
 
-| When | Step |
+None of these is a prerequisite for starting this slice (decision 112). They are prerequisites
+of slice 6, the last slice of the wave, and are listed in `wave-1.md` under it.
+
+What that means here: the slice is built and tested against fakes, as every slice has been.
+Two things cannot happen without the GitHub token, whenever it is created: the experiment
+below, and the live demo. Until then D4 and D6 stay "expected, not confirmed", and the "done
+when" lines that need production stay unchecked (decision 96 still decides when the slice
+closes).
+
+| Step | Needed for |
 |---|---|
-| Before anything | Still open from slice 3: move the CI secrets into the `release` environment and delete the repository ones (README). Until then a pull request, including the agent's, can add a workflow that reads them |
-| Before anything | Still open from slice 2: update and reinstall the Slack app, so the bot gets the sender's name |
-| Before anything | Add the Supabase (read-only) and Vercel connectors to the build session |
-| Before the experiment | Create the GitHub token (D2). Save it in Vercel, Production only, and as the GitHub MCP credential in an Anthropic vault |
-| Before the experiment | Make sure the rule on `main` (pull request and CI required) allows no bypass, including for you: the token acts as you |
-| After C | Mention the bot with the demo request |
+| Create the GitHub token (D2). Save it in Vercel, Production only, and as the GitHub MCP credential in an Anthropic vault | The experiment and the live demo: without it the agent cannot clone, push or open a pull request |
+| Make sure the rule on `main` (pull request and CI required) allows no bypass, including for you: the token acts as you | Safe use of the token |
+| Move the CI secrets into the `release` environment and delete the repository ones (README; open since slice 3) | Keeping the secrets from a workflow added by a pull request. The token has no right to change workflows, which covers the agent's own pull requests meanwhile |
+| Update and reinstall the Slack app (open since slice 2) | The bot knowing the sender's name |
+| Add the Supabase (read-only) and Vercel connectors to the build session | Live checks without screenshots |
 
 ## Done when
 

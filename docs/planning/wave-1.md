@@ -244,6 +244,12 @@ Sketch:
 
 Decide before starting: questions F1 to F6.
 
+Prerequisites done by hand before this slice starts (`decisions.md` 112; details in
+`slice-4.md`): the GitHub token in Vercel and in an Anthropic vault, with a rule on `main` that
+allows no bypass; the CI secrets moved into the `release` environment; the Slack app updated
+and reinstalled; the Supabase and Vercel connectors for the build session. Slice 4's
+experiment and live demo need the token, whenever it is created.
+
 ## Testing strategy
 
 Decided in outline: as much testing as possible in the agent sandbox, the rest in GitHub
@@ -425,3 +431,4 @@ count of conversations left unstored.
 
 **Still to do by hand:** move the CI secrets into the `release` environment before slice 4;
 update and reinstall the Slack app so the bot gets the sender's name (both in the README).
+Moved since: both are now prerequisites of slice 6, not slice 4 (`decisions.md` 112).
