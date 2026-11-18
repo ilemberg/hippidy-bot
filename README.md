@@ -5,8 +5,9 @@ explore how an AI teammate fits into a SaaS product engineering team: engineers 
 team lead, senior, mid, junior), product manager, designer, QA, engineering manager and other
 stakeholders.
 
-**Status: slice 2 done.** Mention `@hippidy-bot` in Slack and a Claude agent answers in the thread; reply
-there and it remembers the conversation.
+**Status: slice 3 done.** Mention `@hippidy-bot` in Slack and a Claude agent answers in the thread; reply
+there and it remembers the conversation. Every conversation is kept in Supabase, with what the agent
+did and what it cost, and can be read back through the API.
 
 ## Layout
 
@@ -198,6 +199,19 @@ Do steps 1 to 4 **before merging** the agent loop pull request: once it is deplo
    Use the Vault page rather than the SQL editor, which keeps a history of what you typed.
    Supabase then calls `/v1/reconcile` every minute; until both secrets exist it does nothing.
 
+   The names differ on purpose and both must be exact: `RECONCILE_TOKEN` in Vercel,
+   `hippidy_reconcile_token` in Supabase. To check it works, two minutes after the Vercel
+   deployment is ready, run this in Supabase's SQL Editor. The newest rows should start with
+   `200`; `401` means the API does not have the token under the right name, or the two
+   values differ.
+
+   ```sql
+   select coalesce(status_code::text, 'no status') || ' '
+            || left(coalesce(content, error_msg, ''), 80) as response,
+          created
+   from net._http_response order by created desc limit 3;
+   ```
+
 5. **Merge.** On merge, GitHub's **Agent sync** workflow creates the agent and its
    environment in your Anthropic workspace (check the run is green), the **Database
    migrations** workflow adds the schedule, and Vercel deploys. Redeploy once in Vercel if you
@@ -307,7 +321,7 @@ repository secrets, exactly as before.
 | [docs/planning/wave-1.md](docs/planning/wave-1.md)                   | The wave 1 plan: six slices, each with a demo, exit criteria, and what is known to be hard |
 | [docs/planning/slice-1.md](docs/planning/slice-1.md)                 | Slice 1 as built: what was built, the manual steps, how the work was done                  |
 | [docs/planning/slice-2.md](docs/planning/slice-2.md)                 | Slice 2 as built: the agent loop, storage, names and stop                                  |
-| [docs/planning/slice-3.md](docs/planning/slice-3.md)                 | Slice 3 as built: Supabase as the record, and what is still open before it closes          |
+| [docs/planning/slice-3.md](docs/planning/slice-3.md)                 | Slice 3 as built: Supabase as the record, the read routes, and how the slice closed        |
 | [docs/planning/open-questions.md](docs/planning/open-questions.md)   | The grill: decisions that are open, grouped by when they block                             |
 | [docs/planning/decisions.md](docs/planning/decisions.md)             | Decision log. Things move here from open-questions once decided                            |
 | [docs/planning/stack-and-tools.md](docs/planning/stack-and-tools.md) | Stack options, MCP servers, and off-the-shelf pieces that make this cheaper or better      |
