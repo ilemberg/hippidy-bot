@@ -1,9 +1,10 @@
 # Slice 4: the agent gets a development environment
 
-Status: **started 2026-11-18 (decision 125).** Pull request A2, the experiment, is up; the
-plan was revised after a review against the code (decisions 112 to 124). Every question is answered (decisions 98 to 110 and 113 to 122). The experiment
-that opens the slice confirms what the docs cannot settle; its list is under "Experiment
-first".
+Status: **started 2026-11-18 (decision 125).** A2 (the experiment) and A3 (the lease owner
+column) are merged; B is split in two (decision 126). The plan was revised after a review
+against the code (decisions 112 to 124). Every question is answered (decisions 98 to 110
+and 113 to 122). The experiment that opens the slice confirms what the docs cannot settle;
+its list is under "Experiment first".
 
 **Demo:** `@hippidy-bot change the 👀 reaction to 🫡`. The agent works in a clone of this repo,
 makes the change, runs lint, typecheck and tests, pushes a branch and opens a pull request.
@@ -196,7 +197,8 @@ Schema ships before the code that uses it (decision 86); one branch per pull req
 | A2 | The experiment's script and its workflow, run by hand in `release` (`apps/api/scripts/experiment.ts`, `.github/workflows/experiment.yml`; decision 125) | - |
 | A3 | Migration only: the sync lease's owner column | - |
 | - | The experiment | A2 merged; the token saved (done) |
-| B | The loop for long turns: lease owner check, read only new events, give up on silence, post only the last message, deny a call that waits | A3 merged and applied; the experiment (for decision 95) |
+| B1 | The loop for long turns: lease owner check, give up on silence, post only the last message, deny a call that waits (decision 126) | A3 merged and applied |
+| B2 | Read only new events (decision 95) | B1; the experiment |
 | C | The agent gets the repo, the sandbox tools and the GitHub MCP server; the agent sync learns MCP servers, hosts, packages and the vault; sessions mount the repo and attach the vault | B |
 | D | Instructions, the skill, an outcome with every message, ✅ from the verdict | C |
 | E | Progress in the thread; the eval-case view (its migration first) | C |

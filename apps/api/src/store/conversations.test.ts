@@ -21,6 +21,7 @@ import {
   recordInbound,
   releaseSessionStart,
   releaseSyncLease,
+  renewSyncLease,
   sessionIdOf,
   setAgentEventCursor,
   setSessionState,
@@ -110,26 +111,36 @@ describe("conversations", () => {
 describe("sync lease", () => {
   it("lets one sync hold a conversation until it releases it", async () => {
     const conversation = await findOrCreateConversation(db, key);
-    expect(await claimSyncLease(db, conversation.id)).toBe(true);
-    expect(await claimSyncLease(db, conversation.id)).toBe(false);
-    await releaseSyncLease(db, conversation.id);
-    expect(await claimSyncLease(db, conversation.id)).toBe(true);
+    const lease = await claimSyncLease(db, conversation.id);
+    expect(lease).toBeDefined();
+    expect(await claimSyncLease(db, conversation.id)).toBeUndefined();
+    if (lease !== undefined) await releaseSyncLease(db, lease);
+    expect(await claimSyncLease(db, conversation.id)).toBeDefined();
   });
 
   it("can be taken over once it has expired", async () => {
     const conversation = await findOrCreateConversation(db, key);
     await claimSyncLease(db, conversation.id);
     await db.query(`update conversations set sync_lease_until = now() - interval '1 second'`);
-    expect(await claimSyncLease(db, conversation.id)).toBe(true);
+    expect(await claimSyncLease(db, conversation.id)).toBeDefined();
   });
 
-  it("has an owner column, empty until pull request B writes it", async () => {
+  it("cannot be released or renewed by a sync that lost it", async () => {
     const conversation = await findOrCreateConversation(db, key);
-    await claimSyncLease(db, conversation.id);
-    const rows = await db.query(`select sync_lease_owner from conversations where id = $1`, [
-      conversation.id,
-    ]);
-    expect(rows).toEqual([{ sync_lease_owner: null }]);
+    const slow = await claimSyncLease(db, conversation.id);
+    if (slow === undefined) throw new Error("expected a lease");
+    await db.query(`update conversations set sync_lease_until = now() - interval '1 second'`);
+    expect(await renewSyncLease(db, slow)).toBe(false);
+    const next = await claimSyncLease(db, conversation.id);
+    if (next === undefined) throw new Error("expected a lease");
+    expect(next.owner).not.toBe(slow.owner);
+
+    await releaseSyncLease(db, slow);
+    expect(await claimSyncLease(db, conversation.id)).toBeUndefined();
+    expect(await renewSyncLease(db, slow)).toBe(false);
+    expect(await renewSyncLease(db, next)).toBe(true);
+    await releaseSyncLease(db, next);
+    expect(await claimSyncLease(db, conversation.id)).toBeDefined();
   });
 });
 

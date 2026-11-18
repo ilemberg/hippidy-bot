@@ -2,7 +2,12 @@ import type { Anthropic } from "@anthropic-ai/sdk";
 import type { BetaManagedAgentsSessionEvent } from "@anthropic-ai/sdk/resources/beta/sessions/events";
 import { describe, expect, it } from "vitest";
 import type { AgentConfig } from "./config.ts";
-import { createManagedAgentRuntime, toAgentEventRecord, toSessionUsage } from "./managed.ts";
+import {
+  createManagedAgentRuntime,
+  toAgentEvent,
+  toAgentEventRecord,
+  toSessionUsage,
+} from "./managed.ts";
 import { actedOn, SessionNotFoundError } from "./runtime.ts";
 
 const config: AgentConfig = {
@@ -85,6 +90,39 @@ describe("toAgentEventRecord", () => {
   it("gives the loop only the events it acts on, in order", () => {
     const records = [modelRequest, agentMessage, queuedMessage].map(toAgentEventRecord);
     expect(actedOn(records).map((event) => event.id)).toEqual(["sevt_2", "sevt_3"]);
+  });
+});
+
+describe("toAgentEvent", () => {
+  it("reads which tool calls a session is blocked on", () => {
+    const idle: BetaManagedAgentsSessionEvent = {
+      id: "sevt_9",
+      type: "session.status_idle",
+      processed_at: "2026-11-18T00:00:09.000Z",
+      stop_details: null,
+      stop_reason: { type: "requires_action", event_ids: ["sevt_7", "sevt_8"] },
+    };
+    expect(toAgentEvent(idle)).toEqual({
+      kind: "idle",
+      id: "sevt_9",
+      reason: "requires_action",
+      blockedOn: ["sevt_7", "sevt_8"],
+    });
+  });
+
+  it("reads the answer to a tool call", () => {
+    const confirmation: BetaManagedAgentsSessionEvent = {
+      id: "sevt_10",
+      type: "user.tool_confirmation",
+      result: "deny",
+      tool_use_id: "sevt_7",
+      processed_at: "2026-11-18T00:00:10.000Z",
+    };
+    expect(toAgentEvent(confirmation)).toEqual({
+      kind: "tool_confirmation",
+      id: "sevt_10",
+      toolUseId: "sevt_7",
+    });
   });
 });
 

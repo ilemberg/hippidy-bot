@@ -43,6 +43,7 @@ const unreachable: AgentRuntime = {
   startSession: () => Promise.reject(new Error("agent runtime unreachable")),
   sendMessage: () => Promise.reject(new Error("agent runtime unreachable")),
   interrupt: () => Promise.reject(new Error("agent runtime unreachable")),
+  denyToolCalls: () => Promise.reject(new Error("agent runtime unreachable")),
   listEvents: () => Promise.reject(new Error("agent runtime unreachable")),
   readUsage: () => Promise.reject(new Error("agent runtime unreachable")),
 };

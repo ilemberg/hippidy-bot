@@ -65,6 +65,18 @@ export function createManagedAgentRuntime(
       await client.beta.sessions.events.send(sessionId, { events: [{ type: "user.interrupt" }] });
     },
 
+    async denyToolCalls(sessionId, toolUseIds, message) {
+      if (toolUseIds.length === 0) return;
+      await client.beta.sessions.events.send(sessionId, {
+        events: toolUseIds.map((id) => ({
+          type: "user.tool_confirmation" as const,
+          tool_use_id: id,
+          result: "deny" as const,
+          deny_message: message,
+        })),
+      });
+    },
+
     async listEvents(sessionId) {
       const records: AgentEventRecord[] = [];
       try {
@@ -184,7 +196,16 @@ export function toAgentEvent(event: BetaManagedAgentsSessionEvent): AgentEvent |
     case "session.status_running":
       return { kind: "running", id: event.id };
     case "session.status_idle":
-      return { kind: "idle", id: event.id, reason: event.stop_reason.type };
+      return event.stop_reason.type === "requires_action"
+        ? {
+            kind: "idle",
+            id: event.id,
+            reason: "requires_action",
+            blockedOn: event.stop_reason.event_ids,
+          }
+        : { kind: "idle", id: event.id, reason: event.stop_reason.type };
+    case "user.tool_confirmation":
+      return { kind: "tool_confirmation", id: event.id, toolUseId: event.tool_use_id };
     case "session.status_terminated":
       return { kind: "terminated", id: event.id };
     case "session.error":
