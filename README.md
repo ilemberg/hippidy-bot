@@ -89,19 +89,19 @@ push protection.
 4. Check production. Replace the URL with your production URL, and the token with yours:
 
    ```bash
-   curl -s https://YOUR-APP.vercel.app/health
+   curl -s https://hippidy-bot.vercel.app/health
    ```
 
    Expect `{"status":"ok"}`.
 
    ```bash
-   curl -s -o /dev/null -w '%{http_code}\n' -X POST https://YOUR-APP.vercel.app/v1/messages
+   curl -s -o /dev/null -w '%{http_code}\n' -X POST https://hippidy-bot.vercel.app/v1/messages
    ```
 
    Expect `401`.
 
    ```bash
-   curl -s -X POST https://YOUR-APP.vercel.app/v1/messages -H "Authorization: Bearer YOUR-TOKEN" -H 'content-type: application/json' -d '{"source":"slack","sourceEventId":"Ev-manual-check","conversation":{"workspaceId":"T0","channelId":"C0","threadId":"1.0","messageId":"1.0"},"actor":{"id":"U0"},"text":"hello","sentAt":"2026-11-18T00:00:00Z"}'
+   curl -s -X POST https://hippidy-bot.vercel.app/v1/messages -H "Authorization: Bearer YOUR-TOKEN" -H 'content-type: application/json' -d '{"source":"slack","sourceEventId":"Ev-manual-check","conversation":{"workspaceId":"T0","channelId":"C0","threadId":"1.0","messageId":"1.0"},"actor":{"id":"U0"},"text":"hello","sentAt":"2026-11-18T00:00:00Z"}'
    ```
 
    Expect a 202 body like `{"id":"...","status":"accepted"}`, and a `message.received` line in
@@ -112,10 +112,10 @@ push protection.
 
 ### When the second pull request is up, before merging it
 
-1. Open `slack/manifest.yaml` and copy its contents. Replace `YOUR-APP.vercel.app` with your
-   production domain (keep `/slack/events` on the end).
+1. Open `slack/manifest.yaml` and copy its contents. It already points at the production domain,
+   `hippidy-bot.vercel.app`.
 2. At https://api.slack.com/apps choose **Create New App**, then **From a manifest**, pick your
-   workspace, choose YAML, paste, and create. If Slack says the request URL is not verified,
+   workspace, choose the **YAML** tab (not JSON), paste, and create. If Slack says the request URL is not verified,
    that is expected for now. If Slack refuses to create the app because of the URL, delete the
    `request_url:` line from what you pasted and try again; you will add the URL in step 2 under
    "Then".
@@ -129,7 +129,7 @@ push protection.
 
 1. Merge the second pull request. Vercel deploys it to production with the Slack variables.
 2. In the Slack app, open **Event Subscriptions**. Check it is switched on and the request URL is
-   `https://YOUR-APP.vercel.app/slack/events`, then click **Retry** (or enter it). Slack should
+   `https://hippidy-bot.vercel.app/slack/events`, then click **Retry** (or enter it). Slack should
    show **Verified**. Check `app_mention` is listed under bot events, and save.
 3. In Slack, invite the bot to a channel (`/invite @hippidy-bot`) and mention it:
    `@hippidy-bot hello`. Within a couple of seconds the message gets a 👀 reaction, and the Vercel
