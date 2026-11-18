@@ -12,15 +12,19 @@ oauth_config:
   scopes:
     bot:
       - app_mentions:read
-      - reactions:write
-      # Not used until slice 2 (replies in threads); added now to avoid a reinstall.
       - chat:write
+      - reactions:read
+      - reactions:write
+      # Display names, so the agent can address people (decision 34).
+      - users:read
 settings:
   event_subscriptions:
     # The Vercel production domain. Change it here if the production domain changes.
     request_url: https://hippidy-bot.vercel.app/slack/events
     bot_events:
       - app_mention
+      # A 🛑 on a message stops the agent in that thread (decision 60).
+      - reaction_added
   org_deploy_enabled: false
   socket_mode_enabled: false
   token_rotation_enabled: false

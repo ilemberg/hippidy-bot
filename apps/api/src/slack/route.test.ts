@@ -61,6 +61,7 @@ function setup(appEnv: Env = env) {
       reacted(input);
       return Promise.resolve();
     },
+    userName: () => Promise.resolve(undefined),
   });
   const conversations = {
     db,

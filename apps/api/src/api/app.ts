@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   CORRELATION_ID_HEADER,
   inboundMessageSchema,
+  stopRequestSchema,
   type AcceptedMessage,
 } from "@hippidy/contracts";
 import { Hono } from "hono";
@@ -14,6 +15,7 @@ import { requireServiceToken } from "./auth.ts";
 import {
   reconcile,
   receiveMessage,
+  stopConversation,
   syncConversation,
   type ConversationDeps,
 } from "./conversations.ts";
@@ -92,6 +94,27 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
       ...(result.duplicate ? { duplicate: true } : {}),
     };
     return c.json(accepted, 202);
+  });
+
+  // Stops the agent in a conversation (decision 60).
+  api.post("/v1/stop", requireServiceToken(deps.config.serviceToken), limitBody, async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return errorResponse(c, 400, "invalid_request", "Request body must be JSON");
+    }
+    const parsed = stopRequestSchema.safeParse(body);
+    if (
+      !parsed.success ||
+      (parsed.data.threadId === undefined && parsed.data.messageId === undefined)
+    ) {
+      return errorResponse(c, 400, "invalid_request", "Request body is invalid");
+    }
+    if (deps.conversations === undefined) {
+      return errorResponse(c, 503, "not_configured", "Conversations are not configured");
+    }
+    return c.json(await stopConversation(deps.conversations, parsed.data, c.var.log), 202);
   });
 
   // Anthropic calls this when a session changes state (decision 13). The body is thin: it

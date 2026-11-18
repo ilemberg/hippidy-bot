@@ -122,6 +122,36 @@ export async function lockConversation(tx: Db, id: string): Promise<Conversation
   return toConversation(one(rows));
 }
 
+/** The conversation for a thread, if there is one (never creates it). */
+export async function findConversationByKey(
+  db: Db,
+  key: ConversationKey,
+): Promise<Conversation | undefined> {
+  const rows = await db.query(
+    `select ${conversationColumns} from conversations
+     where source = $1 and workspace_id = $2 and channel_id = $3 and thread_id = $4`,
+    [key.source, key.workspaceId, key.channelId, key.threadId],
+  );
+  return rows[0] === undefined ? undefined : toConversation(rows[0]);
+}
+
+/** The conversation one of its inbound messages belongs to, if the message is known. */
+export async function findConversationByMessage(
+  db: Db,
+  message: { source: MessageSource; workspaceId: string; channelId: string; messageId: string },
+): Promise<Conversation | undefined> {
+  const rows = await db.query(
+    `select ${conversationColumns
+      .split(", ")
+      .map((c) => `c.${c}`)
+      .join(", ")}
+     from conversations c join inbound_messages m on m.conversation_id = c.id
+     where m.source = $1 and m.workspace_id = $2 and m.channel_id = $3 and m.message_id = $4`,
+    [message.source, message.workspaceId, message.channelId, message.messageId],
+  );
+  return rows[0] === undefined ? undefined : toConversation(rows[0]);
+}
+
 export async function findConversationBySession(
   db: Db,
   agentSessionId: string,
@@ -281,8 +311,8 @@ export async function recordInbound(
   const inserted = await db.query(
     `insert into inbound_messages
        (conversation_id, source, source_event_id, workspace_id, channel_id, message_id,
-        actor_id, text, sent_at)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        actor_id, text, sent_at, actor_name)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      on conflict do nothing
      returning id`,
     [
@@ -295,6 +325,7 @@ export async function recordInbound(
       message.actor.id,
       message.text,
       message.sentAt,
+      message.actor.displayName ?? null,
     ],
   );
   if (inserted[0] !== undefined) {
@@ -316,6 +347,22 @@ export async function recordInbound(
   );
   const row = z.object({ id: z.string(), forwarded_at: z.date().nullable() }).parse(one(existing));
   return { id: row.id, duplicate: true, forwarded: row.forwarded_at !== null };
+}
+
+/** The number of messages in the conversation still waiting for an outcome. */
+export async function pendingMessageCount(db: Db, conversationId: string): Promise<number> {
+  const rows = await db.query(
+    `select count(*)::int as n from inbound_messages
+     where conversation_id = $1 and status = 'received'`,
+    [conversationId],
+  );
+  return z.object({ n: z.number().int() }).parse(one(rows)).n;
+}
+
+/** Whether an inbound message is still waiting for an outcome (not stopped meanwhile). */
+export async function isStillPending(db: Db, inboundId: string): Promise<boolean> {
+  const rows = await db.query(`select status from inbound_messages where id = $1`, [inboundId]);
+  return z.object({ status: z.string() }).parse(one(rows)).status === "received";
 }
 
 /** Marks an inbound message as handed to the agent, with the event id the runtime gave it. */
@@ -345,6 +392,7 @@ export async function recordForwardFailure(db: Db, inboundId: string): Promise<n
 export interface PendingForward {
   id: string;
   actorId: string;
+  actorName: string | undefined;
   text: string;
 }
 
@@ -355,15 +403,22 @@ export async function pendingForwards(
   olderThanSeconds: number,
 ): Promise<PendingForward[]> {
   const rows = await db.query(
-    `select id, actor_id, text from inbound_messages
+    `select id, actor_id, actor_name, text from inbound_messages
      where conversation_id = $1 and forwarded_at is null and status = 'received'
        and created_at < now() - make_interval(secs => $2)
      order by created_at`,
     [conversationId, olderThanSeconds],
   );
   return rows.map((row) => {
-    const r = z.object({ id: z.string(), actor_id: z.string(), text: z.string() }).parse(row);
-    return { id: r.id, actorId: r.actor_id, text: r.text };
+    const r = z
+      .object({
+        id: z.string(),
+        actor_id: z.string(),
+        actor_name: z.string().nullable(),
+        text: z.string(),
+      })
+      .parse(row);
+    return { id: r.id, actorId: r.actor_id, actorName: r.actor_name ?? undefined, text: r.text };
   });
 }
 
@@ -375,6 +430,8 @@ export type Settlement =
   | { kind: "forwarded_without_event"; cutoff: Date }
   /** Every message handed to the agent (the session can take no more). */
   | { kind: "all_forwarded" }
+  /** Every pending message, handed over or not (a stop). */
+  | { kind: "all_pending" }
   /** Specific inbound messages, by their id here. */
   | { kind: "inbound"; ids: string[] };
 
@@ -398,6 +455,7 @@ export async function settleMessages(
       forwarded_without_event:
         "agent_event_id is null and forwarded_at is not null and forwarded_at <= $3",
       all_forwarded: "forwarded_at is not null",
+      all_pending: "true",
       inbound: "id = any($3::uuid[])",
     }[settlement.kind];
     const params: unknown[] = [conversationId, status];

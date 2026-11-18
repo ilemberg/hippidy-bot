@@ -10,6 +10,7 @@ import {
   notes,
   reconcile,
   receiveMessage,
+  stopConversation,
   syncConversation,
   type ConversationDeps,
 } from "./conversations.ts";
@@ -386,5 +387,213 @@ describe("reconcile", () => {
     runtime.failNext.listEvents = new Error("anthropic down");
     expect(await reconcile(deps, log)).toEqual({ checked: 1, failed: 1 });
     expect((await onlyConversation()).status).toBe("waiting");
+  });
+});
+
+describe("names", () => {
+  it("tells the agent who is talking by name when the source knows it", async () => {
+    await receiveMessage(deps, message(1, { actor: { id: "U1", displayName: "Ilya" } }), log);
+    expect(runtime.sessions.get(runtime.onlySessionId())?.sent).toEqual([
+      "From: Ilya (Slack user U1)\n\nquestion 1",
+    ]);
+  });
+
+  it("keeps the name for messages handed over later by reconcile", async () => {
+    runtime.failNext.startSession = new Error("anthropic down");
+    await expect(
+      receiveMessage(deps, message(1, { actor: { id: "U1", displayName: "Ilya" } }), log),
+    ).rejects.toThrow();
+    await age(120);
+    await reconcile(deps, log);
+    expect(runtime.sessions.get(runtime.onlySessionId())?.sent).toEqual([
+      "From: Ilya (Slack user U1)\n\nquestion 1",
+    ]);
+  });
+});
+
+describe("stopConversation", () => {
+  const thread = { source: "slack" as const, workspaceId: "T1", channelId: "C1" };
+
+  it("interrupts a working agent, marks its messages and the stop message stopped, and says so", async () => {
+    await receiveMessage(deps, message(1), log);
+    const sessionId = runtime.onlySessionId();
+
+    const result = await stopConversation(
+      deps,
+      {
+        ...thread,
+        sourceEventId: "EvStop",
+        threadId: "100.000001",
+        stopMessage: { messageId: "100.000009", sentAt: "2026-11-18T00:00:09.000Z" },
+        actor: { id: "U1" },
+      },
+      log,
+    );
+
+    expect(result).toEqual({ status: "stopped" });
+    expect(runtime.sessions.get(sessionId)?.interrupted).toBe(1);
+    expect(slack.replies()).toEqual([notes.stopped]);
+    expect(slack.statuses()).toEqual([
+      { messageIds: ["100.000009"], status: "stopped" },
+      { messageIds: ["100.000001"], status: "stopped" },
+    ]);
+    expect((await conversationOf(sessionId)).status).toBe("stopped");
+  });
+
+  it("does not mark the stopped messages answered when the interrupted turn ends", async () => {
+    await receiveMessage(deps, message(1), log);
+    const sessionId = runtime.onlySessionId();
+    await stopConversation(
+      deps,
+      { ...thread, sourceEventId: "EvStop", threadId: "100.000001", actor: { id: "U1" } },
+      log,
+    );
+    runtime.reply(sessionId); // the session goes idle after the interrupt
+    await sync(sessionId);
+    expect(slack.statuses()).toEqual([{ messageIds: ["100.000001"], status: "stopped" }]);
+  });
+
+  it("finds the conversation from a message, for a 🛑 reaction", async () => {
+    await receiveMessage(deps, message(1), log);
+    const result = await stopConversation(
+      deps,
+      { ...thread, sourceEventId: "EvR", messageId: "100.000001", actor: { id: "U1" } },
+      log,
+    );
+    expect(result).toEqual({ status: "stopped" });
+  });
+
+  it("says when there is nothing to stop, and the thread carries on afterwards", async () => {
+    await receiveMessage(deps, message(1), log);
+    const sessionId = runtime.onlySessionId();
+    runtime.reply(sessionId, "Done.");
+    await sync(sessionId);
+
+    const result = await stopConversation(
+      deps,
+      {
+        ...thread,
+        sourceEventId: "EvStop",
+        threadId: "100.000001",
+        stopMessage: { messageId: "100.000009", sentAt: "2026-11-18T00:00:09.000Z" },
+        actor: { id: "U1" },
+      },
+      log,
+    );
+    expect(result).toEqual({ status: "nothing_to_stop" });
+    expect(runtime.sessions.get(sessionId)?.interrupted).toBe(0);
+    expect(slack.replies()).toEqual(["Done.", notes.nothing_to_stop]);
+
+    await receiveMessage(deps, message(2), log);
+    expect(runtime.sessions.get(sessionId)?.sent).toHaveLength(2);
+  });
+
+  it("ignores a 🛑 on a finished thread, without a note", async () => {
+    await receiveMessage(deps, message(1), log);
+    const sessionId = runtime.onlySessionId();
+    runtime.reply(sessionId, "Done.");
+    await sync(sessionId);
+    const result = await stopConversation(
+      deps,
+      { ...thread, sourceEventId: "EvR", messageId: "100.000001", actor: { id: "U1" } },
+      log,
+    );
+    expect(result).toEqual({ status: "nothing_to_stop" });
+    expect(slack.replies()).toEqual(["Done."]);
+  });
+
+  it("answers a stop that starts a thread", async () => {
+    const result = await stopConversation(
+      deps,
+      {
+        ...thread,
+        sourceEventId: "EvStop",
+        threadId: "300.000001",
+        stopMessage: { messageId: "300.000001", sentAt: "2026-11-18T00:00:09.000Z" },
+        actor: { id: "U1" },
+      },
+      log,
+    );
+    expect(result).toEqual({ status: "nothing_to_stop" });
+    expect(slack.replies()).toEqual([notes.nothing_to_stop]);
+    expect(slack.statuses()).toEqual([{ messageIds: ["300.000001"], status: "stopped" }]);
+  });
+
+  it("never hands the stop message to the agent, even when the interrupt fails", async () => {
+    await receiveMessage(deps, message(1), log);
+    const sessionId = runtime.onlySessionId();
+    runtime.interrupt = () => Promise.reject(new Error("anthropic down"));
+    await expect(
+      stopConversation(
+        deps,
+        {
+          ...thread,
+          sourceEventId: "EvStop",
+          threadId: "100.000001",
+          stopMessage: { messageId: "100.000009", sentAt: "2026-11-18T00:00:09.000Z" },
+          actor: { id: "U1" },
+        },
+        log,
+      ),
+    ).rejects.toThrow("anthropic down");
+    await age(120);
+    await reconcile(deps, log);
+    expect(runtime.sessions.get(sessionId)?.sent).toEqual([formatForAgent("U1", "question 1")]);
+  });
+
+  it("also stops messages not yet handed to the agent, which are then never sent", async () => {
+    runtime.failNext.startSession = new Error("anthropic down");
+    await expect(receiveMessage(deps, message(1), log)).rejects.toThrow();
+
+    const result = await stopConversation(
+      deps,
+      { ...thread, sourceEventId: "EvStop", threadId: "100.000001", actor: { id: "U1" } },
+      log,
+    );
+    expect(result).toEqual({ status: "stopped" });
+    expect(slack.replies()).toEqual([notes.stopped]);
+    expect(slack.statuses()).toEqual([{ messageIds: ["100.000001"], status: "stopped" }]);
+
+    await age(120);
+    await reconcile(deps, log);
+    expect(runtime.sessions.size).toBe(0);
+  });
+
+  it("is safe to repeat as a retried stop message", async () => {
+    await receiveMessage(deps, message(1), log);
+    const request = {
+      ...thread,
+      sourceEventId: "EvStop",
+      threadId: "100.000001",
+      stopMessage: { messageId: "100.000009", sentAt: "2026-11-18T00:00:09.000Z" },
+      actor: { id: "U1" },
+    };
+    await stopConversation(deps, request, log);
+    await stopConversation(deps, request, log);
+    expect(slack.replies()).toEqual([notes.stopped]);
+    expect(slack.statuses()).toHaveLength(2);
+  });
+
+  it("reports a stop for a thread it does not know", async () => {
+    const result = await stopConversation(
+      deps,
+      { ...thread, sourceEventId: "EvStop", threadId: "999.1", actor: { id: "U1" } },
+      log,
+    );
+    expect(result).toEqual({ status: "unknown_conversation" });
+    expect(slack.delivered).toEqual([]);
+  });
+
+  it("is safe to repeat (a retried stop posts once)", async () => {
+    await receiveMessage(deps, message(1), log);
+    const request = {
+      ...thread,
+      sourceEventId: "EvStop",
+      threadId: "100.000001",
+      actor: { id: "U1" },
+    };
+    await stopConversation(deps, request, log);
+    await stopConversation(deps, request, log);
+    expect(slack.replies()).toEqual([notes.stopped]);
   });
 });

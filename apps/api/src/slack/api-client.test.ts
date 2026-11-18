@@ -68,4 +68,25 @@ describe("createApiClient", () => {
     await api.postMessage(message, "Ev1");
     expect(seen[0]?.headers.get("authorization")).toBe("Bearer");
   });
+
+  it("sends a stop and reads its result", async () => {
+    const { api, seen } = client(
+      () => Response.json({ status: "stopped" }, { status: 202 }),
+      "tok",
+    );
+    const request = {
+      source: "slack" as const,
+      sourceEventId: "EvS",
+      workspaceId: "T1",
+      channelId: "C1",
+      messageId: "1.1",
+      actor: { id: "U1" },
+    };
+    expect(await api.stop(request, "EvS")).toEqual({
+      kind: "done",
+      result: { status: "stopped" },
+    });
+    expect(seen[0]?.url).toBe("http://in-process.invalid/v1/stop");
+    expect(await seen[0]?.json()).toEqual(request);
+  });
 });

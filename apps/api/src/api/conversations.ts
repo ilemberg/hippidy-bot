@@ -4,6 +4,8 @@ import type {
   InboundMessage,
   MessageSource,
   OutboundDelivery,
+  StopRequest,
+  StopResult,
 } from "@hippidy/contracts";
 import type { AgentRuntime } from "../agent/runtime.ts";
 import type { Logger } from "../log.ts";
@@ -14,13 +16,17 @@ import {
   conversationsToReconcile,
   databaseNow,
   enqueueDelivery,
+  findConversationByKey,
+  findConversationByMessage,
   findOrCreateConversation,
   getConversation,
+  isStillPending,
   markDeliveryFailed,
   markDeliverySent,
   markForwarded,
   markWaiting,
   pendingForwards,
+  pendingMessageCount,
   recordForwardFailure,
   recordInbound,
   releaseSessionStart,
@@ -75,6 +81,8 @@ export const notes = {
     "This thread's session has ended, so I can't answer here any more. Start a new thread and mention me there.",
   undeliverable:
     "I couldn't pass your message on to the agent, even after several tries. Please try again later.",
+  stopped: "Stopped. Mention me again when you want to carry on.",
+  nothing_to_stop: "There's nothing running in this thread to stop.",
 } as const;
 
 export interface ReceiveResult {
@@ -113,9 +121,13 @@ export async function receiveMessage(
 
   try {
     const sessionId = await ensureSession(deps, conversation, log);
+    if (!(await isStillPending(deps.db, recorded.id))) {
+      log.info("conversation.stopped_before_send", { inboundId: recorded.id });
+      return { id: recorded.id, duplicate: recorded.duplicate };
+    }
     const agentEventId = await deps.runtime.sendMessage(
       sessionId,
-      formatForAgent(message.actor.id, message.text),
+      formatForAgent(message.actor.id, message.text, message.actor.displayName),
     );
     await markForwarded(deps.db, recorded.id, agentEventId);
     await markWaiting(deps.db, conversation.id);
@@ -132,10 +144,12 @@ export async function receiveMessage(
   return { id: recorded.id, duplicate: recorded.duplicate };
 }
 
-/** The text the agent sees: who sent it, then what they wrote. */
-export function formatForAgent(actorId: string, text: string): string {
+/** The text the agent sees: who sent it (by name when known), then what they wrote. */
+export function formatForAgent(actorId: string, text: string, displayName?: string): string {
   const body = text.trim() === "" ? "(no text, just a mention)" : text;
-  return `From: Slack user ${actorId}\n\n${body}`;
+  const sender =
+    displayName === undefined ? `Slack user ${actorId}` : `${displayName} (Slack user ${actorId})`;
+  return `From: ${sender}\n\n${body}`;
 }
 
 async function ensureSession(
@@ -416,7 +430,7 @@ async function forwardPending(
       const sessionId = await ensureSession(deps, conversation, log);
       const agentEventId = await deps.runtime.sendMessage(
         sessionId,
-        formatForAgent(message.actorId, message.text),
+        formatForAgent(message.actorId, message.text, message.actorName),
       );
       await markForwarded(deps.db, message.id, agentEventId);
       await markWaiting(deps.db, conversation.id);
@@ -458,6 +472,124 @@ async function giveUpIfTooLong(
     note: notes.timeout,
   });
   log.warn("reconcile.gave_up", { waitedMinutes: Math.round(waitedMs / 60_000) });
+}
+
+/**
+ * Stops the agent in a conversation (decision 60): interrupts the session if it is working,
+ * marks every pending message stopped (🛑), and says so in the thread. The stop message
+ * itself, when there is one, is marked stopped too. Sends the result straight away; the
+ * source adds no 👀 to a stop.
+ */
+export async function stopConversation(
+  deps: ConversationDeps,
+  request: StopRequest,
+  log: Logger,
+): Promise<StopResult> {
+  const viaMessage = request.stopMessage !== undefined;
+  let conversation =
+    request.threadId !== undefined
+      ? await findConversationByKey(deps.db, {
+          source: request.source,
+          workspaceId: request.workspaceId,
+          channelId: request.channelId,
+          threadId: request.threadId,
+        })
+      : request.messageId !== undefined
+        ? await findConversationByMessage(deps.db, {
+            source: request.source,
+            workspaceId: request.workspaceId,
+            channelId: request.channelId,
+            messageId: request.messageId,
+          })
+        : undefined;
+  if (conversation === undefined) {
+    // A stop message starting a thread still deserves an answer; a reaction on a message the
+    // API never saw (another bot's, say) is ignored.
+    if (!viaMessage || request.threadId === undefined) {
+      log.info("conversation.stop_unknown", { channelId: request.channelId });
+      return { status: "unknown_conversation" };
+    }
+    conversation = await findOrCreateConversation(deps.db, {
+      source: request.source,
+      workspaceId: request.workspaceId,
+      channelId: request.channelId,
+      threadId: request.threadId,
+    });
+  }
+
+  // Taken before the stop message is recorded: is anything waiting for the agent?
+  const working = (await pendingMessageCount(deps.db, conversation.id)) > 0;
+  const key = `stop:${request.sourceEventId}`;
+
+  // The stop message is settled first, so it can never be handed to the agent as a question,
+  // even if what follows fails.
+  if (request.stopMessage !== undefined) {
+    const recorded = await recordInbound(deps.db, conversation.id, {
+      source: request.source,
+      sourceEventId: request.sourceEventId,
+      conversation: {
+        workspaceId: request.workspaceId,
+        channelId: request.channelId,
+        threadId: conversation.key.threadId,
+        messageId: request.stopMessage.messageId,
+      },
+      actor: request.actor,
+      text: "stop",
+      sentAt: request.stopMessage.sentAt,
+    });
+    await settleAndQueue(
+      deps,
+      conversation,
+      "stopped",
+      { kind: "inbound", ids: [recorded.id] },
+      log,
+      {
+        key: `${key}:message`,
+        note: undefined,
+      },
+    );
+  }
+
+  if (working) {
+    const sessionId = sessionIdOf(conversation);
+    if (sessionId !== undefined) await deps.runtime.interrupt(sessionId);
+    // Every pending message, including any not yet handed over (those are never sent now).
+    await settleAndQueue(deps, conversation, "stopped", { kind: "all_pending" }, log, {
+      key,
+      note: notes.stopped,
+    });
+  } else if (viaMessage) {
+    await queue(deps, conversation, `note:${key}`, "note", {
+      kind: "reply",
+      target: targetOf(conversation),
+      text: notes.nothing_to_stop,
+    });
+  }
+  // A 🛑 on a finished thread does nothing: no note for every stray reaction.
+
+  await flushSoon(deps, conversation.id, log);
+  log.info("conversation.stopped", { conversationId: conversation.id, working });
+  return { status: working ? "stopped" : "nothing_to_stop" };
+}
+
+/**
+ * Sends queued deliveries now, waiting briefly if a sync holds the conversation; if it is
+ * still busy after that, the running sync or the next reconcile sends them.
+ */
+async function flushSoon(deps: ConversationDeps, conversationId: string, log: Logger) {
+  const sleep = deps.sleep ?? defaultSleep;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    if (await claimSyncLease(deps.db, conversationId)) {
+      try {
+        await flushDeliveries(deps, conversationId, log);
+      } finally {
+        await releaseSyncLease(deps.db, conversationId);
+      }
+      return;
+    }
+    await sleep(300);
+  }
+  log.info("conversation.flush_deferred", { conversationId });
 }
 
 export interface ReconcileResult {
