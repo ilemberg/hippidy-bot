@@ -175,7 +175,11 @@ async function probeToken(): Promise<void> {
       : `no: HTTP ${String(repo.status)}${needed(repo.headers)}`,
   );
 
-  const checks = await github("GET", `/repos/${repository}/commits/main/check-runs?per_page=5`);
+  // Only a finished CI job has a log; this run's own job is on main too, still running.
+  const checks = await github(
+    "GET",
+    `/repos/${repository}/commits/main/check-runs?per_page=20&status=completed&check_name=${encodeURIComponent("Lint, typecheck, test")}`,
+  );
   const runs = field(checks.json, "check_runs");
   const firstRun = Array.isArray(runs) ? (runs[0] as unknown) : undefined;
   found(
