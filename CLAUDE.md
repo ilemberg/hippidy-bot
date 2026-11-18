@@ -19,10 +19,14 @@ all pass. CI runs these, then `pnpm build && pnpm smoke`.
 
 - `apps/api` is the one deployable. `src/index.ts` is the Vercel entry; `src/compose.ts` is the
   composition root, the only file that wires modules together.
+- `apps/api/src/slack` is the Slack adapter: Bolt with the `@vercel/slack-bolt` receiver at
+  `POST /slack/events`. It maps Slack events to the contract and calls the API through
+  `ApiClient`. A lint rule stops it importing `src/api` or `src/compose.ts`.
 - `apps/api/src/api` is the core API. It is channel-agnostic: it knows sources, conversations
   and messages, never Slack threads or Slack markup.
 - Slack (and later the UI) reach the system only through the API's routes and contract. The
-  Slack adapter imports nothing from `src/api`; it gets an API client from `compose.ts`.
+  Slack adapter imports nothing from `src/api`; it gets an API client from `compose.ts`, which
+  dispatches in-process through the API's own route.
 - `packages/contracts` holds every request, response and error schema (Zod). A change to the
   API's shape starts there.
 
@@ -46,6 +50,9 @@ all pass. CI runs these, then `pnpm build && pnpm smoke`.
 
 - Vercel only treats a file as the Hono entry if it imports `hono` and creates the app itself,
   and it checks `src/app.ts` before `src/index.ts`. Do not add `src/app.ts` or `src/server.ts`.
+- Vercel's build runs its own type check, in which the global `Response` type is empty. Code
+  that reads a Response from Hono's `app.fetch` must go through `ResponseLike` (see
+  `src/compose.ts`). Check a risky change with a local `vercel build` if in doubt.
 - Workspace packages export their TypeScript source under the `source` condition (used by
   `tsc`, Vitest and `pnpm dev`) and compiled `dist/` by default (used on Vercel). The API's
   `build` script compiles them; Vercel runs it.

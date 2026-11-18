@@ -70,8 +70,8 @@ Decisions behind this plan: `decisions.md` 18, 21 to 28 and 30 to 46.
   likely still running. Other retries are processed, because the first attempt may have
   failed before doing anything (decision 40). Real deduplication needs storage and arrives in
   slice 2.
-- The raw `app_mention` event is logged once per event, so a real one can be copied for the
-  test fixture after the demo.
+- The raw `app_mention` event is logged, with Slack's legacy verification `token` redacted, so a
+  real one can be copied for the test fixture after the demo. A processed retry logs it again.
 - Bolt and the receiver use the same JSON logger as the API.
 - The mention handling is a plain function that receives the API client, the Slack client and
   the logger, so it can be tested without HTTP (decision 41).
@@ -80,15 +80,17 @@ Decisions behind this plan: `decisions.md` 18, 21 to 28 and 30 to 46.
 
 How the adapter reaches the API (decision 30): it goes through the same route, auth check and
 validation as any outside caller, dispatched inside the process rather than over the network.
-The entry file (`apps/api/src/index.ts`) hands the API's request handler to the adapter as a
-small client. That keeps the contract exercised from day one without a second network hop,
+The composition root (`apps/api/src/compose.ts`, called from the entry file `src/index.ts`)
+hands the app's request handler to the adapter as a small client (decision 47). That keeps the contract exercised from day one without a second network hop,
 and it can be switched to a real network call by changing that one client.
 
 ### Slack app definition
 
 - `slack/manifest.yaml` in the repo: app name, bot user, the `app_mention` event, and the
   scopes `app_mentions:read`, `reactions:write`, `chat:write` (the last is for slice 2, added
-  now to avoid reinstalling the app).
+  now to avoid reinstalling the app). It includes the events URL with a placeholder domain,
+  because Slack's docs do not say whether a manifest with events can omit it; you put your
+  production domain in before creating the app.
 
 ### Tests
 
@@ -135,7 +137,7 @@ and it can be switched to a real network call by changing that one client.
 | After the second pull request is up, before merging it | Create the Slack app at api.slack.com from `slack/manifest.yaml` and install it to your workspace | Needs your Slack account |
 | Same time | Add the Slack bot token and signing secret in Vercel, Production environment only | Secrets go into Vercel directly, never into chat or the repo |
 | Then | Merge the second pull request. Production deploys with the Slack variables | The deploy picks up the variables |
-| After that deploy | Paste the production URL plus `/slack/events` into the Slack app's event settings; Slack checks it and shows "verified" | Slack only accepts a URL that is already live |
+| After that deploy | In the Slack app's Event Subscriptions, check the URL is the production URL plus `/slack/events` and click Retry; Slack checks it and shows "Verified" | Slack only verifies a URL that is already live |
 | Then | Invite the bot to a channel and mention it | The live demo. Real Slack cannot be tested from the build session |
 | Soon after the demo | Copy the raw `app_mention` event from the Vercel log and hand it over for the test fixture | Only you can read the Vercel logs, and the free plan keeps them only briefly |
 

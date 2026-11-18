@@ -1,0 +1,75 @@
+import { describe, expect, it } from "vitest";
+import fixture from "./fixtures/app-mention.json" with { type: "json" };
+import {
+  appMentionEnvelopeSchema,
+  slackTsToIso,
+  stripBotMention,
+  toInboundMessage,
+} from "./map.ts";
+
+describe("toInboundMessage", () => {
+  it("maps Slack's documented app_mention example to the API's message", () => {
+    const envelope = appMentionEnvelopeSchema.parse(fixture);
+    expect(toInboundMessage(envelope)).toEqual({
+      source: "slack",
+      sourceEventId: "Ev0LAN670R",
+      conversation: {
+        workspaceId: "T061EG9R6",
+        channelId: "C0LAN2Q65",
+        threadId: "1515449522.000016",
+        messageId: "1515449522.000016",
+      },
+      actor: { id: "U061F7AUR" },
+      text: "What is the hour of the pearl, ?",
+      sentAt: "2018-01-08T22:12:02.000Z",
+    });
+  });
+
+  it("uses the parent's thread_ts for a reply in a thread", () => {
+    const envelope = appMentionEnvelopeSchema.parse({
+      ...fixture,
+      event: { ...fixture.event, ts: "1515449600.000100", thread_ts: "1515449522.000016" },
+    });
+    const message = toInboundMessage(envelope);
+    expect(message.conversation.threadId).toBe("1515449522.000016");
+    expect(message.conversation.messageId).toBe("1515449600.000100");
+  });
+
+  it("prefers the bot id from authorizations", () => {
+    const envelope = appMentionEnvelopeSchema.parse({
+      ...fixture,
+      authorizations: [{ user_id: "UBOT" }],
+      event: { ...fixture.event, text: "<@UBOT> hi <@U0LAN0Z89>" },
+    });
+    expect(toInboundMessage(envelope).text).toBe("hi <@U0LAN0Z89>");
+  });
+
+  it("rejects a mention with no sender", () => {
+    const { user: _user, ...event } = fixture.event;
+    expect(appMentionEnvelopeSchema.safeParse({ ...fixture, event }).success).toBe(false);
+  });
+});
+
+describe("stripBotMention", () => {
+  it.each([
+    ["<@UBOT> deploy it", "deploy it"],
+    ["deploy it <@UBOT>", "deploy it"],
+    ["hey <@UBOT|hippidy-bot>, deploy it", "hey , deploy it"],
+    ["<@UBOT> <@UBOT> twice", "twice"],
+    ["<@UBOT>", ""],
+    ["ask <@UOTHER> too", "ask <@UOTHER> too"],
+    ["line one\nline two <@UBOT>", "line one\nline two"],
+  ])("%j becomes %j", (input, expected) => {
+    expect(stripBotMention(input, "UBOT")).toBe(expected);
+  });
+
+  it("leaves the text alone when the bot id is unknown", () => {
+    expect(stripBotMention(" <@UBOT> hi ", undefined)).toBe("<@UBOT> hi");
+  });
+});
+
+describe("slackTsToIso", () => {
+  it("keeps millisecond precision", () => {
+    expect(slackTsToIso("1515449522.123456")).toBe("2018-01-08T22:12:02.123Z");
+  });
+});

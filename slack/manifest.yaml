@@ -1,0 +1,26 @@
+# Slack app definition for hippidy-bot. Create the app from this file at
+# https://api.slack.com/apps (Create New App, From a manifest, YAML tab). See the README's Setup
+# section.
+display_information:
+  name: hippidy-bot
+  description: An AI teammate for a product engineering team.
+features:
+  bot_user:
+    display_name: hippidy-bot
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read
+      - reactions:write
+      # Not used until slice 2 (replies in threads); added now to avoid a reinstall.
+      - chat:write
+settings:
+  event_subscriptions:
+    # The Vercel production domain. Change it here if the production domain changes.
+    request_url: https://hippidy-bot.vercel.app/slack/events
+    bot_events:
+      - app_mention
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
