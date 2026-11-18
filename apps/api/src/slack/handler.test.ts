@@ -238,4 +238,11 @@ describe("handleReaction", () => {
     expect(await handleReaction(reaction({ user: "UBOT" }), deps)).toBe("ignored");
     expect(stops).toEqual([]);
   });
+
+  it("ignores a 🛑 when it can't tell the bot's own reactions apart", async () => {
+    const { deps, stops } = setup();
+    const { authorizations: _a, ...withoutBotId } = reaction();
+    expect(await handleReaction(withoutBotId, deps)).toBe("ignored");
+    expect(stops).toEqual([]);
+  });
 });

@@ -147,6 +147,9 @@ All answered on 2026-11-18. B2 to B9 are in
 
 ## As built (pull request C)
 
+- Names and stop as in decisions 71 to 73. To check live: whether Managed Agents still
+  answers messages that were queued when the interrupt arrived (they are marked 🛑, so an
+  answer to them would contradict that).
 - Names and stop as in decisions 71 and 72. The Slack app needs its manifest updated and one
   reinstall (README, "Slice 2 setup: names and stop").
 

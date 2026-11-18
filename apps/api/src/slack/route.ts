@@ -31,10 +31,11 @@ const realSlackActions = (client: webApi.WebClient): SlackActions => ({
     const cached = names.get(userId);
     if (cached !== undefined && cached.until > Date.now()) return cached.name;
     const { user } = await client.users.info({ user: userId });
-    const name =
-      [user?.profile?.display_name, user?.profile?.real_name, user?.name].find(
-        (candidate) => candidate !== undefined && candidate.trim() !== "",
-      ) ?? undefined;
+    // Trimmed and capped: the contract allows 255 characters, and a longer name must not
+    // cost the whole message.
+    const name = [user?.profile?.display_name, user?.profile?.real_name, user?.name]
+      .map((candidate) => candidate?.trim().slice(0, 255))
+      .find((candidate) => candidate !== undefined && candidate !== "");
     names.set(userId, { name, until: Date.now() + NAME_TTL_MS });
     return name;
   },

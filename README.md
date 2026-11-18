@@ -222,6 +222,8 @@ more permissions and one more event. After this pull request merges:
 To stop the agent in a thread: put a 🛑 (`:octagonal_sign:`) reaction on any message of yours
 in that thread, or send a message that is only `@hippidy-bot stop`. The bot interrupts the
 agent, marks the pending messages 🛑 and says so in the thread. "Don't stop" never stops it.
+A 🛑 on a thread where nothing is running does nothing; a stop message there gets "nothing
+running". Text the agent had already written before the stop may still arrive.
 
 ## Planning docs
 

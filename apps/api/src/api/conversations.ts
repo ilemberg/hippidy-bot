@@ -20,11 +20,13 @@ import {
   findConversationByMessage,
   findOrCreateConversation,
   getConversation,
+  isStillPending,
   markDeliveryFailed,
   markDeliverySent,
   markForwarded,
   markWaiting,
   pendingForwards,
+  pendingMessageCount,
   recordForwardFailure,
   recordInbound,
   releaseSessionStart,
@@ -119,6 +121,10 @@ export async function receiveMessage(
 
   try {
     const sessionId = await ensureSession(deps, conversation, log);
+    if (!(await isStillPending(deps.db, recorded.id))) {
+      log.info("conversation.stopped_before_send", { inboundId: recorded.id });
+      return { id: recorded.id, duplicate: recorded.duplicate };
+    }
     const agentEventId = await deps.runtime.sendMessage(
       sessionId,
       formatForAgent(message.actor.id, message.text, message.actor.displayName),
@@ -479,7 +485,8 @@ export async function stopConversation(
   request: StopRequest,
   log: Logger,
 ): Promise<StopResult> {
-  const conversation =
+  const viaMessage = request.stopMessage !== undefined;
+  let conversation =
     request.threadId !== undefined
       ? await findConversationByKey(deps.db, {
           source: request.source,
@@ -496,11 +503,26 @@ export async function stopConversation(
           })
         : undefined;
   if (conversation === undefined) {
-    log.info("conversation.stop_unknown", { channelId: request.channelId });
-    return { status: "unknown_conversation" };
+    // A stop message starting a thread still deserves an answer; a reaction on a message the
+    // API never saw (another bot's, say) is ignored.
+    if (!viaMessage || request.threadId === undefined) {
+      log.info("conversation.stop_unknown", { channelId: request.channelId });
+      return { status: "unknown_conversation" };
+    }
+    conversation = await findOrCreateConversation(deps.db, {
+      source: request.source,
+      workspaceId: request.workspaceId,
+      channelId: request.channelId,
+      threadId: request.threadId,
+    });
   }
 
-  const stopMessageIds: string[] = [];
+  // Taken before the stop message is recorded: is anything waiting for the agent?
+  const working = (await pendingMessageCount(deps.db, conversation.id)) > 0;
+  const key = `stop:${request.sourceEventId}`;
+
+  // The stop message is settled first, so it can never be handed to the agent as a question,
+  // even if what follows fails.
   if (request.stopMessage !== undefined) {
     const recorded = await recordInbound(deps.db, conversation.id, {
       source: request.source,
@@ -515,31 +537,11 @@ export async function stopConversation(
       text: "stop",
       sentAt: request.stopMessage.sentAt,
     });
-    stopMessageIds.push(recorded.id);
-  }
-
-  const working = conversation.status === "waiting";
-  const sessionId = sessionIdOf(conversation);
-  if (working && sessionId !== undefined) await deps.runtime.interrupt(sessionId);
-
-  const key = `stop:${request.sourceEventId}`;
-  await settleAndQueue(deps, conversation, "stopped", { kind: "all_forwarded" }, log, {
-    key,
-    note: working ? notes.stopped : notes.nothing_to_stop,
-  });
-  if (!working) {
-    await queue(deps, conversation, `note:${key}`, "note", {
-      kind: "reply",
-      target: targetOf(conversation),
-      text: notes.nothing_to_stop,
-    });
-  }
-  if (stopMessageIds.length > 0) {
     await settleAndQueue(
       deps,
       conversation,
       "stopped",
-      { kind: "inbound", ids: stopMessageIds },
+      { kind: "inbound", ids: [recorded.id] },
       log,
       {
         key: `${key}:message`,
@@ -548,15 +550,46 @@ export async function stopConversation(
     );
   }
 
-  if (await claimSyncLease(deps.db, conversation.id)) {
-    try {
-      await flushDeliveries(deps, conversation.id, log);
-    } finally {
-      await releaseSyncLease(deps.db, conversation.id);
-    }
+  if (working) {
+    const sessionId = sessionIdOf(conversation);
+    if (sessionId !== undefined) await deps.runtime.interrupt(sessionId);
+    // Every pending message, including any not yet handed over (those are never sent now).
+    await settleAndQueue(deps, conversation, "stopped", { kind: "all_pending" }, log, {
+      key,
+      note: notes.stopped,
+    });
+  } else if (viaMessage) {
+    await queue(deps, conversation, `note:${key}`, "note", {
+      kind: "reply",
+      target: targetOf(conversation),
+      text: notes.nothing_to_stop,
+    });
   }
+  // A 🛑 on a finished thread does nothing: no note for every stray reaction.
+
+  await flushSoon(deps, conversation.id, log);
   log.info("conversation.stopped", { conversationId: conversation.id, working });
   return { status: working ? "stopped" : "nothing_to_stop" };
+}
+
+/**
+ * Sends queued deliveries now, waiting briefly if a sync holds the conversation; if it is
+ * still busy after that, the running sync or the next reconcile sends them.
+ */
+async function flushSoon(deps: ConversationDeps, conversationId: string, log: Logger) {
+  const sleep = deps.sleep ?? defaultSleep;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    if (await claimSyncLease(deps.db, conversationId)) {
+      try {
+        await flushDeliveries(deps, conversationId, log);
+      } finally {
+        await releaseSyncLease(deps.db, conversationId);
+      }
+      return;
+    }
+    await sleep(300);
+  }
+  log.info("conversation.flush_deferred", { conversationId });
 }
 
 export interface ReconcileResult {

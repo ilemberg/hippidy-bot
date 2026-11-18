@@ -187,9 +187,12 @@ export async function handleReaction(
   }
   const { event, event_id: eventId, team_id: workspaceId } = parsed.data;
   const botUserId = parsed.data.authorizations?.[0]?.user_id;
+  // The bot puts 🛑 on messages itself (the stopped status); without its id those can't be
+  // told apart from a person's, so the event is ignored.
   if (
     event.reaction !== STOP_REACTION ||
     event.item.type !== "message" ||
+    botUserId === undefined ||
     event.user === botUserId
   ) {
     return "ignored";

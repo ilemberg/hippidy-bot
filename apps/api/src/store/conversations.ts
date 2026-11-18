@@ -349,6 +349,22 @@ export async function recordInbound(
   return { id: row.id, duplicate: true, forwarded: row.forwarded_at !== null };
 }
 
+/** The number of messages in the conversation still waiting for an outcome. */
+export async function pendingMessageCount(db: Db, conversationId: string): Promise<number> {
+  const rows = await db.query(
+    `select count(*)::int as n from inbound_messages
+     where conversation_id = $1 and status = 'received'`,
+    [conversationId],
+  );
+  return z.object({ n: z.number().int() }).parse(one(rows)).n;
+}
+
+/** Whether an inbound message is still waiting for an outcome (not stopped meanwhile). */
+export async function isStillPending(db: Db, inboundId: string): Promise<boolean> {
+  const rows = await db.query(`select status from inbound_messages where id = $1`, [inboundId]);
+  return z.object({ status: z.string() }).parse(one(rows)).status === "received";
+}
+
 /** Marks an inbound message as handed to the agent, with the event id the runtime gave it. */
 export async function markForwarded(
   db: Db,
@@ -414,6 +430,8 @@ export type Settlement =
   | { kind: "forwarded_without_event"; cutoff: Date }
   /** Every message handed to the agent (the session can take no more). */
   | { kind: "all_forwarded" }
+  /** Every pending message, handed over or not (a stop). */
+  | { kind: "all_pending" }
   /** Specific inbound messages, by their id here. */
   | { kind: "inbound"; ids: string[] };
 
@@ -437,6 +455,7 @@ export async function settleMessages(
       forwarded_without_event:
         "agent_event_id is null and forwarded_at is not null and forwarded_at <= $3",
       all_forwarded: "forwarded_at is not null",
+      all_pending: "true",
       inbound: "id = any($3::uuid[])",
     }[settlement.kind];
     const params: unknown[] = [conversationId, status];
