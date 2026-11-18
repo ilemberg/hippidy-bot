@@ -116,8 +116,7 @@ expands it into the full record.
 when the agent asks a question or finishes. An agent question and a finished answer look the
 same to the API (the session goes idle with a message), so one path covers both.
 
-Full draft, flow and open questions: `slice-2.md`. Decide before starting: questions B2 to B14
-there.
+Done 2026-11-18: see `slice-2.md` and the retro below.
 
 ## Slice 3: Supabase as the record
 
@@ -142,7 +141,7 @@ Exit criteria:
 - The reconcile job repairs a conversation whose webhook was dropped.
 - Database tests run without Docker (the agent's sandbox in slice 4 probably cannot run it).
 
-Decide before starting: questions C1 to C6.
+Drafted in detail in `slice-3.md` after slice 2; decide its questions before starting.
 
 ## Slice 4: the agent gets a development environment
 
@@ -282,3 +281,46 @@ sender, channel, thread and correlation id.
 
 **Carried forward:** pin CI actions to commit SHAs (before slice 4); lazy-load Bolt to cut
 about 280 ms from cold starts (when it matters); turn on Dependabot alerts.
+
+### Slice 2 (finished 2026-11-18)
+
+**Shipped:** ilemberg/hippidy-bot pull requests 5 (decisions B2 to B14), 6 (storage), 7 (the
+agent loop) and 8 (names and stop). Demo done: `@hippidy-bot what is agile?` was answered in
+the thread by the Claude agent, with Slack formatting, and 👀 became ✅. Names and stop are
+deployed; their live check (a stop mid-answer, the bot using your name) is still to do.
+
+**What was learned:**
+
+- **Independent reviews found real bugs in every pull request: 11 must-fix in slice 2**, almost
+  all about concurrency and ordering. Examples: a queued message marked ✅ before it was
+  answered, two overlapping syncs reordering replies, a failed stop being handed to the agent
+  as a question. Our own tests had missed them because the fakes answered instantly; the
+  test helpers now stall and race on purpose.
+- **Read the SDK, not the mental model.** Settling messages correctly depended on two facts
+  found in the SDK's types: events are listed by when they were processed, and a queued
+  message has no processed time yet. The first design, built on how it "should" work, was
+  wrong.
+- **Vercel's own type check differs from `tsc` in three more ways** (the SDK's default
+  export, empty `Request` and `Response` types, no strict null checks). CI now runs a second
+  check that behaves like Vercel's, and the rules are in `CLAUDE.md`.
+- **The build session could not run Anthropic's `ant` binary**, so the agent is synced by a
+  small SDK script in CI. It worked first time: the merge created the agent and environment.
+- **Setup is the heavy part for you:** about ten settings across Anthropic, Supabase, Vercel,
+  GitHub and Slack, and the Anthropic Console's menus did not match its docs (webhooks).
+  Screenshots got us through each one.
+- **One branch for several pull requests caused friction:** finished work had to wait,
+  unpushed, until the previous pull request merged.
+- **A new column was used in the same deploy that added it** (pull request 8), breaking the
+  rule that a migration must work with the old and the new code. Harmless this time; the
+  rule is now spelled out in `slice-3.md`.
+
+**What changes for the next slices:**
+
+- Slice 3 is smaller than sketched, because slice 2 built most of the storage. Drafted in
+  `slice-3.md`, with questions C1, C6 and three new ones (C7 backups, C8 read-back, C9 what to
+  record).
+- Before slice 4: pin CI actions by commit, put the agent sync behind a protected GitHub
+  environment, and allow one branch per pull request.
+
+**Carried forward:** check names and stop live; read only new agent events (planned in slice
+3); a long reply that fails partway is re-posted from the start.

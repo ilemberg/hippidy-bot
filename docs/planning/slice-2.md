@@ -1,6 +1,6 @@
 # Slice 2: talk to one managed agent
 
-Status: **ready to start, not started.** Every question is answered (decisions 51 to 63).
+Status: **done 2026-11-18.** Retro in `wave-1.md`. The plan below is kept as it was built.
 
 **Demo:** mention `@hippidy-bot` with a question. 👀 appears at once. Within a minute or so the
 bot replies in a thread under your message, and 👀 becomes ✅. Reply in that thread (mentioning
