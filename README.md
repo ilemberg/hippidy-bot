@@ -6,8 +6,7 @@ team lead, senior, mid, junior), product manager, designer, QA, engineering mana
 stakeholders.
 
 **Status: slice 2 done.** Mention `@hippidy-bot` in Slack and a Claude agent answers in the thread; reply
-there and it remembers the conversation. Slice 3 (the database as the full record) is drafted
-in [docs/planning/slice-3.md](docs/planning/slice-3.md) and waiting on decisions.
+there and it remembers the conversation.
 
 ## Layout
 
@@ -231,7 +230,6 @@ running". Text the agent had already written before the stop may still arrive.
 | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | [docs/planning/wave-1.md](docs/planning/wave-1.md)                   | The wave 1 plan: six slices, each with a demo, exit criteria, and what is known to be hard |
 | [docs/planning/slice-1.md](docs/planning/slice-1.md)                 | Slice 1 as built: what was built, the manual steps, how the work was done                  |
-| [docs/planning/slice-3.md](docs/planning/slice-3.md)                 | The next slice: what is already there, what gets built, the questions to answer first      |
 | [docs/planning/slice-2.md](docs/planning/slice-2.md)                 | The next slice: flow, what gets built, manual steps, and the questions to answer first     |
 | [docs/planning/open-questions.md](docs/planning/open-questions.md)   | The grill: decisions that are open, grouped by when they block                             |
 | [docs/planning/decisions.md](docs/planning/decisions.md)             | Decision log. Things move here from open-questions once decided                            |

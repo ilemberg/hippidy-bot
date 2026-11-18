@@ -53,9 +53,6 @@ as files in the repo), B8 (old threads keep their version) and B9 (stop with ðŸ›
 
 ## C. Blocks slice 3
 
-`slice-3.md` collects what is still open (C1, C6) with three new questions (C7 to C9). C2 to C5
-are answered by decisions 61 to 65.
-
 **C1. What does "source of truth" mean when Anthropic also stores session history?**
 Options: Supabase holds pointers only; Supabase mirrors everything; Supabase owns the
 conversation and stores the agent's raw events as a log.

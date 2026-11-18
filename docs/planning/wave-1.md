@@ -141,7 +141,7 @@ Exit criteria:
 - The reconcile job repairs a conversation whose webhook was dropped.
 - Database tests run without Docker (the agent's sandbox in slice 4 probably cannot run it).
 
-Drafted in detail in `slice-3.md` after slice 2; decide its questions before starting.
+Decide before starting: questions C1 to C6.
 
 ## Slice 4: the agent gets a development environment
 
@@ -312,15 +312,15 @@ deployed; their live check (a stop mid-answer, the bot using your name) is still
   unpushed, until the previous pull request merged.
 - **A new column was used in the same deploy that added it** (pull request 8), breaking the
   rule that a migration must work with the old and the new code. Harmless this time; the
-  rule is now spelled out in `slice-3.md`.
+  rule needs following: ship the migration first, the code that uses it later.
 
 **What changes for the next slices:**
 
-- Slice 3 is smaller than sketched, because slice 2 built most of the storage. Drafted in
-  `slice-3.md`, with questions C1, C6 and three new ones (C7 backups, C8 read-back, C9 what to
-  record).
+- Slice 2 built much of what slice 3 sketched (migrations in CI, row level security, the
+  reconcile job, tests without Docker), so slice 3 should be re-planned from what exists
+  before it starts.
 - Before slice 4: pin CI actions by commit, put the agent sync behind a protected GitHub
   environment, and allow one branch per pull request.
 
-**Carried forward:** check names and stop live; read only new agent events (planned in slice
-3); a long reply that fails partway is re-posted from the start.
+**Carried forward:** check names and stop live; read only new agent events instead of the
+whole list on every sync; a long reply that fails partway is re-posted from the start.
