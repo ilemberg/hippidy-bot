@@ -70,7 +70,7 @@ only new events, housekeeping, one branch per pull request) are answered: see `d
 
 `slice-4.md` collects these in one table with three new ones (D11 to D13). MCP servers come
 first where they do not make things worse (`decisions.md` 98), which changed the
-recommendations for D2 and D7.
+answer to D2 and the recommendation for D7.
 
 D1 (Managed Agents behind `AgentRuntime`) was answered up front and built in slice 2: see
 `decisions.md` 4. It reopens only if D6 fails.
@@ -81,12 +81,8 @@ D3 (the agent opens the pull request through the GitHub MCP server) is answered:
 D9 (not bricking the thing that fixes itself) is set aside and does not block slice 4: see
 `decisions.md` 100.
 
-**D2. GitHub identity.** A personal access token (PRs appear as you, and you cannot approve
-your own PR) or a GitHub App (PRs appear as the bot, short-lived tokens, reviewable by you).
-*Recommendation (changed 2026-11-18):* a fine-grained personal access token limited to this
-repo, used for both the repo mount and the GitHub MCP server. A GitHub App's tokens last an
-hour and an Anthropic vault only renews OAuth tokens, so an App works against MCP first.
-Move to an App or a bot account in slice 6, when someone other than the author must approve.
+D2 (one fine-grained personal access token on your account, the simplest that works) is
+answered: see `decisions.md` 104.
 
 **D4. How does the agent get the project instructions?** `CLAUDE.md` loading from a mounted
 repo is not documented; `.claude/skills/` is.
@@ -108,16 +104,14 @@ API, which wakes the session, is added only when results that arrive after the t
 *Recommendation:* the thread's session continues through review feedback ("also rename X"),
 and a new top-level mention starts clean from the latest `main`.
 
-**D11. Which GitHub MCP tools does the agent get, and do they ask first?** MCP tools pause
-for approval by default, and the loop has no approval step.
-*Recommendation:* four tools (`create_pull_request`, `update_pull_request`,
-`pull_request_read`, `get_job_logs`), each set to run without asking; everything else off.
+D11 (four GitHub MCP tools, running without asking, everything else off) is answered: see
+`decisions.md` 105.
 
 D12 (progress notes after 15 minutes, 1, 2, 4 and 8 hours, then every 4 hours) is answered:
-see `decisions.md` 103.
+see `decisions.md` 103 and 106.
 
-**D13. Budget for a coding session.** *Recommendation:* about $5 to start, reset from the
-first ten measured sessions (decision 55 said the slice 4 cap is set from measurements).
+D13 (a coding session starts at about $5, raised when turns need more) is answered: see
+`decisions.md` 107.
 
 D10 (browser for the agent) is answered: try Playwright in the sandbox first, see
 `decisions.md` 24.
