@@ -32,7 +32,9 @@ all pass. CI runs these, then `pnpm build && pnpm smoke`.
 - `apps/api/src/store` is the API's storage (Supabase Postgres): plain SQL with `$1` parameters
   through the small `Db` interface, rows checked with Zod. Only the API uses it.
 - `supabase/migrations` holds the schema. Add a new timestamped file for every change; never
-  edit one that has been merged. CI applies them on merge to `main`. Every table has row level
+  edit one that has been merged. CI applies them on merge to `main`, at the same time as Vercel
+  deploys, so a migration must work with both the old and the new code (add first, remove
+  later). Every table has row level
   security on and no policies: only the API's direct connection can read it.
 
 ## Conventions
@@ -48,6 +50,7 @@ all pass. CI runs these, then `pnpm build && pnpm smoke`.
   correlation id. Message names are `area.event`, for example `message.received`.
 - Errors returned by the API use the shape in `packages/contracts` (`errorResponse` in
   `src/api/errors.ts`).
+- Never hold a database transaction open across a call to another service (Anthropic, Slack).
 - Database tests use `createTestDb()` from `src/store/testing.ts`: an in-process Postgres
   (PGlite) with every migration applied from scratch. No Docker.
 - Tests sit next to the code as `*.test.ts` (Vitest). Slack, Anthropic and the network are

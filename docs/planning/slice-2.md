@@ -45,9 +45,12 @@ Supabase Postgres, only what Vercel needs to remember between requests:
 
 | Table | Holds | Unique on |
 |---|---|---|
-| `inbound_events` | Every accepted inbound message | `(source, source_event_id)` and `(source, workspace, channel, message_id)` |
+| `inbound_messages` | Every accepted inbound message, its status, and when it was handed to the agent | `(source, source_event_id)` and `(source, workspace, channel, message_id)` |
 | `conversations` | One per thread: source ids, agent session id, agent version, status, event cursor | `(source, workspace, channel, thread_id)` |
-| `deliveries` | Each reply sent back, with status | `(conversation_id, agent_event_id)` |
+| `deliveries` | Each reply sent back, claimed before sending, with status and attempts | `(conversation_id, agent_event_id)` |
+
+As built (pull request A): Supabase's Data API roles get no privileges on these tables and row
+level security is on, so only the API's direct connection reaches them.
 
 Duplicate inbound events are acknowledged and ignored, which replaces slice 1's "drop retries
 after a timeout" with real deduplication. Slice 3 adds `messages` and `agent_events` (the full

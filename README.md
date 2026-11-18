@@ -158,9 +158,11 @@ reaching the URL (check Event Subscriptions).
    applies the schema. Its run should be green, and the Supabase Table Editor should show
    `conversations`, `inbound_messages` and `deliveries`. If the secrets were added after the
    merge, run the workflow by hand: Actions, Database migrations, Run workflow.
-4. In Vercel, add `DATABASE_URL`, **Production only**: in the Supabase dashboard choose
-   **Connect**, then the **Transaction pooler** string (port 6543), with your password filled
-   in. Then redeploy. Until it is set, storage stays off and the rest of the app keeps working.
+4. In Vercel, add `DATABASE_URL`, **Production only**. In the Supabase dashboard choose
+   **Connect**, then **Transaction pooler**, copy the string (it ends in `:6543/postgres`), and
+   replace `[YOUR-PASSWORD]` with your database password. If the password has any of
+   `@ : / ? # %` in it, reset it in Supabase to one with only letters and numbers first, or the
+   string breaks. Then redeploy. Until it is set, storage stays off and the rest keeps working.
 
 ## Planning docs
 

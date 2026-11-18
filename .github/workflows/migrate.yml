@@ -23,13 +23,14 @@ jobs:
     name: Apply migrations to Supabase
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
-      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
     steps:
+      # Secrets are given only to the steps that need them, never to third-party actions.
       - name: Check Supabase is configured
         id: configured
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: |
           if [ -z "$SUPABASE_ACCESS_TOKEN" ] || [ -z "$SUPABASE_DB_PASSWORD" ] || [ -z "$SUPABASE_PROJECT_REF" ]; then
             echo "::warning::Supabase secrets are not set, so migrations were not applied. See the README's Setup section."
@@ -39,14 +40,22 @@ jobs:
           fi
       - uses: actions/checkout@v5
         if: steps.configured.outputs.ready == 'true'
-      - uses: supabase/setup-cli@v1
+      # Pinned to the commit of v1.7.3: a moving tag could change what runs here.
+      - uses: supabase/setup-cli@1dedf2c611547ede7232d26866dd3c56ab903bbb
         if: steps.configured.outputs.ready == 'true'
         with:
           version: 3.2.0
       - name: Link the project
         if: steps.configured.outputs.ready == 'true'
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: supabase link --project-ref "$SUPABASE_PROJECT_REF" --yes
       - name: Apply pending migrations
         if: steps.configured.outputs.ready == 'true'
-        # CLI 3.x targets a local database unless told otherwise.
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        # CLI 3.x targets a local database unless told to use the linked project. The runner is
+        # discarded after the job, and Actions masks the password in logs.
         run: supabase db push --remote --password "$SUPABASE_DB_PASSWORD" --yes

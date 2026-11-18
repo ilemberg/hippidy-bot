@@ -1,10 +1,9 @@
-import { readFileSync } from "node:fs";
 import { PGlite } from "@electric-sql/pglite";
 import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { findOrCreateConversation } from "./conversations.ts";
 import { createPostgresDb, type Db } from "./db.ts";
-import { migrationFiles } from "./testing.ts";
+import { applyMigrations } from "./testing.ts";
 
 // The production client (postgres.js) over a real Postgres connection, served by PGlite.
 let pg: PGlite;
@@ -13,10 +12,11 @@ let db: Db;
 
 beforeAll(async () => {
   pg = new PGlite();
-  for (const file of migrationFiles()) await pg.exec(readFileSync(file, "utf8"));
+  await applyMigrations(pg);
   server = new PGLiteSocketServer({ db: pg, port: 0, host: "127.0.0.1" });
   await server.start();
   db = createPostgresDb(`postgres://postgres@${server.getServerConn()}/postgres`);
+  // Note: PGlite is single-threaded, so these tests check correctness, not concurrency.
 });
 
 afterAll(async () => {

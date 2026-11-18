@@ -21,10 +21,13 @@ async function run(runner: Runner, text: string, params: readonly unknown[]): Pr
 
 /**
  * Connects to Supabase through its transaction pooler, which does not support prepared
- * statements, so they are off. Connections open lazily on the first query.
+ * statements, so they are off. Connections open lazily on the first query. Each serverless
+ * instance keeps at most two: the pooler's client limit is shared by every instance.
+ *
+ * Keep transactions short: never hold one open across a call to another service.
  */
 export function createPostgresDb(url: string): Db {
-  const sql = postgres(url, { prepare: false, max: 5, idle_timeout: 20, connect_timeout: 10 });
+  const sql = postgres(url, { prepare: false, max: 2, idle_timeout: 20, connect_timeout: 10 });
 
   const inTransaction = (tx: postgres.TransactionSql): Db => ({
     query: (text, params = []) => run(tx, text, params),
