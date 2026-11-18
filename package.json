@@ -1,0 +1,30 @@
+{
+  "name": "hippidy-bot",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "packageManager": "pnpm@10.34.9",
+  "engines": {
+    "node": "26.x"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @hippidy/api dev",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit -p tsconfig.json && pnpm -r typecheck",
+    "test": "vitest run",
+    "build": "pnpm --filter @hippidy/api build",
+    "smoke": "pnpm --filter @hippidy/api smoke"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.6",
+    "eslint": "^10.15.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.10.1",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.73.0",
+    "vitest": "^5.1.0"
+  }
+}

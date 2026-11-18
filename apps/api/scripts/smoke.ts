@@ -1,0 +1,17 @@
+// Loads the app the way Vercel does: without the "source" condition, so workspace packages
+// resolve to their compiled dist/. Run after `pnpm build`. Exits non-zero on any surprise.
+import app from "../src/index.ts";
+
+const checks: [string, Request, number][] = [
+  ["health", new Request("http://smoke/health"), 200],
+  ["messages without token", new Request("http://smoke/v1/messages", { method: "POST" }), 401],
+];
+
+let failed = false;
+for (const [name, request, expected] of checks) {
+  const res = await app.fetch(request);
+  const ok = res.status === expected;
+  failed ||= !ok;
+  console.log(`${ok ? "ok  " : "FAIL"} ${name}: ${res.status} (expected ${expected})`);
+}
+process.exit(failed ? 1 : 0);
