@@ -35,7 +35,7 @@ Nothing is open. All of group A is decided (`decisions.md` 12, 16, 18, 21 to 28 
 
 One item from this group is deferred, not solved: how to test new code against Slack without
 taking the real bot offline. A leading candidate is recorded with it in `decisions.md`,
-"Deferred on purpose", to be decided before slice 4.
+"Deferred on purpose". It no longer blocks slice 4 (decision 100).
 
 ## B. Blocks slice 2
 
@@ -68,19 +68,25 @@ only new events, housekeeping, one branch per pull request) are answered: see `d
 
 ## D. Blocks slice 4
 
-**D1. Managed Agents or something else for the coding agent?**
-Alternatives: Claude Code GitHub Action triggered by the API, or the Claude Agent SDK in a
-container you host. See `stack-and-tools.md` for the comparison.
-*Recommendation:* Managed Agents, as planned, behind an `AgentRuntime` interface.
+`slice-4.md` collects these in one table with three new ones (D11 to D13). MCP servers come
+first where they do not make things worse (`decisions.md` 98), which changed the
+recommendations for D2 and D7.
+
+D1 (Managed Agents behind `AgentRuntime`) was answered up front and built in slice 2: see
+`decisions.md` 4. It reopens only if D6 fails.
+
+D3 (the agent opens the pull request through the GitHub MCP server) is answered: see
+`decisions.md` 99.
+
+D9 (not bricking the thing that fixes itself) is set aside and does not block slice 4: see
+`decisions.md` 100.
 
 **D2. GitHub identity.** A personal access token (PRs appear as you, and you cannot approve
 your own PR) or a GitHub App (PRs appear as the bot, short-lived tokens, reviewable by you).
-*Recommendation:* GitHub App. It is more setup once and removes a wall in slice 6.
-
-**D3. Who opens the PR?** The agent via the GitHub MCP server, or the API after the agent
-pushes a branch.
-*Recommendation:* spike both. API-opens-PR gives the agent less power and a more predictable
-PR format; MCP is the documented path.
+*Recommendation (changed 2026-11-18):* a fine-grained personal access token limited to this
+repo, used for both the repo mount and the GitHub MCP server. A GitHub App's tokens last an
+hour and an Anthropic vault only renews OAuth tokens, so an App works against MCP first.
+Move to an App or a bot account in slice 6, when someone other than the author must approve.
 
 **D4. How does the agent get the project instructions?** `CLAUDE.md` loading from a mounted
 repo is not documented; `.claude/skills/` is.
@@ -94,18 +100,25 @@ in the sandbox; the PR description says what changed and how it was verified; CI
 install time, no Docker. Whatever cannot run there must run in CI and be fed back to the agent.
 
 **D7. How do CI results get back to the agent and to Slack?**
-*Recommendation:* a GitHub webhook to the API, which posts to the thread and, on failure,
-sends the failure to the same session to fix.
+*Recommendation (changed 2026-11-18):* the agent reads its checks and failed job logs itself
+through the GitHub MCP server, waiting for them in the same turn. A GitHub webhook to the
+API, which wakes the session, is added only when results that arrive after the turn matter.
 
 **D8. One session per request, or does the thread keep going?**
 *Recommendation:* the thread's session continues through review feedback ("also rename X"),
 and a new top-level mention starts clean from the latest `main`.
 
-**D9. How do you avoid bricking the thing that fixes itself?** Deferred by choice; revisit
-before slice 4 ships.
-*Recommendation:* local Claude Code on the repo always works without the bot; Vercel rollback
-is documented in the repo; the bot's deploy and the agent's config are in the "human review
-always" tier.
+**D11. Which GitHub MCP tools does the agent get, and do they ask first?** MCP tools pause
+for approval by default, and the loop has no approval step.
+*Recommendation:* only the tools the demo needs (open, update and read a pull request, read
+checks and job logs), each set to run without asking; everything else off.
+
+**D12. What does the thread show during a long turn?** (decision 57 left this for slice 4.)
+*Recommendation:* 👀 as now, plus a short note at most every few minutes, built from the
+stored events.
+
+**D13. Budget for a coding session.** *Recommendation:* about $5 to start, reset from the
+first ten measured sessions (decision 55 said the slice 4 cap is set from measurements).
 
 D10 (browser for the agent) is answered: try Playwright in the sandbox first, see
 `decisions.md` 24.
