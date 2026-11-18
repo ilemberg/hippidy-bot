@@ -144,6 +144,26 @@ means `API_SERVICE_TOKEN` is missing or changed without a redeploy; `slack.react
 `not_in_channel` means the bot is not in that channel; nothing at all means Slack is not
 reaching the URL (check Event Subscriptions).
 
+## Slice 2 setup: storage (Supabase)
+
+1. At supabase.com, create a project named `hippidy-bot` on the Free plan. Save its database
+   password in your password manager.
+2. In GitHub, go to the repo's Settings, Secrets and variables, Actions, and add three
+   **repository secrets**:
+   - `SUPABASE_PROJECT_REF`: the project's ID, the part of its dashboard address after
+     `/project/` (also under Project Settings, General)
+   - `SUPABASE_DB_PASSWORD`: the database password from step 1
+   - `SUPABASE_ACCESS_TOKEN`: a personal access token from supabase.com, Account, Access Tokens
+3. After the storage pull request merges, the **Database migrations** workflow under Actions
+   applies the schema. Its run should be green, and the Supabase Table Editor should show
+   `conversations`, `inbound_messages` and `deliveries`. If the secrets were added after the
+   merge, run the workflow by hand: Actions, Database migrations, Run workflow.
+4. In Vercel, add `DATABASE_URL`, **Production only**. In the Supabase dashboard choose
+   **Connect**, then **Transaction pooler**, copy the string (it ends in `:6543/postgres`), and
+   replace `[YOUR-PASSWORD]` with your database password. If the password has any of
+   `@ : / ? # %` in it, reset it in Supabase to one with only letters and numbers first, or the
+   string breaks. Then redeploy. Until it is set, storage stays off and the rest keeps working.
+
 ## Planning docs
 
 | Doc                                                                  | What it is                                                                                 |
