@@ -143,6 +143,11 @@ Exit criteria:
 
 Decide before starting: questions C1 to C6.
 
+Re-planned 2026-11-18 from what slice 2 built: see `slice-3.md`. The sketch above is kept as
+it was; the model that is being built is a raw event log (`agent_events`), usage on
+`conversations`, and a transcript view instead of `messages` and `agent_sessions` tables
+(`decisions.md` 75 to 87).
+
 ## Slice 4: the agent gets a development environment
 
 **Demo:** `@hippidy-bot change the 👀 reaction to 🫡`. The agent clones this repo, makes the

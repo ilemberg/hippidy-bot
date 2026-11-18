@@ -53,29 +53,18 @@ as files in the repo), B8 (old threads keep their version) and B9 (stop with ðŸ›
 
 ## C. Blocks slice 3
 
-**C1. What does "source of truth" mean when Anthropic also stores session history?**
-Options: Supabase holds pointers only; Supabase mirrors everything; Supabase owns the
-conversation and stores the agent's raw events as a log.
-*Recommendation:* the third. The API's own model is the truth for conversations and messages;
-raw agent events are kept append-only so nothing is lost and the UI can show detail later.
+Nothing is open. `slice-3.md` collects these with seven new ones (C7 to C13) in one table.
 
-**C2. Schema tooling.** Supabase CLI migrations with generated types, or Drizzle.
-*Recommendation:* Supabase CLI migrations plus generated types. Fewer moving parts.
+C1 (Supabase owns conversations and messages; raw agent events are a log) and C6 (keep
+everything for now) are answered: see `decisions.md` 75 and 76.
 
-**C3. Environments.** One Supabase project or separate dev and prod.
-*Recommendation:* local Supabase for development, one hosted project for production. Note
-that free hosted projects pause after a period of inactivity (check current terms).
+C2 (Supabase CLI migrations), C3 (one hosted project, PGlite for tests), C4 (CI applies
+migrations) and C5 (tests without Docker) were answered in slice 2: see `decisions.md` 61 to
+63 and 65.
 
-**C4. Who applies migrations?** *Recommendation:* CI on merge to main, never by hand, and
-never by the agent directly.
-
-C5 (testing without Docker) is answered in outline: see `decisions.md` 17. Details are
-revisited before implementing, starting with an experiment on what the sandbox can run.
-
-**C6. Retention and privacy.** How long are messages and raw events kept? Slack messages
-from other people will eventually land here.
-*Recommendation:* keep everything for now, but add the `actor` and `source` columns that make
-deletion by person or channel possible later.
+C7 to C13 (a transcript view, sessions stay on conversations, read routes, backfill, reading
+only new events, housekeeping, one branch per pull request) are answered: see `decisions.md`
+77 to 83.
 
 ## D. Blocks slice 4
 
