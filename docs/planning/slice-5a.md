@@ -86,6 +86,53 @@ All behind the service token, like `/v1/messages`. Shapes in `packages/contracts
   no GitHub tools (147); the approval tool as a custom tool whose call the API answers.
 - **F. The document system**, once the probe has settled E1.
 
+## Part E in detail (decision 167)
+
+Researched 2026-11-19 against the SDK's types (`@anthropic-ai/sdk` 1.10.0) and the loop.
+
+**Facts that shape it**
+
+- A Managed Agent declares a custom tool as `{ type: "custom", name, description,
+  input_schema }`. It has no permission policy: every call stops the session
+  (`session.status_idle` with `stop_reason: requires_action`) until the client answers with
+  `user.custom_tool_result` (`custom_tool_use_id`, `content`, `is_error`). The call is the
+  event `agent.custom_tool_use` (`id`, `name`, `input`).
+- The loop today answers every blocked call with a `user.tool_confirmation` deny (decision
+  119). A custom call would get the wrong event and stay blocked. This is the main change.
+- The agent is chosen per session (`sessions.create({ agent })`), so per conversation.
+  `vault_ids` is optional: a session with no MCP server needs no vault.
+- A repo mount has no read-only mode. The repo is public, so the product agent's session
+  mounts it without a token: it can read and clone, and cannot push.
+- Not answered by the types, to check in the first live session: whether a stop
+  (`user.interrupt`) clears a waiting custom call, and how long a session waits.
+
+**The tools the product agent gets**
+
+| Tool | Input | What the API does |
+|---|---|---|
+| `record_approval` | subject, ref, version, approve or withdraw, and who (one of the people in the thread) | Records it as `POST /v1/projects/:id/approvals` does, for the thread's project; answers with whether the subject is now approved |
+| `link_project` | an existing project's id, or a name to create one | Links the thread to it (creating it in `plan` if named); answers with the project's id, name and stage |
+
+Each call is answered once: the write is keyed on the call's id (a unique column, so a retry
+or a lost lease cannot record twice) and commits before the answer is sent; the answer goes
+inside the sync lease, as the denials do today, since it is one short write and one send.
+A call the API does not know, or whose input fails its contract, is answered with
+`is_error` and a reason, so the session carries on. The engineer agent gets neither tool.
+
+**Which agent a thread gets** (decision 153, simplified until the product agent can tell
+from the first message): when the sender of a thread's first message has the role product
+manager or designer, the thread gets the product agent; everyone else, and anyone with no
+role, gets today's agent. Stored in `conversations.agent_kind` when the session starts.
+
+**Order of work**
+
+| # | Pull request | Changes what people see? |
+|---|---|---|
+| E1 | Migration: a unique, nullable `custom_tool_use_id` on `approvals` and on `projects` | No |
+| E2 | The loop answers custom tool calls: new event kinds, `answerCustomTool` on `AgentRuntime` and the fake, handlers for the two tools, everything else denied as before | No: no agent has custom tools yet |
+| E3 | `agents/product.md` (no GitHub tools, no MCP servers until F), the sync handles several agent files, sessions start with the agent the thread was given | **Yes**: threads started by a product manager or designer |
+| F | The document system's MCP server on the product agent, once the probe settles E1 | Yes |
+
 ## Done when (5A)
 
 Each line gets its query before its pull request merges (decision 96).
