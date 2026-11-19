@@ -3,29 +3,37 @@
 // server accepts a service account key as a bearer token, the only kind of credential the
 // agent's vault holds (`static_bearer`, decision 122), and what it can do with it.
 //
-//   1. Connect to the server with `Authorization: Bearer <key>` and list its tools.
-//   2. Who the key is (`atlassianUserInfo`) and which sites and scopes it reaches
-//      (`getAccessibleAtlassianResources`).
-//   3. Read Jira (projects, one issue search) and Confluence (spaces).
-//   4. With --writes: create one Jira issue and one Confluence page, both marked as made by
-//      the probe, and comment on each. Atlassian's server has no tool that deletes, so they
-//      stay; delete them by hand.
+//   1. Connect to the server with `Authorization: Bearer <key>`, list its tools and each
+//      wanted tool's input fields. The server answers this much without a valid key, so
+//      the rows after it are what show the key works.
+//   2. What the key may reach (`discover`), who it is (`atlassianUserInfo`) and which sites
+//      and scopes it reaches (`getAccessibleAtlassianResources`). A service account may
+//      lack the scopes the last two need; the site can then be given as an input.
+//   3. Read Jira (one issue search) and Confluence (one search).
+//   4. With --writes: create one Jira issue and comment on it, and create one Confluence
+//      page, each marked as made by the probe. The server's tool list has no delete for
+//      either, so they stay; delete them by hand.
+//
+// Arguments are filtered by each tool's input schema, so a wrong guess shows up as a
+// missing required field in the report rather than as a rejected call.
 //
 //   pnpm atlassian:probe            steps 1 to 3
 //   pnpm atlassian:probe --writes   steps 1 to 4 (needs ATLASSIAN_PROBE_PROJECT and _SPACE)
 //
-// Needs ATLASSIAN_SERVICE_KEY. Optional: ATLASSIAN_SITE (the site's address, when the key
-// reaches more than one), ATLASSIAN_MCP_URL, ATLASSIAN_PROBE_PROJECT (a Jira project key) and
-// ATLASSIAN_PROBE_SPACE (a Confluence space key). Run by hand from the `release` environment
-// by `.github/workflows/atlassian-probe.yml`. The key is never printed.
+// Needs ATLASSIAN_SERVICE_KEY. Optional: ATLASSIAN_SITE (the site's address or cloud id;
+// needed when the key cannot list its sites), ATLASSIAN_MCP_URL, ATLASSIAN_PROBE_PROJECT (a
+// Jira project key) and ATLASSIAN_PROBE_SPACE (a Confluence space key). Run by hand from the
+// `release` environment by `.github/workflows/atlassian-probe.yml`. The key is never printed.
 import { appendFileSync } from "node:fs";
 import {
   ATLASSIAN_MCP_URL,
+  WANTED_TOOLS,
+  argsFor,
   coverage,
+  describeInput,
   findString,
   parseSites,
   redact,
-  spaceIdForKey,
   toolText,
   type AtlassianSite,
 } from "./atlassian-probe-lib.ts";
@@ -133,6 +141,9 @@ async function rpc(method: string, params: unknown, notify = false): Promise<unk
 interface Tool {
   name: string;
   required: string[];
+  properties: string[];
+  /** What the schema says about `cloudId`, so the report shows what form it expects. */
+  cloudIdHint: string | undefined;
 }
 
 async function listTools(): Promise<Tool[]> {
@@ -152,7 +163,26 @@ async function listTools(): Promise<Tool[]> {
         Array.isArray(schema.required)
           ? schema.required.map(String)
           : [];
-      tools.push({ name: String(tool.name), required });
+      const properties =
+        typeof schema === "object" &&
+        schema !== null &&
+        "properties" in schema &&
+        typeof schema.properties === "object" &&
+        schema.properties !== null
+          ? Object.keys(schema.properties)
+          : [];
+      const cloudIdSchema =
+        typeof schema === "object" &&
+        schema !== null &&
+        "properties" in schema &&
+        typeof schema.properties === "object" &&
+        schema.properties !== null &&
+        "cloudId" in schema.properties
+          ? schema.properties.cloudId
+          : undefined;
+      const cloudIdHint =
+        cloudIdSchema === undefined ? undefined : clip(JSON.stringify(cloudIdSchema), 300);
+      tools.push({ name: String(tool.name), required, properties, cloudIdHint });
     }
     const next = "nextCursor" in record ? record.nextCursor : undefined;
     if (typeof next !== "string" || next === "") break;
@@ -174,22 +204,21 @@ async function call(
     found(question, `not served: the server has no tool \`${name}\``);
     return undefined;
   }
-  const missing = tool.required.filter((field) => !(field in args));
+  const sent = argsFor(tool.properties, args);
+  const missing = tool.required.filter((field) => !(field in sent));
+  const hint = missing.length > 0 ? ` (it requires ${missing.join(", ")}, not given)` : "";
   try {
-    const result = toolText(await rpc("tools/call", { name, arguments: args }));
+    const result = toolText(await rpc("tools/call", { name, arguments: sent }));
     const text = redact(result.text, key);
     const isError = result.isError;
     if (isError) {
-      found(
-        question,
-        `\`${name}\` returned an error${missing.length > 0 ? ` (it requires ${missing.join(", ")}, not given)` : ""}: ${clip(text, 400)}`,
-      );
+      found(question, `\`${name}\` returned an error${hint}: ${clip(text, 400)}`);
       return undefined;
     }
     found(question, `yes: \`${name}\` returned ${clip(text, 400)}`);
     return text;
   } catch (error) {
-    found(question, `\`${name}\` failed: ${describeError(error)}`);
+    found(question, `\`${name}\` failed${hint}: ${describeError(error)}`);
     return undefined;
   }
 }
@@ -259,7 +288,18 @@ async function main(): Promise<void> {
     );
   }
 
-  // 2. Who the key is, and where it reaches.
+  for (const tool of tools.filter((candidate) =>
+    Object.values(WANTED_TOOLS).some((group: readonly string[]) => group.includes(candidate.name)),
+  )) {
+    found(
+      `Input of ${tool.name}`,
+      `${describeInput(tool.required, tool.properties)}${tool.cloudIdHint === undefined ? "" : `; cloudId: ${tool.cloudIdHint}`}`,
+    );
+  }
+
+  // 2. What the key may reach, and who it is. A service account may lack the scopes the
+  // identity tools need (read:me, read:account); that does not stop the reads below.
+  await call("Discover", "discover", {});
   await call("Identity", "atlassianUserInfo", {});
   const sites: AtlassianSite[] = parseSites(
     (await call("Sites and scopes", "getAccessibleAtlassianResources", {})) ?? "",
@@ -269,9 +309,12 @@ async function main(): Promise<void> {
       ? undefined
       : sites.find((candidate) => candidate.url.includes(siteWanted));
   if (siteWanted !== undefined && wanted === undefined && sites.length > 0) {
-    found("Site wanted", `${siteWanted} is not among the sites the key reaches; using the first`);
+    found(
+      "Site wanted",
+      `${siteWanted} is not among the ${String(sites.length)} sites the key lists (${sites.map((candidate) => candidate.url).join(", ")}); trying it as given`,
+    );
   }
-  const site = wanted ?? sites[0];
+  const site = wanted ?? (siteWanted === undefined ? sites[0] : undefined);
   const cloudId = site?.id ?? siteWanted;
   if (site !== undefined) {
     found(
@@ -279,21 +322,29 @@ async function main(): Promise<void> {
       `${site.url} (${String(sites.length)} reachable); scopes: ${site.scopes.join(", ") || "none listed"}`,
     );
   } else if (cloudId === undefined) {
-    found("Site used", "none: no site was listed and ATLASSIAN_SITE is not set; reads skipped");
+    found(
+      "Site used",
+      "none: no site was listed and the run's `site` input is empty; reads skipped. Run again with `site` set to the site's address",
+    );
     return;
   } else {
-    found("Site used", `none listed; trying ATLASSIAN_SITE (${cloudId}) as the cloud id`);
+    found("Site used", `${cloudId}, from the run's \`site\` input, as the cloud id`);
   }
 
-  // 3. Reads.
-  await call("Jira: read projects", "getVisibleJiraProjects", { cloudId });
+  // 3. Reads. Candidate arguments are filtered by each tool's input schema.
   await call("Jira: search issues", "searchJiraIssuesUsingJql", {
     cloudId,
     // Jira Cloud's search rejects a query with no restriction ("unbounded").
     jql: "created >= -3650d ORDER BY created DESC",
     maxResults: 1,
+    limit: 1,
   });
-  const spacesText = await call("Confluence: read spaces", "getConfluenceSpaces", { cloudId });
+  await call("Confluence: search", "searchConfluence", {
+    cloudId,
+    cql: "type = page ORDER BY created DESC",
+    query: "type = page ORDER BY created DESC",
+    limit: 1,
+  });
 
   if (!writes) {
     found("Writes", "not tried (run with writes to create one issue and one page)");
@@ -303,7 +354,7 @@ async function main(): Promise<void> {
   // 4. Writes, each marked as the probe's.
   const stamp = `Made by the hippidy-bot Atlassian probe, run ${runId}. Safe to delete.`;
   if (projectKey === undefined) {
-    found("Jira: write", "not tried: ATLASSIAN_PROBE_PROJECT is not set");
+    found("Jira: write", "not tried: the run's `jira_project` input is empty");
   } else {
     const issueText = await call("Jira: create an issue", "createJiraIssue", {
       cloudId,
@@ -316,46 +367,25 @@ async function main(): Promise<void> {
     if (issueText !== undefined && issueKey === undefined) {
       found("Jira: comment on it", "not tried: no issue key found in the create result");
     } else if (issueKey !== undefined) {
-      await call("Jira: comment on it", "addCommentToJiraIssue", {
+      await call("Jira: comment on it", "addOrEditJiraIssueComment", {
         cloudId,
         issueIdOrKey: issueKey,
         commentBody: `Comment by the probe, run ${runId}.`,
+        body: `Comment by the probe, run ${runId}.`,
       });
     }
   }
   if (spaceKey === undefined) {
-    found("Confluence: write", "not tried: ATLASSIAN_PROBE_SPACE is not set");
+    found("Confluence: write", "not tried: the run's `confluence_space` input is empty");
   } else {
-    // The read above returns one page of spaces; on a larger site, ask for this one by key.
-    const spaceId =
-      spaceIdForKey(spacesText ?? "", spaceKey) ??
-      spaceIdForKey(
-        (await call("Confluence: find the space by key", "getConfluenceSpaces", {
-          cloudId,
-          keys: [spaceKey],
-        })) ?? "",
-        spaceKey,
-      );
-    if (spaceId === undefined) {
-      found("Confluence: write", `not tried: no space with key ${spaceKey} in the spaces read`);
-      return;
-    }
-    const pageText = await call("Confluence: create a page", "createConfluencePage", {
+    await call("Confluence: create a page", "createConfluenceContent", {
       cloudId,
-      spaceId,
+      spaceKey,
+      type: "page",
       title: `hippidy-bot probe ${runId}`,
       body: stamp,
+      content: stamp,
     });
-    const pageId = findString(json(pageText), ["id"]);
-    if (pageText !== undefined && pageId === undefined) {
-      found("Confluence: comment on it", "not tried: no page id found in the create result");
-    } else if (pageId !== undefined) {
-      await call("Confluence: comment on it", "createConfluenceFooterComment", {
-        cloudId,
-        pageId,
-        body: `Comment by the probe, run ${runId}.`,
-      });
-    }
   }
 }
 

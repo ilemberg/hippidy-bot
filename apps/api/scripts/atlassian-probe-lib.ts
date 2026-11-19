@@ -6,27 +6,25 @@ export const ATLASSIAN_MCP_URL = "https://mcp.atlassian.com/v2/mcp";
 
 /**
  * The tools the project workflow would use (`projects.md`, "Two agents, one bot"), by the
- * names Atlassian's server is documented to use. The probe reports which of them it serves;
- * a name it does not serve is a finding, not a failure.
+ * names the server listed on its first run (2026-11-19, run 44462778638). The probe reports
+ * which of them it serves; a name it does not serve is a finding, not a failure.
  */
 export const WANTED_TOOLS = {
-  identity: ["atlassianUserInfo", "getAccessibleAtlassianResources"],
+  identity: ["atlassianUserInfo", "getAccessibleAtlassianResources", "discover"],
   jira: [
-    "getVisibleJiraProjects",
     "searchJiraIssuesUsingJql",
     "getJiraIssue",
     "createJiraIssue",
     "editJiraIssue",
-    "addCommentToJiraIssue",
-    "getTransitionsForJiraIssue",
     "transitionJiraIssue",
+    "listJiraIssueComments",
+    "addOrEditJiraIssueComment",
   ],
   confluence: [
-    "getConfluenceSpaces",
-    "getConfluencePage",
-    "createConfluencePage",
-    "updateConfluencePage",
-    "createConfluenceFooterComment",
+    "searchConfluence",
+    "getConfluenceContent",
+    "createConfluenceContent",
+    "updateConfluenceContent",
   ],
 } as const;
 
@@ -93,35 +91,6 @@ export function parseSites(text: string): AtlassianSite[] {
   });
 }
 
-/**
- * The id of the Confluence space with the given key, from `getConfluenceSpaces`' text (the
- * Confluence REST shape: `{ results: [{ id, key }] }`). Creating a page takes the id.
- */
-export function spaceIdForKey(text: string, key: string): string | undefined {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return undefined;
-  }
-  const results =
-    typeof parsed === "object" && parsed !== null && "results" in parsed ? parsed.results : parsed;
-  if (!Array.isArray(results)) return undefined;
-  for (const space of results as unknown[]) {
-    if (
-      typeof space === "object" &&
-      space !== null &&
-      "key" in space &&
-      space.key === key &&
-      "id" in space &&
-      (typeof space.id === "string" || typeof space.id === "number")
-    ) {
-      return String(space.id);
-    }
-  }
-  return undefined;
-}
-
 /** The first string found under any of the keys, searching nested objects. */
 export function findString(value: unknown, keys: readonly string[]): string | undefined {
   if (typeof value !== "object" || value === null) return undefined;
@@ -141,4 +110,25 @@ export function findString(value: unknown, keys: readonly string[]): string | un
 /** Removes the secret from text before it is printed, wherever it appears. */
 export function redact(text: string, secret: string): string {
   return secret.length < 8 ? text : text.split(secret).join("[redacted]");
+}
+
+/**
+ * The arguments to send a tool: the candidates its input schema names. A tool whose schema
+ * lists no properties gets every candidate, so a call is still tried.
+ */
+export function argsFor(
+  properties: readonly string[],
+  candidates: Record<string, unknown>,
+): Record<string, unknown> {
+  if (properties.length === 0) return { ...candidates };
+  return Object.fromEntries(
+    Object.entries(candidates).filter(([name]) => properties.includes(name)),
+  );
+}
+
+/** One line describing a tool's input: required fields marked with an asterisk. */
+export function describeInput(required: readonly string[], properties: readonly string[]): string {
+  const names = [...new Set([...required, ...properties])];
+  if (names.length === 0) return "no input fields listed";
+  return names.map((name) => (required.includes(name) ? `${name}*` : name)).join(", ");
 }

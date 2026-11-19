@@ -18,7 +18,7 @@ on:
         type: boolean
         default: false
       site:
-        description: The site's address (example.atlassian.net), if the key reaches more than one
+        description: The site's address (example.atlassian.net); needed when the key cannot list its sites
         type: string
         default: ""
       jira_project:
