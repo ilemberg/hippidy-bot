@@ -61,6 +61,10 @@ export type AgentEvent =
   | { kind: "running"; id: string }
   /** `blockedOn`: for `requires_action`, the tool calls waiting for approval. */
   | { kind: "idle"; id: string; reason: IdleReason; blockedOn?: string[] }
+  /** A pull request the agent opened, updated or read: its link, from a GitHub tool's result. */
+  | { kind: "pull_request"; id: string; url: string }
+  /** The agent ran `git push` in its sandbox. */
+  | { kind: "pushed"; id: string }
   /** An answer to a tool call that waited for approval. */
   | { kind: "tool_confirmation"; id: string; toolUseId: string }
   | { kind: "terminated"; id: string }

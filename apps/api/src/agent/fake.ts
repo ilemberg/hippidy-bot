@@ -30,6 +30,8 @@ const TYPE_OF: Record<AgentEvent["kind"], string> = {
   terminated: "session.status_terminated",
   error: "session.error",
   tool_confirmation: "user.tool_confirmation",
+  pull_request: "agent.mcp_tool_result",
+  pushed: "agent.tool_use",
 };
 
 const NO_USAGE: SessionUsage = {
@@ -208,6 +210,16 @@ export class FakeAgentRuntime implements AgentRuntime {
       this.push(session, { kind: "agent_message", id: this.id("sevt"), text });
     }
     this.push(session, { kind: "idle", id: this.id("sevt"), reason: "end_turn" });
+  }
+
+  /** The agent opens (or reads) a pull request, in a turn already running. */
+  pullRequest(sessionId: string, url: string): void {
+    this.push(this.session(sessionId), { kind: "pull_request", id: this.id("sevt"), url });
+  }
+
+  /** The agent runs `git push`, in a turn already running. */
+  pushed(sessionId: string): void {
+    this.push(this.session(sessionId), { kind: "pushed", id: this.id("sevt") });
   }
 
   /** The agent waits for approval of new tool calls; returns their ids. */

@@ -217,6 +217,11 @@ function minorUnits(amount: string | undefined): number | null {
   return Number.isSafeInteger(value) ? value : null;
 }
 
+/** A pull request's own link, as GitHub's MCP tools report it (`"html_url": "…/pull/22"`). */
+const PULL_REQUEST_URL = /"html_url"\s*:\s*"(https:\/\/github\.com\/[^/"]+\/[^/"]+\/pull\/\d+)"/;
+/** `git push`, also with options between (`git -C dir push`), in a shell command. */
+const GIT_PUSH = /\bgit\b[^\n;&|]*\spush\b/;
+
 /** Reduces a Managed Agents event to what the API acts on; undefined for everything else. */
 export function toAgentEvent(event: BetaManagedAgentsSessionEvent): AgentEvent | undefined {
   switch (event.type) {
@@ -244,6 +249,20 @@ export function toAgentEvent(event: BetaManagedAgentsSessionEvent): AgentEvent |
             blockedOn: event.stop_reason.event_ids,
           }
         : { kind: "idle", id: event.id, reason: event.stop_reason.type };
+    case "agent.mcp_tool_result": {
+      if (event.is_error === true) return undefined;
+      const text = (event.content ?? [])
+        .flatMap((block) => (block.type === "text" ? [block.text] : []))
+        .join("\n");
+      const url = PULL_REQUEST_URL.exec(text)?.[1];
+      return url === undefined ? undefined : { kind: "pull_request", id: event.id, url };
+    }
+    case "agent.tool_use": {
+      const command = event.name === "bash" ? event.input.command : undefined;
+      return typeof command === "string" && GIT_PUSH.test(command)
+        ? { kind: "pushed", id: event.id }
+        : undefined;
+    }
     case "user.tool_confirmation":
       return { kind: "tool_confirmation", id: event.id, toolUseId: event.tool_use_id };
     case "session.status_terminated":

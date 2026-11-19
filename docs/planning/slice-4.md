@@ -8,8 +8,8 @@ its list is under "Experiment first".
 
 **Demo:** `@hippidy-bot change the 👀 reaction to 🫡`. The agent works in a clone of this repo,
 makes the change, runs lint, typecheck and tests, pushes a branch and opens a pull request.
-The bot posts the pull request's link in the thread, and ✅ appears only when the grader has
-found the work done, green checks included (decision 115).
+The bot posts the pull request's link in the thread, and ✅ appears only when the pull
+request's CI checks have all passed (decision 132, which replaced the grader of 115).
 
 Facts below come from the current Managed Agents reference (read 2026-11-18) and the SDK's
 types (`@anthropic-ai/sdk` 1.10.0, read in the review). Those marked _verify_ are checked
@@ -129,8 +129,9 @@ exists, unless that makes things worse. "Worse" means one of:
 - Starting a session mounts the repo with `AGENT_GITHUB_TOKEN` and attaches the vault, found
   by name like the agent and environment. A missing token or vault fails closed with a note
   in the thread, like every other missing setting.
-- Every message is sent with an outcome and the rubric of decision 115. ✅ when the latest
-  verdict is `satisfied`; otherwise ❌ and the grader's explanation in the thread.
+- No grader (decision 132, replacing 115). When a turn that pushed or opened a pull request
+  ends, the API reads that pull request's CI checks from GitHub: ✅ if all passed, otherwise
+  ❌ and a note saying why. Any other turn gets ✅ when it ends normally.
 - Made fit for long turns (pull request B):
   - a turn is given up on only after 30 minutes with no new event (decision 113);
   - only a turn's last message is posted, when the turn ends (decision 114);
@@ -195,7 +196,7 @@ verdict talks about the grader.
 | D2 | GitHub identity | **Decided** (104, 122): one fine-grained personal access token on your account, this repo only (contents and pull requests: read and write; Actions, commit statuses and metadata: read; nothing else). Saved as `AGENT_GITHUB_TOKEN` in Vercel (Production) and the `release` environment; the agent sync makes the vault from it. Done by hand on 2026-11-18. If the experiment shows something we need does not accept it, the next simplest that does is used (a classic token first) and recorded. Cost: pull requests appear as you, so you cannot approve them; that matters in slice 6 |
 | D3 | Who opens the pull request? | **Decided** (99): the agent, through the GitHub MCP server |
 | D4 | How does the agent get the project instructions? | **Decided** (110): one source, `CLAUDE.md`. The prompt tells the agent to read it, and a skill under `.claude/skills/` holds the definition of done. The experiment confirms how the agent picks them up |
-| D5 | What is "done"? | **Decided** (109, 115): lint, format check, typecheck and tests pass in the sandbox; the pull request says what changed and how it was checked; CI is green. Every message goes with an outcome whose rubric asks for this only when the message asked for a change. ✅ only on a `satisfied` verdict |
+| D5 | What is "done"? | **Decided** (109, 132): lint, format check, typecheck and tests pass in the sandbox; the pull request says what changed and how it was checked; CI is green. The skill says so; the API checks CI itself and shows ✅ only when it passed. No grader in slice 4 (132 replaces 115) |
 | D6 | Can the sandbox run the whole suite? | **Decided** (110): expected yes (no Docker is needed since slice 2), confirmed by the experiment; what cannot run there is left to CI |
 | D7 | How do CI results reach the agent? | **Decided** (108, 116): the agent reads them itself through the GitHub MCP server (`get_check_runs`, then `get_job_logs` for a failed job). After opening the pull request it waits for the checks in the same turn (a limit of about ten minutes), reads the log of a failed job, fixes and pushes again. No GitHub webhook in this slice; one that wakes the session is planned for slice 6, where review, merge and deploy happen after the turn. Until then, anything that happens after the turn ends reaches the agent only when someone mentions it in the thread |
 | D8 | Does the thread keep going? | **Decided** (109): yes. One thread is one session (decision 51), so "also rename X" continues on the same branch and pull request. A new top-level mention starts from the latest `main` |
@@ -217,7 +218,7 @@ Schema ships before the code that uses it (decision 86); one branch per pull req
 | B1 | The loop for long turns: lease owner check, give up on silence, post only the last message, deny a call that waits (decision 126) | A3 merged and applied |
 | B2 | Read only new events (decisions 95, 131) | B1; the experiment |
 | C | The agent gets the repo, the sandbox tools and the GitHub MCP server; the agent sync learns MCP servers, hosts, packages and the vault; sessions mount the repo and attach the vault | B |
-| D | Instructions, the skill, an outcome with every message, ✅ from the verdict | C |
+| D | The skill, and ✅ from the pull request's CI checks (decision 132) | C |
 | E | Progress in the thread; the eval-case view (its migration first) | C |
 | - | Close: live checks, database size, retro, re-sketch slice 5 | All of the above |
 
@@ -239,10 +240,10 @@ Schema ships before the code that uses it (decision 86); one branch per pull req
 Each line gets its exact query or log search before its pull request merges (decision 96).
 
 - The demo works: a request in Slack ends with a pull request whose checks are green, its
-  link in the thread, and ✅ from a `satisfied` verdict.
+  link in the thread, and ✅ because its checks passed.
 - A follow-up in the same thread lands on the same pull request.
 - A change that fails CI is fixed by the agent without anyone telling it, or the thread says
-  plainly that it gave up (❌ with the grader's explanation).
+  plainly that it gave up (❌ with a note naming the failed checks).
 - The agent cannot push to `main` or change a workflow (the token's rights and the rule on
   `main`), and has no tool that merges; its token, which could, never enters the sandbox.
 - A turn that keeps working past 30 minutes is not stopped, and the thread shows only the
@@ -260,8 +261,7 @@ Each line gets its exact query or log search before its pull request merges (dec
   no general web access, and `main` taking changes only by pull request.
 - **The repo is public, and its skills are instructions to the agent.** Anything merged into
   `.claude/skills/` is loaded by the next session without review.
-- **Cost.** A coding turn costs many times a chat turn, and the grader runs on every message,
-  chat included. The session budget and the monthly limit hold it; D13 is set from
+- **Cost.** A coding turn costs many times a chat turn. The session budget and the monthly limit hold it; D13 is set from
   measurements, not guesses.
 - **Storage.** Everything is kept (decision 120), and a coding session's tool output could be
   tens of MB against the free plan's 500 MB. Read at each slice's close.

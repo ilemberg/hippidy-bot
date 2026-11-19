@@ -12,6 +12,7 @@ import type { Logger } from "./log.ts";
 import { createApiClient, type ResponseLike } from "./slack/api-client.ts";
 import { createSlackDeliverer, slackPosterFromEnv, type SlackPoster } from "./slack/deliver.ts";
 import { createSlackEventsHandler, type SlackRouteDeps } from "./slack/route.ts";
+import { createGitHubChecks } from "./github/checks.ts";
 import { readDbConfig } from "./store/config.ts";
 import { createPostgresDb } from "./store/db.ts";
 
@@ -103,6 +104,15 @@ function realServices(
     db: createPostgresDb(dbConfig.url),
     runtime: createManagedAgentRuntime(agentConfig, client),
     deliverers,
+    // The same token that mounts the repo reads its pull requests' checks (decision 132).
+    ...(agentConfig.repository === undefined
+      ? {}
+      : {
+          checks: createGitHubChecks({
+            repositoryUrl: agentConfig.repository.url,
+            token: agentConfig.repository.token,
+          }),
+        }),
   };
   return verifyAgentWebhook === undefined
     ? { conversations }
