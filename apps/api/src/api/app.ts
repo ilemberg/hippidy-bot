@@ -32,6 +32,7 @@ import {
   type ConversationDeps,
 } from "./conversations.ts";
 import { errorResponse } from "./errors.ts";
+import { addProjectRoutes } from "./projects.ts";
 import { backfillRecord } from "./record.ts";
 import { readStatus, type StatusDeps } from "./status.ts";
 import type { ApiEnv } from "./types.ts";
@@ -227,6 +228,10 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
     c.var.log.info("conversation.events_read", { conversationId: id.data, count: events.length });
     return c.json(body);
   });
+
+  // Projects, roles and approvals (slice 5A). They need only storage, which comes with the
+  // conversations' dependencies.
+  addProjectRoutes(api, { db: deps.conversations?.db, auth: readers, limitBody });
 
   // Anthropic calls this when a session changes state (decision 13). The body is thin: it
   // names the session, and the current state is fetched from Anthropic.
