@@ -5,6 +5,7 @@ import type {
   InboundMessage,
   MessageSource,
   OutboundDelivery,
+  Role,
   StopRequest,
   StopResult,
 } from "@hippidy/contracts";
@@ -51,6 +52,7 @@ import {
   type SettledStatus,
 } from "../store/conversations.ts";
 import type { Db } from "../store/db.ts";
+import { readSenderAndProject, type SenderAndProject } from "../store/projects.ts";
 import { latestActivity, latestStoredEventTime, storedEventsToActOn } from "../store/record.ts";
 import { progressDue, progressText } from "./progress.ts";
 import { keepEvents, keepUsage } from "./record.ts";
@@ -161,9 +163,17 @@ export async function receiveMessage(
       log.info("conversation.stopped_before_send", { inboundId: recorded.id });
       return { id: recorded.id, duplicate: recorded.duplicate };
     }
+    // Outside any sync lease: receiving a message never holds one.
+    const about = await senderAndProject(deps, conversation.id, message.actor.id, log);
     const agentEventId = await deps.runtime.sendMessage(
       sessionId,
-      formatForAgent(message.actor.id, message.text, message.actor.displayName, message.context),
+      formatForAgent(
+        message.actor.id,
+        message.text,
+        message.actor.displayName,
+        message.context,
+        about,
+      ),
     );
     await markForwarded(deps.db, recorded.id, agentEventId);
     await markWaiting(deps.db, conversation.id);
@@ -183,21 +193,42 @@ export async function receiveMessage(
 /** The line that introduces what was said in the conversation since the agent's last reply. */
 export const CONTEXT_LEAD = "Said in the thread since your last reply:";
 
+/** A role as the agent reads it in the `From:` line. */
+export const roleInWords: Record<Role, string> = {
+  engineering_manager: "engineering manager",
+  product_manager: "product manager",
+  tech_lead: "tech lead",
+  engineer: "engineer",
+  qa: "QA",
+  designer: "designer",
+};
+
+/** Text on one line: every kind of line break becomes a space, so it cannot start a line. */
+const oneLine = (text: string) => text.replace(/\r\n|[\r\n\u2028\u2029\u0085]/g, " ");
+
 /**
  * The text the agent sees: what was said in the thread since its last reply, when the source
- * sent any (decision 140), then who sent this message (by name when known) and what they
- * wrote. Without context it is exactly the sender and the message.
+ * sent any (decision 140), then who sent this message (by name when known, with their role
+ * when they hold one), the thread's project and stage when it has one, and what they wrote
+ * (slice 5A, part D). Without context, role or project it is exactly the sender and the
+ * message.
  */
 export function formatForAgent(
   actorId: string,
   text: string,
   displayName?: string,
   context: readonly ContextMessage[] = [],
+  about: Partial<SenderAndProject> = {},
 ): string {
   const body = text.trim() === "" ? "(no text, just a mention)" : text;
-  const sender =
+  const name =
     displayName === undefined ? `Slack user ${actorId}` : `${displayName} (Slack user ${actorId})`;
-  const message = `From: ${sender}\n\n${body}`;
+  const sender = about.role === undefined ? name : `${name}, ${roleInWords[about.role]}`;
+  const project =
+    about.project === undefined
+      ? ""
+      : `\nProject: ${oneLine(about.project.name)} (stage: ${about.project.stage})`;
+  const message = `From: ${sender}${project}\n\n${body}`;
   if (context.length === 0) return message;
   const lines = context.map((said) => {
     const time = new Date(said.sentAt).toISOString().slice(11, 16);
@@ -208,6 +239,24 @@ export function formatForAgent(
     return `- ${said.actorName ?? said.actorId} (${time} UTC): ${words}`;
   });
   return `${CONTEXT_LEAD}\n${lines.join("\n")}\n\n${message}`;
+}
+
+/**
+ * The sender's role and the thread's project, for the lines the agent reads. Optional: if the
+ * lookup fails, it is logged and the message goes without them, as before part D.
+ */
+async function senderAndProject(
+  deps: ConversationDeps,
+  conversationId: string,
+  actorId: string,
+  log: Logger,
+): Promise<SenderAndProject> {
+  try {
+    return await readSenderAndProject(deps.db, conversationId, actorId);
+  } catch (error) {
+    log.warn("conversation.sender_lookup_failed", { conversationId, error });
+    return { role: undefined, project: undefined };
+  }
 }
 
 async function ensureSession(
@@ -651,10 +700,13 @@ async function forwardPending(
     try {
       const sessionId = await ensureSession(deps, conversation, log);
       // Without the thread's context: it is not stored (the session's events record what was
-      // sent), so a message handed over late goes as it would have before decision 140.
+      // sent), so a message handed over late goes as it would have before decision 140. The
+      // role and project are read again: this runs under the sync lease, but it is one query
+      // of primary-key lookups, next to the agent call the lease already covers.
+      const about = await senderAndProject(deps, conversation.id, message.actorId, log);
       const agentEventId = await deps.runtime.sendMessage(
         sessionId,
-        formatForAgent(message.actorId, message.text, message.actorName),
+        formatForAgent(message.actorId, message.text, message.actorName, [], about),
       );
       await markForwarded(deps.db, message.id, agentEventId);
       await markWaiting(deps.db, conversation.id);

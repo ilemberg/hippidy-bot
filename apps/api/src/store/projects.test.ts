@@ -8,8 +8,10 @@ import {
   isApproved,
   listActorRoles,
   listProjects,
+  readSenderAndProject,
   recordApproval,
   setActorRole,
+  setConversationProject,
   setProjectStage,
 } from "./projects.ts";
 import { createTestDb } from "./testing.ts";
@@ -315,6 +317,80 @@ describe("the approval rule", () => {
     expect(isApproved((await getProject(db, projectId))?.approvals ?? [], "ticket", "T-1")).toBe(
       true,
     );
+  });
+});
+
+describe("a thread's project and its sender's role", () => {
+  async function thread(workspaceId = "T1") {
+    return await findOrCreateConversation(db, {
+      source: "slack",
+      workspaceId,
+      channelId: "C1",
+      threadId: "100.1",
+    });
+  }
+
+  it("links a thread to a project and unlinks it", async () => {
+    const project = await createProject(db, { name: "Search", createdBy: creator });
+    const conversation = await thread();
+    expect(await setConversationProject(db, conversation.id, project.id)).toEqual({
+      kind: "set",
+      projectId: project.id,
+    });
+    expect(await setConversationProject(db, conversation.id, null)).toEqual({
+      kind: "set",
+      projectId: null,
+    });
+    const rows = await db.query(`select project_id, agent_kind from conversations`);
+    expect(rows).toEqual([{ project_id: null, agent_kind: null }]);
+  });
+
+  it("refuses an unknown conversation or project", async () => {
+    const project = await createProject(db, { name: "Search", createdBy: creator });
+    const conversation = await thread();
+    expect(await setConversationProject(db, missing, project.id)).toEqual({
+      kind: "no_conversation",
+    });
+    expect(await setConversationProject(db, missing, null)).toEqual({ kind: "no_conversation" });
+    expect(await setConversationProject(db, conversation.id, missing)).toEqual({
+      kind: "no_project",
+    });
+  });
+
+  it("reads neither for a thread with no project and a sender with no role", async () => {
+    const conversation = await thread();
+    expect(await readSenderAndProject(db, conversation.id, "U1")).toEqual({
+      role: undefined,
+      project: undefined,
+    });
+    expect(await readSenderAndProject(db, missing, "U1")).toEqual({
+      role: undefined,
+      project: undefined,
+    });
+  });
+
+  it("reads the role held in the thread's workspace, and the project's current stage", async () => {
+    const project = await createProject(db, { name: "Search", createdBy: creator });
+    const conversation = await thread();
+    await setConversationProject(db, conversation.id, project.id);
+    await role("U1", "product_manager");
+    await setActorRole(db, { source: "slack", workspaceId: "T2", actorId: "U2", role: "qa" });
+    await setProjectStage(db, project.id, "ship");
+
+    expect(await readSenderAndProject(db, conversation.id, "U1")).toEqual({
+      role: "product_manager",
+      project: { name: "Search", stage: "ship" },
+    });
+    // U2 holds a role, but in another workspace.
+    expect(await readSenderAndProject(db, conversation.id, "U2")).toEqual({
+      role: undefined,
+      project: { name: "Search", stage: "ship" },
+    });
+    const elsewhere = await thread("T2");
+    expect(await readSenderAndProject(db, elsewhere.id, "U2")).toEqual({
+      role: "qa",
+      project: undefined,
+    });
   });
 });
 

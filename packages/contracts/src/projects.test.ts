@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createProjectRequestSchema,
   recordApprovalRequestSchema,
+  setConversationProjectRequestSchema,
   setRoleRequestSchema,
   updateProjectRequestSchema,
 } from "./projects.ts";
@@ -146,5 +147,30 @@ describe("request text", () => {
       actor,
     });
     expect(parsed.subjectRef).toBe("T-1");
+  });
+});
+
+describe("setConversationProjectRequestSchema", () => {
+  const projectId = "8f2b7c1e-3d4a-4b5c-9d6e-7f8a9b0c1d2e";
+
+  it("takes a project id, or null to unlink", () => {
+    expect(setConversationProjectRequestSchema.parse({ projectId })).toEqual({ projectId });
+    expect(setConversationProjectRequestSchema.parse({ projectId: null })).toEqual({
+      projectId: null,
+    });
+  });
+
+  it("refuses a missing or malformed id, and anything else", () => {
+    for (const body of [
+      {},
+      { projectId: "nope" },
+      { projectId: 1 },
+      { projectId, agentKind: "x" },
+    ]) {
+      expect(
+        setConversationProjectRequestSchema.safeParse(body).success,
+        JSON.stringify(body),
+      ).toBe(false);
+    }
   });
 });

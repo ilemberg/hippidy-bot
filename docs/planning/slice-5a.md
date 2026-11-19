@@ -77,7 +77,11 @@ All behind the service token, like `/v1/messages`. Shapes in `packages/contracts
   by hand. If the scope is missing, the adapter sends the mention alone, as today.
 - **D. Project and role in the message.** The first line the agent gets becomes
   `From: <name> (<role>), project <name>, stage <stage>`. A thread's first message names its
-  project (decision 153); the agent asks when it cannot tell.
+  project (decision 153); the agent asks when it cannot tell. As built (2026-11-19): the
+  `From:` line ends with the role in words (`From: <name> (Slack user <id>), product
+  manager`), and a thread with a project gets a second line, `Project: <name> (stage:
+  <stage>)`. Threads are linked by hand with `PUT /v1/conversations/:id/project` until the
+  bot can tell from the first message. No role and no project: exactly the text of before.
 - **E. The product agent.** `agents/product.md` and its environment; the repo read-only and
   no GitHub tools (147); the approval tool as a custom tool whose call the API answers.
 - **F. The document system**, once the probe has settled E1.

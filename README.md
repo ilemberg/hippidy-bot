@@ -411,8 +411,9 @@ Locally, with `ATLASSIAN_SERVICE_KEY` set: `pnpm atlassian:probe` (add `--writes
 ## Slice 5A: projects and roles
 
 Projects, the roles people hold and approvals are kept in Supabase (`projects`,
-`actor_roles`, `approvals`; `docs/planning/slice-5a.md`). Nothing in Slack uses them yet. Until
-there is a UI, roles are set by hand through the API. With the service token from Vercel in
+`actor_roles`, `approvals`; `docs/planning/slice-5a.md`). The agent is told a sender's role
+and a thread's project and stage (part D); nothing else in Slack uses them yet. Until there is
+a UI, roles are set by hand through the API. With the service token from Vercel in
 `HIPPIDY_SERVICE_TOKEN` (read it with `read -s HIPPIDY_SERVICE_TOKEN`, never paste it into a
 chat or your shell history):
 
@@ -433,7 +434,17 @@ curl -s -H "Authorization: Bearer $HIPPIDY_SERVICE_TOKEN" https://hippidy-bot.ve
 curl -s -X POST https://hippidy-bot.vercel.app/v1/projects/<id>/approvals \
   -H "Authorization: Bearer $HIPPIDY_SERVICE_TOKEN" -H 'content-type: application/json' \
   -d '{"subject":"plan","action":"approve","actor":{"source":"slack","workspaceId":"<team id>","actorId":"<user id>"}}'
+
+# Link a thread (a conversation id from GET /v1/conversations) to a project; "projectId":null unlinks it
+curl -s -X PUT https://hippidy-bot.vercel.app/v1/conversations/<conversation id>/project \
+  -H "Authorization: Bearer $HIPPIDY_SERVICE_TOKEN" -H 'content-type: application/json' \
+  -d '{"projectId":"<project id>"}'
 ```
+
+From then on, every message the agent gets in that thread carries a
+`Project: <name> (stage: <stage>)` line after the `From:` line, and the `From:` line ends with
+the sender's role when they hold one (for example `, product manager`). A person with no role
+and a thread with no project get exactly the text they got before.
 
 The Slack team and user ids are in Slack under a person's profile, **More**, **Copy member
 ID**, and in the API's `message.received` log lines. An approval records what it is told and

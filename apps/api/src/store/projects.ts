@@ -293,3 +293,72 @@ export function isApproved(
   }
   return APPROVING_ROLES.every((role) => approvedBy.has(role));
 }
+
+export type SetConversationProjectResult =
+  { kind: "set"; projectId: string | null } | { kind: "no_conversation" } | { kind: "no_project" };
+
+/**
+ * Ties a conversation to a project, or unties it with null (decision 153). Only `project_id`
+ * changes: not the agent kind, and not `updated_at`, which a session-start claim reads to tell
+ * whether it went stale.
+ */
+export async function setConversationProject(
+  db: Db,
+  conversationId: string,
+  projectId: string | null,
+): Promise<SetConversationProjectResult> {
+  if (projectId !== null) {
+    const found = await db.query(`select id from projects where id = $1`, [projectId]);
+    if (found.length === 0) return { kind: "no_project" };
+  }
+  const rows = await db.query(
+    `update conversations set project_id = $2::uuid where id = $1::uuid returning project_id`,
+    [conversationId, projectId],
+  );
+  if (rows[0] === undefined) return { kind: "no_conversation" };
+  const r = z.object({ project_id: z.string().nullable() }).parse(rows[0]);
+  return { kind: "set", projectId: r.project_id };
+}
+
+/** What the agent is told about a message besides its text (slice 5A, part D). */
+export interface SenderAndProject {
+  /** The sender's role, when they hold one in the conversation's source and workspace. */
+  role: Role | undefined;
+  /** The conversation's project, when it has one. */
+  project: { name: string; stage: ProjectStage } | undefined;
+}
+
+const senderAndProjectRow = z.object({
+  role: roleSchema.nullable(),
+  project_name: z.string().nullable(),
+  project_stage: projectStageSchema.nullable(),
+});
+
+/**
+ * The sender's role and the conversation's project, in one query whose every lookup is by
+ * primary key. Neither is known when the conversation does not exist.
+ */
+export async function readSenderAndProject(
+  db: Db,
+  conversationId: string,
+  actorId: string,
+): Promise<SenderAndProject> {
+  const rows = await db.query(
+    `select r.role, p.name as project_name, p.stage as project_stage
+     from conversations c
+     left join actor_roles r
+       on r.source = c.source and r.workspace_id = c.workspace_id and r.actor_id = $2
+     left join projects p on p.id = c.project_id
+     where c.id = $1`,
+    [conversationId, actorId],
+  );
+  if (rows[0] === undefined) return { role: undefined, project: undefined };
+  const r = senderAndProjectRow.parse(rows[0]);
+  return {
+    role: r.role ?? undefined,
+    project:
+      r.project_name !== null && r.project_stage !== null
+        ? { name: r.project_name, stage: r.project_stage }
+        : undefined,
+  };
+}
