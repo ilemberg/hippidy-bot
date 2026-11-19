@@ -14,6 +14,7 @@ import {
 import { createPostgresDb, type Db } from "./db.ts";
 import { listConversations, readAgentEvents, readConversation, readTranscript } from "./reading.ts";
 import {
+  latestActivity,
   latestStoredEventTime,
   recordUsage,
   storeAgentEvents,
@@ -350,6 +351,44 @@ describe("createPostgresDb", () => {
     expect(await storedEventsToActOn(db, conversation.id, "sesn_9")).toEqual([
       { id: "evt_a", type: "agent.message", processed_at: "2026-11-18T00:00:05.123456Z" },
     ]);
+  });
+
+  it("reads the latest activity from JSON payloads, after a time (decision 106)", async () => {
+    const key = { source: "slack" as const, workspaceId: "T", channelId: "C", threadId: "8.8" };
+    const conversation = await findOrCreateConversation(db, key);
+    const at = (second: number) => `2026-11-18T01:00:0${String(second)}Z`;
+    await storeAgentEvents(db, conversation.id, "sesn_8", [
+      {
+        id: "m0",
+        type: "agent.message",
+        kind: "agent_message",
+        text: "Too old.",
+        processedAt: at(0),
+        payload: {},
+      },
+      {
+        id: "m1",
+        type: "agent.message",
+        kind: "agent_message",
+        text: "Testing.",
+        processedAt: at(2),
+        payload: {},
+      },
+      {
+        id: "t1",
+        type: "agent.tool_use",
+        kind: null,
+        text: null,
+        processedAt: at(3),
+        payload: { name: "bash", input: { command: "pnpm test" } },
+      },
+    ]);
+    expect(
+      await latestActivity(db, conversation.id, "sesn_8", new Date("2026-11-18T01:00:01Z")),
+    ).toEqual({ words: "Testing.", step: { name: "bash", command: "pnpm test" } });
+    expect(
+      await latestActivity(db, conversation.id, "sesn_8", new Date("2026-11-18T01:00:05Z")),
+    ).toEqual({ words: undefined, step: undefined });
   });
 
   it("commits a transaction, and rolls back when the work throws", async () => {

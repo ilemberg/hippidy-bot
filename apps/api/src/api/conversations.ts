@@ -50,7 +50,8 @@ import {
   type SettledStatus,
 } from "../store/conversations.ts";
 import type { Db } from "../store/db.ts";
-import { latestStoredEventTime, storedEventsToActOn } from "../store/record.ts";
+import { latestActivity, latestStoredEventTime, storedEventsToActOn } from "../store/record.ts";
+import { progressDue, progressText } from "./progress.ts";
 import { keepEvents, keepUsage } from "./record.ts";
 
 export interface ConversationDeps {
@@ -802,6 +803,33 @@ async function flushSoon(deps: ConversationDeps, conversationId: string, log: Lo
   log.info("conversation.flush_deferred", { conversationId });
 }
 
+/**
+ * Posts a progress note when a turn has run long (decisions 103, 106): the latest one due on
+ * the schedule, once, built from the record. Called by reconcile outside the sync lease.
+ */
+export async function postProgress(
+  deps: ConversationDeps,
+  conversation: Conversation,
+  log: Logger,
+): Promise<void> {
+  const sessionId = sessionIdOf(conversation);
+  if (conversation.status !== "waiting" || conversation.waitingSince === null) return;
+  if (sessionId === undefined) return;
+  const waitingSince = conversation.waitingSince;
+  const elapsedMinutes = ((await databaseNow(deps.db)).getTime() - waitingSince.getTime()) / 60_000;
+  const due = progressDue(elapsedMinutes);
+  if (due === undefined) return;
+  const activity = await latestActivity(deps.db, conversation.id, sessionId, waitingSince);
+  await queue(
+    deps,
+    conversation,
+    `progress:${waitingSince.toISOString()}:${String(due.number)}`,
+    "note",
+    { kind: "reply", target: targetOf(conversation), text: progressText(due.atMinutes, activity) },
+  );
+  await flushSoon(deps, conversation.id, log);
+}
+
 export interface ReconcileResult {
   checked: number;
   failed: number;
@@ -823,6 +851,9 @@ export async function reconcile(deps: ConversationDeps, log: Logger): Promise<Re
     const conversationLog = log.child({ conversationId: conversation.id });
     try {
       await syncConversation(deps, conversation, conversationLog);
+      // After the sync has let go of the conversation: a note must not hold up a stop or the
+      // next webhook (decision 106).
+      await postProgress(deps, await getConversation(deps.db, conversation.id), conversationLog);
     } catch (error) {
       failed++;
       conversationLog.error("reconcile.conversation_failed", { error });

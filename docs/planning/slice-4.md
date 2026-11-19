@@ -219,7 +219,7 @@ Schema ships before the code that uses it (decision 86); one branch per pull req
 | B2 | Read only new events (decisions 95, 131) | B1; the experiment |
 | C | The agent gets the repo, the sandbox tools and the GitHub MCP server; the agent sync learns MCP servers, hosts, packages and the vault; sessions mount the repo and attach the vault | B |
 | D | The skill, and ✅ from the pull request's CI checks (decision 132) | C |
-| E | Progress in the thread; the eval-case view (its migration first) | C |
+| E | Progress in the thread; the eval-case view (decision 133) | C |
 | - | Close: live checks, database size, retro, re-sketch slice 5 | All of the above |
 
 ## What you will need to do by hand
