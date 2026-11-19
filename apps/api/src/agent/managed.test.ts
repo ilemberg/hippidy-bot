@@ -271,3 +271,30 @@ describe("starting a session", () => {
     expect(created).toEqual([]);
   });
 });
+
+describe("reading events", () => {
+  it("asks only for events since a time, and reads a stored payload back the same way", async () => {
+    const asked: unknown[] = [];
+    const client = {
+      beta: {
+        sessions: {
+          events: {
+            list: async function* (_sessionId: string, query: unknown) {
+              asked.push(query);
+              yield await Promise.resolve(agentMessage);
+            },
+          },
+        },
+      },
+    } as unknown as Anthropic;
+    const runtime = createManagedAgentRuntime(config, client);
+    const [listed] = await runtime.listEvents("sesn_1", { since: "2026-11-18T00:00:02.000Z" });
+    expect(asked).toEqual([{ order: "asc", "created_at[gte]": "2026-11-18T00:00:02.000Z" }]);
+    await runtime.listEvents("sesn_1");
+    expect(asked[1]).toEqual({ order: "asc" });
+
+    const stored: unknown = JSON.parse(JSON.stringify(listed?.payload));
+    expect(runtime.readStoredEvent(stored)).toEqual(listed);
+    expect(runtime.readStoredEvent({ nothing: true })).toBeUndefined();
+  });
+});

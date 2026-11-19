@@ -215,7 +215,7 @@ Schema ships before the code that uses it (decision 86); one branch per pull req
 | A3 | Migration only: the sync lease's owner column | - |
 | - | The experiment | A2 merged; the token saved (done) |
 | B1 | The loop for long turns: lease owner check, give up on silence, post only the last message, deny a call that waits (decision 126) | A3 merged and applied |
-| B2 | Read only new events (decision 95) | B1; the experiment |
+| B2 | Read only new events (decisions 95, 131) | B1; the experiment |
 | C | The agent gets the repo, the sandbox tools and the GitHub MCP server; the agent sync learns MCP servers, hosts, packages and the vault; sessions mount the repo and attach the vault | B |
 | D | Instructions, the skill, an outcome with every message, ✅ from the verdict | C |
 | E | Progress in the thread; the eval-case view (its migration first) | C |

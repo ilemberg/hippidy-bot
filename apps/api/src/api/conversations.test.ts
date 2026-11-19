@@ -6,6 +6,7 @@ import { createTestDb } from "../store/testing.ts";
 import { memoryLogger } from "../testing.ts";
 import {
   formatForAgent,
+  mergeEvents,
   MAX_FORWARD_ATTEMPTS,
   notes,
   reconcile,
@@ -143,6 +144,86 @@ describe("receiveMessage", () => {
     await expect(receiveMessage(deps, message(1), log)).rejects.toThrow("anthropic down");
     await receiveMessage(deps, message(1), log);
     expect(runtime.sessions.size).toBe(1);
+  });
+});
+
+describe("reading only new events (decision 95)", () => {
+  it("asks the runtime only for events since the latest one stored", async () => {
+    await receiveMessage(deps, message(1), log);
+    const sessionId = runtime.onlySessionId();
+    runtime.work(sessionId, "Looking.");
+    await sync(sessionId);
+    expect(runtime.listedSince).toEqual([undefined]);
+
+    const latest = runtime.sessions.get(sessionId)?.events.at(-1)?.processedAt;
+    runtime.finish(sessionId, "Done.");
+    await sync(sessionId);
+    expect(runtime.listedSince).toEqual([undefined, latest]);
+    // The turn began before the second listing; its end is found from the record.
+    expect(slack.replies()).toEqual(["Done."]);
+    expect(slack.statuses()).toEqual([{ messageIds: ["100.000001"], status: "answered" }]);
+  });
+
+  it("settles a message that was queued when it was last read", async () => {
+    await receiveMessage(deps, message(1), log);
+    await receiveMessage(deps, message(2), log);
+    const sessionId = runtime.onlySessionId();
+    runtime.reply(sessionId, "Answer 1.");
+    await sync(sessionId);
+    runtime.reply(sessionId, "Answer 2.");
+    await sync(sessionId);
+    expect(slack.replies()).toEqual(["Answer 1.", "Answer 2."]);
+    expect(slack.statuses()).toEqual([
+      { messageIds: ["100.000001"], status: "answered" },
+      { messageIds: ["100.000002"], status: "answered" },
+    ]);
+  });
+
+  it("reads everything again when the record has none of the session's events", async () => {
+    await receiveMessage(deps, message(1), log);
+    const sessionId = runtime.onlySessionId();
+    runtime.work(sessionId, "Looking.");
+    await sync(sessionId);
+    await db.query(`delete from agent_events`); // as if storing had failed
+    runtime.finish(sessionId, "Done.");
+    await sync(sessionId);
+    expect(runtime.listedSince.at(-1)).toBeUndefined();
+    expect(slack.replies()).toEqual(["Done."]);
+  });
+});
+
+describe("mergeEvents", () => {
+  const record = (id: string, processedAt: string | null, text?: string) => ({
+    id,
+    type: "t",
+    processedAt,
+    payload: {},
+    event: text === undefined ? undefined : ({ kind: "agent_message", id, text } as const),
+  });
+
+  it("keeps each event once, as last reported, in processing order with queued ones last", () => {
+    const merged = mergeEvents(
+      [
+        record("a", "2026-11-18T00:00:01.000Z"),
+        record("q", null),
+        record("b", "2026-11-18T00:00:02.000Z", "old"),
+      ],
+      [
+        record("b", "2026-11-18T00:00:02.000Z", "new"),
+        record("q", "2026-11-18T00:00:03.000Z"),
+        record("c", null),
+      ],
+    );
+    expect(merged.map((r) => r.id)).toEqual(["a", "b", "q", "c"]);
+    expect(merged[1]?.event).toMatchObject({ text: "new" });
+  });
+
+  it("orders a finer time from the runtime against the same time from the record", () => {
+    const merged = mergeEvents(
+      [record("a", "2026-11-18T00:00:01.123Z")],
+      [record("a", "2026-11-18T00:00:01.123456Z"), record("b", "2026-11-18T00:00:01.123789Z")],
+    );
+    expect(merged.map((r) => r.id)).toEqual(["a", "b"]);
   });
 });
 

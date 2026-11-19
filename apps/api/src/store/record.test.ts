@@ -10,9 +10,11 @@ import {
 } from "./conversations.ts";
 import {
   conversationsToBackfill,
+  latestStoredEventTime,
   markAgentEventsSynced,
   recordUsage,
   storeAgentEvents,
+  storedEventsToActOn,
   type AgentEventToStore,
   type UsageToStore,
 } from "./record.ts";
@@ -566,5 +568,55 @@ describe("schema", () => {
       `select reloptions from pg_class where oid = 'public.conversation_transcript'::regclass`,
     );
     expect(rows).toEqual([{ reloptions: ["security_invoker=true"] }]);
+  });
+});
+
+describe("reading the record back for the loop (decision 95)", () => {
+  it("knows when the session's latest stored event was processed", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    expect(await latestStoredEventTime(db, conversation.id, "sesn_1")).toBeUndefined();
+    await insertEvent(conversation.id, {
+      id: "e1",
+      type: "x",
+      processedAt: "2026-11-18T00:00:01Z",
+    });
+    await insertEvent(conversation.id, {
+      id: "e2",
+      type: "x",
+      processedAt: "2026-11-18T00:00:03Z",
+    });
+    await insertEvent(conversation.id, { id: "q", type: "user.message", kind: "user_message" });
+    expect((await latestStoredEventTime(db, conversation.id, "sesn_1"))?.toISOString()).toBe(
+      "2026-11-18T00:00:03.000Z",
+    );
+    expect(await latestStoredEventTime(db, conversation.id, "sesn_other")).toBeUndefined();
+  });
+
+  it("gives back only the events the loop acts on, in processing order, queued last", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    await insertEvent(conversation.id, { id: "q", type: "user.message", kind: "user_message" });
+    await insertEvent(conversation.id, {
+      id: "e2",
+      type: "session.status_idle",
+      kind: "idle",
+      processedAt: "2026-11-18T00:00:02Z",
+    });
+    await insertEvent(conversation.id, {
+      id: "tool",
+      type: "agent.tool_use",
+      processedAt: "2026-11-18T00:00:01.500Z",
+    });
+    await insertEvent(conversation.id, {
+      id: "e1",
+      type: "agent.message",
+      kind: "agent_message",
+      text: "Hi.",
+      processedAt: "2026-11-18T00:00:01Z",
+    });
+    expect(await storedEventsToActOn(db, conversation.id, "sesn_1")).toEqual([
+      { id: "e1", type: "agent.message" },
+      { id: "e2", type: "session.status_idle" },
+      { id: "q", type: "user.message" },
+    ]);
   });
 });

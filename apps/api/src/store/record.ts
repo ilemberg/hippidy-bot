@@ -82,6 +82,43 @@ export async function storeAgentEvents(
 }
 
 /**
+ * When the session's latest stored event was processed, or undefined if none is stored. A
+ * sync asks the runtime only for events from then on (decision 95).
+ */
+export async function latestStoredEventTime(
+  db: Db,
+  conversationId: string,
+  sessionId: string,
+): Promise<Date | undefined> {
+  const rows = await db.query(
+    `select max(processed_at) as latest from agent_events
+     where conversation_id = $1 and agent_session_id = $2`,
+    [conversationId, sessionId],
+  );
+  const latest = z.object({ latest: z.coerce.date().nullable() }).parse(rows[0]).latest;
+  return latest ?? undefined;
+}
+
+/**
+ * The stored payloads of the session's events the loop acts on (those with a kind), in the
+ * order the runtime processed them, queued messages last. Small rows only: tool calls and
+ * their output, which make up most of a coding session, have no kind.
+ */
+export async function storedEventsToActOn(
+  db: Db,
+  conversationId: string,
+  sessionId: string,
+): Promise<unknown[]> {
+  const rows = await db.query(
+    `select payload from agent_events
+     where conversation_id = $1 and agent_session_id = $2 and kind is not null
+     order by processed_at asc nulls last, seq asc`,
+    [conversationId, sessionId],
+  );
+  return rows.map((row) => z.object({ payload: z.unknown() }).parse(row).payload);
+}
+
+/**
  * Notes that the session's events are in the record as of now. Conversations never marked
  * are the ones the backfill still has to visit. Leaves `updated_at` alone: that column orders
  * the reconcile job's work and times out session starts.
