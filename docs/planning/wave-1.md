@@ -242,7 +242,7 @@ shipped changes, with two approvals on the way and two agents behind the one bot
 
 Three parts, each a slice of its own size. None is planned in detail and none has started.
 
-**5A. Plan and discovery.** Demo: a product manager starts a project in Slack; several
+**5A. Plan and discovery.** Planned in `slice-5a.md`; started 2026-11-19 (decision 163). Demo: a product manager starts a project in Slack; several
 people and the bot write its plan document in a thread; the product manager and the
 engineering manager approve it. Needs: projects, roles and approvals in the database; the
 product agent; threads tied to a project; the bot reading what was said since its last turn;
