@@ -10,8 +10,9 @@ create table public.projects (
   id uuid primary key default gen_random_uuid(),
   name text not null check (length(name) between 1 and 200),
   stage text not null default 'plan' check (stage in ('plan', 'roadmap', 'ship', 'end')),
-  -- Who asked for it: the source and actor id, as on inbound_messages.
+  -- Who asked for it, as on inbound_messages and actor_roles.
   created_by_source text not null,
+  created_by_workspace_id text not null,
   created_by_actor_id text not null,
   -- The project's main thread (decision 155): the latest thread in which the bot was
   -- mentioned. Set from part D on.
@@ -39,23 +40,32 @@ create table public.actor_roles (
 -- (decision 146): nothing here stops a stage change.
 create table public.approvals (
   id uuid primary key default gen_random_uuid(),
-  project_id uuid not null references public.projects (id) on delete cascade,
+  -- Restrict, not cascade: deleting a project must not erase its approval history.
+  project_id uuid not null references public.projects (id) on delete restrict,
   subject text not null check (subject in ('plan', 'roadmap', 'ticket', 'end')),
-  -- The document or ticket in the content system; free text until E1 picks the system.
+  -- The document or ticket in the content system; free text until E1 picks the system. A
+  -- ticket approval must name its ticket, or two tickets' approvals would read as one.
   subject_ref text not null default '',
   -- The version approved, so an edit after approval can be noticed (decision 137).
   subject_version text not null default '',
   action text not null check (action in ('approve', 'withdraw')),
   actor_source text not null,
+  actor_workspace_id text not null,
   actor_id text not null,
   -- The role the person held when they acted, copied so a later change does not rewrite it.
-  role text,
+  role text check (
+    role in ('engineering_manager', 'product_manager', 'tech_lead', 'engineer', 'qa', 'designer')
+  ),
   -- The conversation the approval was given in, when there is one.
   conversation_id uuid references public.conversations (id) on delete set null,
-  recorded_at timestamptz not null default now()
+  recorded_at timestamptz not null default now(),
+  -- The order rows were recorded in, so "latest per approver" never ties, even for two rows
+  -- written in one transaction (same now()).
+  seq bigint generated always as identity,
+  check (subject <> 'ticket' or subject_ref <> '')
 );
 
-create index approvals_project_idx on public.approvals (project_id, subject, recorded_at);
+create index approvals_project_idx on public.approvals (project_id, subject, seq);
 
 -- Which project a thread belongs to, and which agent it was given (decisions 139, 153). Both
 -- null for every thread so far: no project, and today's agent (the engineer).

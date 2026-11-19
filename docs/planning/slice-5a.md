@@ -30,7 +30,7 @@ C to F change what the bot does in every thread; each waits for the owner to try
 One migration, additive only (decision 86), so the code before and after it both work.
 
 - `projects`: `id`, `name`, `stage` (`plan`, `roadmap`, `ship`, `end`; decision 136),
-  `created_by` (the actor who asked for it), `main_conversation_id` (decision 155, set
+  who asked for it (source, workspace, actor), `main_conversation_id` (decision 155, set
   later), `created_at`, `updated_at`.
 - `actor_roles`: the hand-made map from a person to a role (decision 138): `source`,
   `workspace_id`, `actor_id`, `role` (one of the six of `projects.md`), `updated_at`. One
@@ -38,7 +38,9 @@ One migration, additive only (decision 86), so the code before and after it both
 - `approvals`: append-only (decision 152): `project_id`, `subject` (`plan`, `roadmap`,
   `ticket`, `end`; decision 137), `subject_ref` (the document or ticket in the content
   system, free text until E1), `subject_version` (so an edit after approval can be noticed),
-  `action` (`approve` or `withdraw`), `actor_id`, `role` at the time, `recorded_at`.
+  `action` (`approve` or `withdraw`), who acted (source, workspace, actor), their `role` at
+  the time, `recorded_at`, and `seq`, the order recorded, so "latest per approver" never
+  ties. A project with approvals cannot be deleted, so the history survives.
   Recording is not checking (decision 146): the API stores what the agent reports.
 - `conversations` gains `project_id` (nullable: development without a project stays as it
   is, decision 141) and `agent_kind` (nullable; null is today's agent, the engineer).
