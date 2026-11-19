@@ -108,74 +108,36 @@ workflow in `release`). All answered: see `decisions.md` 115, 120 and 118.
 
 ## E. Blocks slice 5
 
-Slice 5 became the project workflow in `projects.md`, built in three parts (5A, 5B, 5C;
-`decisions.md` 134 to 149). The questions were asked again on 2026-11-19 and the grill is
-still going.
+Slice 5 became the project workflow in `projects.md`, built in three parts (5A, 5B, 5C). The
+questions were asked again on 2026-11-19 and all are answered, in `decisions.md` 134 to 156.
+Two answers wait for a probe.
 
-**E1. Which document system and which ticket system?** Still open. Six candidates were
-researched on 2026-11-19; the table and its sources are in `stack-and-tools.md`. What decides
-it is whether the system's MCP server takes a fixed token, because that is what our vault
-holds today, and whether that works on the free plan.
-*Recommendation:* probe Jira and Confluence first, since they are what your real teams use:
-on a free site, can a service account key be made and does the MCP server accept it? If not,
-Linear: one product holds projects, documents and issues, and its MCP server takes an API
-key. Its free plan stops at 250 issues.
+**E1. Which document system and which ticket system?** Waits for a probe (`decisions.md`
+150): on a free Atlassian site, can a service account key be made, and does the MCP server
+accept it as a bearer token for Jira and for Confluence? If yes, Jira and Confluence. If
+not, Linear. The candidates and their sources are in `stack-and-tools.md`.
 
-E2 (the agent's rights in each system) is answered: see `decisions.md` 137 and 138 and the
-two tables in `projects.md`.
+**E11. How do screenshots get from the sandbox to Slack?** Waits for a probe before 5C is
+planned (`decisions.md` 149): does Chromium run in the sandbox, and how does a session hand
+files to the API. Posting them needs a new Slack permission.
 
-E3 (how a ticket is linked to a conversation, a branch and a pull request) is answered in
-outline: the project links them, see `decisions.md` 134. How a thread names its project is E6.
+Answered:
 
-**E4. What makes a ticket "ready" for the agent?**
-*Recommendation:* the product agent writes every ticket to one template (what and why, how to
-tell it is done, what is out of scope), and "ready" is the roadmap's approval by both
-(`decisions.md` 136). No separate ready state.
-
-**E5. Does the agent ask clarifying questions in Slack, on the ticket, or both?**
-*Recommendation:* in the thread it is working in. What was asked and answered is added to
-the ticket as a comment, so the next thread can read it.
-
-**E6. How is a thread tied to a project, and which agent answers it?** A thread belongs to
-one agent from its first message.
-*Recommendation:* the first message names the project, and the bot asks when it cannot tell.
-In a project, "start development on a ticket" opens an engineer thread and everything else
-goes to the product agent. Without a project, the four roles that may ask for development
-get the engineer agent, as today, and the others get the product agent.
-
-E7 (how the API recognises the actions it checks) is answered: it checks none for now, see
-`decisions.md` 145. That leaves E15.
-
-E8 (the product agent reads the repo, read-only), E9 (anyone may stop the bot) and E10 (QA
-may merge) are answered: see `decisions.md` 146, 147 and 144.
-
-**E11. How do screenshots get from the sandbox to Slack?** The agents cannot reach Slack, so
-the API has to fetch the images from the session and upload them, which needs a new Slack
-permission. Whether Chromium runs in the sandbox is the experiment decision 24 deferred, and
-how a session hands files out is not known. Agreed: a probe like slice 4's experiment before
-5C is planned (`decisions.md` 149).
-
-**E12. What does the production check cover?** The sandbox has no general web access and
-must hold no production secret (`decisions.md` 39, 128).
-*Recommendation:* three steps. The API waits until GitHub reports the merge commit's
-deployment as successful. The engineer agent then calls production's public routes from its
-sandbox: health, and the reference page listing what the change added (one more allowed
-host). For anything only visible in Slack, the bot asks the person who asked for the change
-to try it and say so in the thread. A smoke test that needs a secret belongs in a workflow in
-`release`, with slice 6.
-
-**E13. One epic per project, or several?**
-*Recommendation:* one, to start.
-
-E14 (the bot has its own account, and its comments say who asked) is answered: see
-`decisions.md` 148.
-
-**E15. Where is an approval written down, and how does the API know a project's stage?**
-With no gate in code (`decisions.md` 145) the API never sees an approval happen, yet it owns
-the stage (134) and must pick the agent for a new thread (E6).
-*Recommendation:* the agent writes the approval where the content lives, as a comment on the
-document or the epic naming who approved which version, and tells the API through one small
-tool that only records: project, stage, who, when. Recording is not checking.
+| Question | Answer | Decision |
+|---|---|---|
+| E2. The agents' rights in each system | The two tables in `projects.md` | 137, 138 |
+| E3. How a ticket is linked to a conversation, a branch and a pull request | The project links them | 134 |
+| E4. What makes a ticket ready | One template; ready when the roadmap is approved | 153 |
+| E5. Where the bot asks clarifying questions | In the thread it is working in, with a note in the project's main thread | 154 |
+| E6. Which project and which agent a thread gets | Named in the first message; "start development" opens an engineer thread | 152 |
+| E7. How the API recognises the actions it checks | It checks none for now | 145 |
+| E8. May the product agent read the repo | Yes, read-only | 146 |
+| E9. Who may stop the bot | Anyone | 147 |
+| E10. May QA merge | Yes | 144 |
+| E12. What the production check covers | Deployed, public routes, then a person for what only Slack shows | 156 |
+| E13. One epic per project, or several | Usually one; no rule | 155 |
+| E14. Whose name is on the bot's edits | The bot's own account; comments say who asked | 148 |
+| E15. Where an approval is written down | On the content, and recorded by the API | 151 |
 
 ## F. Blocks slice 6
 

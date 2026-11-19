@@ -1,7 +1,7 @@
 # Projects: how a feature moves from an idea to shipped
 
 Status: **draft, 2026-11-19. Planning only; nothing is built.** Written from a conversation
-that is still going, so expect changes. What is decided is in `decisions.md` 134 to 149; what
+that is still going, so expect changes. What is decided is in `decisions.md` 134 to 156; what
 is not is in `open-questions.md`, group E. This file describes the workflow; the slices that
 build it are sketched in `wave-1.md` (5A, 5B, 5C).
 
@@ -18,7 +18,8 @@ The unit of work is a **project** (decision 134). A project holds:
 
 hippidy-bot's database owns the project, its stage, who holds which role and every approval.
 The document system and the ticket system hold the content. Which systems those are is not
-chosen yet (E1; candidates in `stack-and-tools.md`).
+chosen yet: Jira and Confluence are probed first, then Linear (decision 150; candidates in
+`stack-and-tools.md`). A project usually has one epic, more when it makes sense (155).
 
 A project has many threads, on purpose. One thread is one agent session with a budget
 (decisions 51 and 69), so a thread cannot carry a feature for weeks. The documents and tickets
@@ -54,8 +55,10 @@ Decision 136.
   comment, or one of the two withdraws the approval, the work pauses and it is iterated again.
 - If an approved document or ticket is edited outside the bot, the bot warns in the project's
   threads. The approval stands.
-- _Recommended, not decided:_ an approval records the version it approved. That is how an
-  edit after approval is noticed.
+- An approval is written where the content lives: a comment on the document or the epic
+  naming who approved which version. The agent also tells the API, through a tool that only
+  records it, so the API knows the project's stage (decision 151). The recorded version is
+  how an edit after approval is noticed.
 
 ## Roles
 
@@ -102,21 +105,33 @@ In the document and ticket systems both agents write through one account, the bo
 each comment says who asked for it (decision 148).
 
 A thread belongs to one agent from its first message, because one thread is one session.
-How a thread is tied to a project and to an agent is open (E6), and so is where an approval
-is written down now that the API does not check it (E15).
+Which project and which agent (decision 152):
+
+- The first message names the project; the bot asks when it cannot tell.
+- In a project, "start development on a ticket" opens an engineer thread. Everything else
+  goes to the product agent.
+- Without a project, the four roles that may ask for development get the engineer agent, as
+  today. The others get the product agent.
+
+Tickets are written by the product agent to one template: what and why, how to tell it is
+done, what is out of scope. A ticket is ready when the roadmap is approved (decision 153).
 
 ## Threads and updates
 
-Decision 139.
+Decisions 139 and 154.
 
 - The bot acts only when mentioned. When it is, it is given the thread's messages since its
   last turn, so it has read what people said to each other.
-- Activity on a project is posted as a note in every active thread of that project: a change
-  of stage, an approval or its withdrawal, a pull request opened or merged, a ticket added,
-  and edits and comments on documents and tickets. This is meant to keep the number of open
-  threads small.
+- A project always has one **main thread**: the latest thread in which the bot was
+  mentioned. It moves by itself when people start talking to the bot somewhere else.
+- Activity on the project is posted as a note in the main thread: a change of stage, an
+  approval or its withdrawal, a pull request opened or merged, a ticket added, and edits and
+  comments on documents and tickets.
 - Notes are written by the API, with no model call, and batched so that a busy document does
-  not flood a thread.
+  not flood the thread.
+- The bot asks a clarifying question in the thread it is working in, because only there can
+  the answer reach its session. When that is not the main thread, the main thread gets a note
+  with a link to the question. Question and answer are added to the ticket as a comment.
 - Changes made outside the bot are reported as well as is cheap. The owner does not plan to
   edit outside the bot, so little time goes here.
 
@@ -134,7 +149,11 @@ Decision 141.
   (OpenAPI, made from the schemas in `packages/contracts`). The page is public.
 - A person merges. The bot learns of the merge by reading the pull request's state on
   reconcile (decision 108 stands: no GitHub webhook yet), then checks production and says so
-  in the thread. What that check covers is open (E12).
+  in the thread.
+- The production check (decision 156): the API waits until GitHub reports the merge commit's
+  deployment as successful; the engineer agent calls production's public routes from its
+  sandbox (health, and the reference page listing what the change added); for what is only
+  visible in Slack, the bot asks the person who asked for the change to try it and say so.
 - Everything is tested in production for now.
 
 ## Left for later
