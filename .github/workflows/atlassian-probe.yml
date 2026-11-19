@@ -1,0 +1,69 @@
+name: Atlassian probe
+
+# The probe of decisions 151 and 159, for E1 in docs/planning/open-questions.md: does
+# Atlassian's MCP server accept the bot's service account key as a bearer token (the only
+# credential the agent's vault holds), and can it read and write Jira and Confluence with it?
+# It calls the server straight from this runner: no agent, no Anthropic cost. Findings are in
+# the run's summary. With writes on, it leaves one Jira issue and one Confluence page behind,
+# marked as the probe's, to delete by hand.
+#
+# It needs ATLASSIAN_SERVICE_KEY, which lives in the `release` environment that only `main`
+# may use (decision 94). So it runs only from `main`, and only when started by hand:
+# Actions, Atlassian probe, Run workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      writes:
+        description: Also create one Jira issue and one Confluence page, and comment on each
+        type: boolean
+        default: false
+      site:
+        description: The site's address (example.atlassian.net), if the key reaches more than one
+        type: string
+        default: ""
+      jira_project:
+        description: Jira project key to create the probe's issue in (writes only)
+        type: string
+        default: ""
+      confluence_space:
+        description: Confluence space key to create the probe's page in (writes only)
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atlassian-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Probe Atlassian's MCP server
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: release
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The key is given only to this step, never to third-party actions.
+      - name: Probe
+        env:
+          ATLASSIAN_SERVICE_KEY: ${{ secrets.ATLASSIAN_SERVICE_KEY }}
+          ATLASSIAN_SITE: ${{ inputs.site }}
+          ATLASSIAN_PROBE_PROJECT: ${{ inputs.jira_project }}
+          ATLASSIAN_PROBE_SPACE: ${{ inputs.confluence_space }}
+          WRITES: ${{ inputs.writes }}
+        run: |
+          if [ "$WRITES" = "true" ]; then
+            pnpm atlassian:probe --writes
+          else
+            pnpm atlassian:probe
+          fi

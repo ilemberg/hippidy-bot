@@ -116,7 +116,7 @@ Two answers wait for a probe.
 151): on a free Atlassian site, can a service account key be made, and does the MCP server
 accept it as a bearer token for Jira and for Confluence? If yes, Jira and Confluence. If
 not, Linear. The candidates and their sources are in `stack-and-tools.md`. Where the probe
-stands is in `decisions.md` 158.
+stands is in `decisions.md` 158; the probe is a workflow run by hand in `release` (159).
 
 **E11. How do screenshots get from the sandbox to Slack?** Waits for a probe before 5C is
 planned (`decisions.md` 150): does Chromium run in the sandbox, and how does a session hand
