@@ -232,7 +232,7 @@ Revised 2026-11-18 after the plan was checked against the code and the SDK
 
 ## Slice 5: a feature moves through a project
 
-Re-sketched 2026-11-19 (`decisions.md` 134 to 143). The sketch before that was "work from a
+Re-sketched 2026-11-19 (`decisions.md` 134 to 149). The sketch before that was "work from a
 ticket instead of a sentence": `@hippidy-bot pick up HB-12`, with a work-item provider and a
 knowledge provider behind interfaces. That is now only the last stage of a longer workflow,
 described in `projects.md`: a project goes from a plan document, to an epic and tickets, to
@@ -258,7 +258,7 @@ project is ended and its tickets are closed. Needs: the engineer agent reading a
 tickets; the API's reference page; images from the sandbox to Slack; finding the merge; the
 production check.
 
-Decide before starting: questions E1 and E4 to E14. Two things need a probe first, like
+Decide before starting: questions E1, E4 to E6, E12, E13 and E15. Two things need a probe first, like
 slice 4's experiment: whether the chosen systems' MCP servers accept a token our vault can
 hold (E1), and how screenshots leave the sandbox (E11).
 

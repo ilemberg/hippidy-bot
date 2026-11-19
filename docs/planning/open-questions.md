@@ -109,7 +109,7 @@ workflow in `release`). All answered: see `decisions.md` 115, 120 and 118.
 ## E. Blocks slice 5
 
 Slice 5 became the project workflow in `projects.md`, built in three parts (5A, 5B, 5C;
-`decisions.md` 134 to 143). The questions were asked again on 2026-11-19 and the grill is
+`decisions.md` 134 to 149). The questions were asked again on 2026-11-19 and the grill is
 still going.
 
 **E1. Which document system and which ticket system?** Still open. Six candidates were
@@ -143,29 +143,17 @@ In a project, "start development on a ticket" opens an engineer thread and every
 goes to the product agent. Without a project, the four roles that may ask for development
 get the engineer agent, as today, and the others get the product agent.
 
-**E7. How does the API recognise the actions it must check itself?** Approve, withdraw an
-approval, start development, end a project. Either fixed words at the start of a message,
-read by the API, or the agent asks the API through a tool and the API checks the sender's
-role and the stage.
-*Recommendation:* fixed words. There are four, the check is plain code, and "looks good to
-me" in passing is never read as an approval. The bot answers each with what it recorded.
+E7 (how the API recognises the actions it checks) is answered: it checks none for now, see
+`decisions.md` 145. That leaves E15.
 
-**E8. May the product agent read the repo?**
-*Recommendation:* yes, read-only, with no GitHub tools. A plan and tickets written without
-seeing the code will not match it.
-
-**E9. Who may stop the bot?** The rights table gives it to the two managers; today anyone
-can.
-*Recommendation:* anyone. Stopping is the safe direction; only starting is gated.
-
-**E10. May QA merge?** It was said both ways: QA "can approve merges", and later "the
-engineer, engineering manager or tech lead can merge".
+E8 (the product agent reads the repo, read-only), E9 (anyone may stop the bot) and E10 (QA
+may merge) are answered: see `decisions.md` 146, 147 and 144.
 
 **E11. How do screenshots get from the sandbox to Slack?** The agents cannot reach Slack, so
 the API has to fetch the images from the session and upload them, which needs a new Slack
 permission. Whether Chromium runs in the sandbox is the experiment decision 24 deferred, and
-how a session hands files out is not known. Both need a probe like slice 4's experiment
-before 5C is planned.
+how a session hands files out is not known. Agreed: a probe like slice 4's experiment before
+5C is planned (`decisions.md` 149).
 
 **E12. What does the production check cover?** The sandbox has no general web access and
 must hold no production secret (`decisions.md` 39, 128).
@@ -179,10 +167,15 @@ to try it and say so in the thread. A smoke test that needs a secret belongs in 
 **E13. One epic per project, or several?**
 *Recommendation:* one, to start.
 
-**E14. Whose name is on the bot's edits in the document and ticket systems?** Both agents
-write through one account.
-*Recommendation:* an account of its own for the bot, and each comment says who asked for it.
-It uses one of a free plan's seats.
+E14 (the bot has its own account, and its comments say who asked) is answered: see
+`decisions.md` 148.
+
+**E15. Where is an approval written down, and how does the API know a project's stage?**
+With no gate in code (`decisions.md` 145) the API never sees an approval happen, yet it owns
+the stage (134) and must pick the agent for a new thread (E6).
+*Recommendation:* the agent writes the approval where the content lives, as a comment on the
+document or the epic naming who approved which version, and tells the API through one small
+tool that only records: project, stage, who, when. Recording is not checking.
 
 ## F. Blocks slice 6
 
