@@ -302,6 +302,18 @@ export async function releaseSessionStart(
 
 const agentKindRow = z.object({ agent_kind: z.enum(["engineer", "product"]).nullable() });
 
+/** The agent a conversation was given; null (every thread from before part E3) is the engineer. */
+export async function readAgentKind(
+  db: Db,
+  conversationId: string,
+): Promise<"engineer" | "product"> {
+  const rows = await db.query(`select agent_kind from conversations where id = $1`, [
+    conversationId,
+  ]);
+  const row = rows[0];
+  return row === undefined ? "engineer" : (agentKindRow.parse(row).agent_kind ?? "engineer");
+}
+
 /**
  * The agent that runs the conversation's sessions (decisions 153, 167), stored on the
  * conversation the first time a session is started for it, and kept from then on. A thread

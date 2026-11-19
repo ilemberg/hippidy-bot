@@ -10,15 +10,11 @@ import {
   type SessionUsage,
 } from "./runtime.ts";
 
-interface EngineerIds {
+/** What a session starts with: its agent, the one environment and the one vault. */
+interface SessionIds {
   agentId: string;
   environmentId: string;
   vaultId: string;
-}
-
-interface ProductIds {
-  agentId: string;
-  environmentId: string;
 }
 
 /**
@@ -31,10 +27,10 @@ export function createManagedAgentRuntime(
   config: AgentConfig,
   client = new Anthropic({ apiKey: config.apiKey, maxRetries: 2, timeout: 20_000 }),
 ): AgentRuntime {
-  let engineerIds: Promise<EngineerIds> | undefined;
-  let productIds: Promise<ProductIds> | undefined;
+  let engineerIds: Promise<SessionIds> | undefined;
+  let productIds: Promise<SessionIds> | undefined;
 
-  const resolveEngineerIds = (): Promise<EngineerIds> => {
+  const resolveEngineerIds = (): Promise<SessionIds> => {
     engineerIds ??= lookUpEngineerIds(client, config).catch((error: unknown) => {
       engineerIds = undefined; // try again on the next call
       throw error;
@@ -42,7 +38,7 @@ export function createManagedAgentRuntime(
     return engineerIds;
   };
 
-  const resolveProductIds = (): Promise<ProductIds> => {
+  const resolveProductIds = (): Promise<SessionIds> => {
     productIds ??= lookUpProductIds(client, config).catch((error: unknown) => {
       productIds = undefined; // try again on the next call
       throw error;
@@ -59,15 +55,17 @@ export function createManagedAgentRuntime(
     async startSession({ title, metadata, agentKind }) {
       if (agentKind === "product") {
         // The product agent (decisions 147, 167): the public repo mounted without a token, so
-        // it can read and clone but not push, and no vault, as it has no MCP servers. Fails
-        // closed like the engineer: if the agent is not found, no session starts.
-        const { agentId, environmentId } = await resolveProductIds();
+        // it can read and clone but not push, and the vault, for Atlassian's MCP server
+        // (slice 5A part F). Fails closed like the engineer: if the agent or the vault is not
+        // found, no session starts.
+        const { agentId, environmentId, vaultId } = await resolveProductIds();
         const session = await client.beta.sessions.create({
           agent: agentId,
           environment_id: environmentId,
           title,
           metadata,
           resources: [{ type: "github_repository", url: config.repositoryUrl }],
+          vault_ids: [vaultId],
           budget: budget(),
         });
         return {
@@ -208,13 +206,18 @@ async function findEnvironmentId(client: Anthropic, name: string): Promise<strin
   return environmentId;
 }
 
-async function lookUpEngineerIds(client: Anthropic, config: AgentConfig): Promise<EngineerIds> {
-  const agentId = await findAgentId(client, config.agentName);
-  const environmentId = await findEnvironmentId(client, config.environmentName);
+async function findVaultId(client: Anthropic, name: string): Promise<string | undefined> {
   let vaultId: string | undefined;
   for await (const vault of client.beta.vaults.list()) {
-    if (vault.display_name === config.vaultName && vault.archived_at === null) vaultId = vault.id;
+    if (vault.display_name === name && vault.archived_at === null) vaultId = vault.id;
   }
+  return vaultId;
+}
+
+async function lookUpEngineerIds(client: Anthropic, config: AgentConfig): Promise<SessionIds> {
+  const agentId = await findAgentId(client, config.agentName);
+  const environmentId = await findEnvironmentId(client, config.environmentName);
+  const vaultId = await findVaultId(client, config.vaultName);
   if (agentId === undefined || environmentId === undefined || vaultId === undefined) {
     throw new Error(
       `Agent "${config.agentName}", environment "${config.environmentName}" or vault ` +
@@ -225,16 +228,18 @@ async function lookUpEngineerIds(client: Anthropic, config: AgentConfig): Promis
   return { agentId, environmentId, vaultId };
 }
 
-async function lookUpProductIds(client: Anthropic, config: AgentConfig): Promise<ProductIds> {
+async function lookUpProductIds(client: Anthropic, config: AgentConfig): Promise<SessionIds> {
   const agentId = await findAgentId(client, config.productAgentName);
   const environmentId = await findEnvironmentId(client, config.environmentName);
-  if (agentId === undefined || environmentId === undefined) {
+  const vaultId = await findVaultId(client, config.vaultName);
+  if (agentId === undefined || environmentId === undefined || vaultId === undefined) {
     throw new Error(
-      `Agent "${config.productAgentName}" or environment "${config.environmentName}" not ` +
-        "found. Run the agent sync (pnpm agent:sync) with this workspace's API key.",
+      `Agent "${config.productAgentName}", environment "${config.environmentName}" or vault ` +
+        `"${config.vaultName}" not found. Run the agent sync (pnpm agent:sync) with this ` +
+        "workspace's API key and ATLASSIAN_SERVICE_KEY.",
     );
   }
-  return { agentId, environmentId };
+  return { agentId, environmentId, vaultId };
 }
 
 /** A Managed Agents event as it is recorded: untouched, with what the API makes of it. */

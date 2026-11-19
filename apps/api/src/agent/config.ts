@@ -24,7 +24,10 @@ export interface AgentConfig {
    * and clone the public repo but not push (decisions 147, 167).
    */
   repositoryUrl: string;
-  /** The vault holding the GitHub MCP server's credential, made by the agent sync. */
+  /**
+   * The vault holding the MCP servers' credentials (GitHub's for the engineer, Atlassian's for
+   * the product agent), made by the agent sync. Every session attaches it.
+   */
   vaultName: string;
 }
 

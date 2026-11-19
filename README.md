@@ -481,19 +481,45 @@ never says which one answered. A thread whose first message comes from someone w
 engineer. The choice is stored on the conversation (`agent_kind`) when its session starts and
 kept for the life of the thread; threads from before keep the engineer.
 
-The product agent writes and iterates the plan with people, in the thread for now (the
-document system comes in part F). It reads the repo to ground the plan: its session mounts the
-public repo without a token, so it can read and clone but not push (decision 147). It has no
-GitHub tools, no MCP servers and no vault, and never changes code or opens pull requests. It
+The product agent writes and iterates the plan with people. It reads the repo to ground the
+plan: its session mounts the public repo without a token, so it can read and clone but not
+push (decision 147). It has no GitHub tools, and never changes code or opens pull requests. It
 has two tools the API answers itself: `link_project` links the thread to a project (creating
 one only when a product manager or engineering manager asks), and `record_approval` records
 an approval given in the thread by the person approving.
+
+From part F it reaches Jira and Confluence on `levelforward-hippidy-bot.atlassian.net`
+through Atlassian's MCP server (`https://mcp.atlassian.com/v2/mcp`). The plan document lives
+in the Confluence space `SD`, and its link is posted in the thread; tickets go in the Jira
+project `SCRUM`, for now only when someone asks. It may search, read, create, edit, transition
+and comment; nothing that deletes, and not the server's generic `executeWrite` or
+`executeDestructive`. Everything it writes says who asked for it (decision 149).
 
 Nothing needs setting up by hand: on merge, the agent sync (`pnpm agent:sync`, run by CI)
 creates `hippidy-bot-product` beside `hippidy-bot`, in the same environment. Until it has,
 a product manager's or designer's new thread fails closed: the API logs
 `conversation.session_start_failed`, retries, and then answers with the same note as when the
-agent is missing.
+agent is missing. Product sessions also attach the vault, for the Atlassian credential: with no
+vault, they fail closed the same way.
+
+### The Atlassian key
+
+The agent sync keeps the service account's key in the Anthropic vault as the credential for
+Atlassian's MCP server, beside GitHub's (each server has its own secret). It reads it from
+`ATLASSIAN_SERVICE_KEY` in the `release` environment, the secret the probe uses. The key
+belongs to the bot's service account on the site, and needs these scopes:
+
+- Jira's and Confluence's own read and write scopes;
+- `read:me` and `read:account`, for the identity tools;
+- the MCP server's own: `search:jira:agent-interface`, `search:confluence:agent-interface`,
+  `read:jira:agent-interface`, `write:jira:agent-interface`,
+  `read:confluence:agent-interface` and `write:confluence:agent-interface`.
+
+A key's scopes cannot be changed after it is made: for different scopes, make a new key. To
+rotate it, replace `ATLASSIAN_SERVICE_KEY` in the repo's **Settings**, **Environments**,
+`release` (never into a chat, a file or your shell history), then run **Actions**,
+**Agent sync**, **Run workflow** on `main`. Without the secret, the sync warns and leaves the
+Atlassian credential as it was; GitHub's credential is never touched by it.
 
 ## Planning docs
 

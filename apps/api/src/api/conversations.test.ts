@@ -507,6 +507,20 @@ describe("a change is done when its pull request's CI passes (decision 132)", ()
     expect(slack.statuses()).toEqual([{ messageIds: ["100.000001"], status: "failed" }]);
   });
 
+  it("does not judge a product thread's turn by pull request checks", async () => {
+    verdict = { kind: "failed", names: ["Lint, typecheck, test"] };
+    await receiveMessage(deps, message(1), log);
+    const sessionId = runtime.onlySessionId();
+    await db.query(`update conversations set agent_kind = 'product'`);
+    runtime.work(sessionId);
+    runtime.pushed(sessionId);
+    runtime.finish(sessionId, "Plan updated.");
+    await sync(sessionId);
+    expect(asked).toEqual([]);
+    expect(slack.replies()).toEqual(["Plan updated."]);
+    expect(slack.statuses()).toEqual([{ messageIds: ["100.000001"], status: "answered" }]);
+  });
+
   it("does not ask GitHub about a turn that touched no pull request, nor twice", async () => {
     const sessionId = await changeTurn("Done.");
     await receiveMessage(deps, message(2), log);

@@ -22,25 +22,82 @@ describe("agent and environment files", () => {
     expect(agent.system).not.toContain("---");
   });
 
-  it("reads agents/product.md: same model, no MCP servers, web off, the two custom tools", () => {
+  it("reads agents/product.md: same model, no GitHub, web off, the two custom tools", () => {
     const engineer = readAgentFile("agents/hippidy.md");
     const product = readAgentFile("agents/product.md");
     expect(product).toMatchObject({ name: "hippidy-bot-product", model: engineer.model });
-    expect(product.mcp_servers).toEqual([]);
     expect(product.tools).toContainEqual(
       engineer.tools.find(
         (tool) => z.object({ type: z.literal("agent_toolset_20260401") }).safeParse(tool).success,
       ),
     );
-    expect(
-      product.tools.filter(
-        (tool) => z.object({ type: z.literal("mcp_toolset") }).safeParse(tool).success,
-      ),
-    ).toEqual([]);
     expect(customTools(product.tools).map((tool) => tool.name)).toEqual(
       customToolNameSchema.options,
     );
     expect(customTools(engineer.tools)).toEqual([]);
+  });
+
+  it("gives the product agent Atlassian's MCP server and no other (decision 147, part F)", () => {
+    const product = readAgentFile("agents/product.md");
+    expect(product.mcp_servers).toEqual([
+      { type: "url", name: "atlassian", url: "https://mcp.atlassian.com/v2/mcp" },
+    ]);
+    expect(mcpToolsets(product.tools).map((toolset) => toolset.mcp_server_name)).toEqual([
+      "atlassian",
+    ]);
+    // The engineer keeps GitHub's server alone.
+    const engineer = readAgentFile("agents/hippidy.md");
+    expect(engineer.mcp_servers.map((server) => server.name)).toEqual(["github"]);
+  });
+
+  it("enables exactly the listed Atlassian tools, each running without asking", () => {
+    const [atlassian] = mcpToolsets(readAgentFile("agents/product.md").tools);
+    // Every tool not listed is off, so a tool the server adds later stays off.
+    expect(atlassian?.default_config).toEqual({ enabled: false });
+    expect(atlassian?.configs.map((config) => config.name)).toEqual([
+      "atlassianUserInfo",
+      "getAccessibleAtlassianResources",
+      "discover",
+      "executeRead",
+      "search",
+      "searchJiraIssuesUsingJql",
+      "getJiraIssue",
+      "createJiraIssue",
+      "editJiraIssue",
+      "transitionJiraIssue",
+      "listJiraIssueComments",
+      "addOrEditJiraIssueComment",
+      "searchConfluence",
+      "getConfluenceContent",
+      "createConfluenceContent",
+      "updateConfluenceContent",
+    ]);
+    for (const config of atlassian?.configs ?? []) {
+      expect(config, config.name).toEqual({
+        name: config.name,
+        enabled: true,
+        permission_policy: { type: "always_allow" },
+      });
+    }
+  });
+
+  it("tells the product agent where the plan and tickets live, and to say who asked", () => {
+    const { system } = readAgentFile("agents/product.md");
+    expect(system).toContain("levelforward-hippidy-bot.atlassian.net");
+    expect(system).toContain("space with key `SD`");
+    expect(system).toContain("project with key `SCRUM`");
+    expect(system).toContain("says who asked for it");
+    expect(system).toContain("Never delete anything");
+  });
+
+  it("never enables a generic write or anything that deletes for the product agent", () => {
+    const [atlassian] = mcpToolsets(readAgentFile("agents/product.md").tools);
+    const enabled = (atlassian?.configs ?? [])
+      .filter((config) => config.enabled)
+      .map((config) => config.name);
+    expect(enabled).not.toContain("executeWrite");
+    expect(enabled).not.toContain("executeDestructive");
+    expect(enabled.filter((name) => /delete|remove|destroy|destructive/i.test(name))).toEqual([]);
   });
 
   it("reads environments/hippidy.yaml", () => {
@@ -147,6 +204,24 @@ function customTools(tools: readonly unknown[]): z.infer<typeof customTool>[] {
   return tools.flatMap((tool) => {
     if (z.object({ type: z.literal("custom") }).safeParse(tool).success) {
       return [customTool.parse(tool)];
+    }
+    return [];
+  });
+}
+
+const mcpToolset = z.strictObject({
+  type: z.literal("mcp_toolset"),
+  mcp_server_name: z.string(),
+  default_config: z.unknown(),
+  configs: z.array(
+    z.looseObject({ name: z.string(), enabled: z.boolean(), permission_policy: z.unknown() }),
+  ),
+});
+
+function mcpToolsets(tools: readonly unknown[]): z.infer<typeof mcpToolset>[] {
+  return tools.flatMap((tool) => {
+    if (z.object({ type: z.literal("mcp_toolset") }).safeParse(tool).success) {
+      return [mcpToolset.parse(tool)];
     }
     return [];
   });
