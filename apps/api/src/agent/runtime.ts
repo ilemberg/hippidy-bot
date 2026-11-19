@@ -19,10 +19,16 @@ export interface AgentRuntime {
   denyToolCalls(sessionId: string, toolUseIds: readonly string[], message: string): Promise<void>;
   /**
    * Every event of the session so far, oldest first, exactly as the runtime reported it, each
-   * with what the API makes of it. Throws SessionNotFoundError if the runtime no longer has
-   * the session.
+   * with what the API makes of it. With `since` (an ISO 8601 time), only the events processed
+   * at or after it, plus user messages still in the queue (decisions 95, 127). Throws
+   * SessionNotFoundError if the runtime no longer has the session.
    */
-  listEvents(sessionId: string): Promise<AgentEventRecord[]>;
+  listEvents(sessionId: string, options?: { since?: string }): Promise<AgentEventRecord[]>;
+  /**
+   * Reads back an event kept in the record: the payload exactly as `listEvents` reported it.
+   * Undefined if it is not one of this runtime's events.
+   */
+  readStoredEvent(payload: unknown): AgentEventRecord | undefined;
   /**
    * What the session has used so far and the budget it runs under. Throws
    * SessionNotFoundError if the runtime no longer has the session.

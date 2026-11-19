@@ -49,6 +49,7 @@ import {
   type SettledStatus,
 } from "../store/conversations.ts";
 import type { Db } from "../store/db.ts";
+import { latestStoredEventTime, storedEventsToActOn } from "../store/record.ts";
 import { keepEvents, keepUsage } from "./record.ts";
 
 export interface ConversationDeps {
@@ -268,9 +269,7 @@ async function readAgent(
   // Taken before the session is read: only messages handed over before it can be settled
   // by the fallback rule for messages without a recorded agent event id.
   const cutoff = await databaseNow(deps.db);
-  const records = await deps.runtime.listEvents(sessionId);
-  // Everything the session lists goes into the record; the loop acts on the few it knows.
-  await keepEvents(deps.db, conversation.id, sessionId, records, log);
+  const records = await readSessionEvents(deps, conversation.id, sessionId, log);
   const events = actedOn(records);
   const lastEventAt = latestTime(records);
 
@@ -362,6 +361,53 @@ async function readAgent(
     );
   }
   return lastEventAt;
+}
+
+/**
+ * The session's events, oldest first (decision 95). Only those since the latest one in the
+ * record are asked of the runtime, and stored; the earlier ones the loop acts on are read back
+ * from the record. If storing fails, the next sync starts further back and catches up, so the
+ * loop never depends on the record having been written.
+ */
+async function readSessionEvents(
+  deps: ConversationDeps,
+  conversationId: string,
+  sessionId: string,
+  log: Logger,
+): Promise<AgentEventRecord[]> {
+  const since = await latestStoredEventTime(deps.db, conversationId, sessionId);
+  const fresh = await deps.runtime.listEvents(
+    sessionId,
+    since === undefined ? undefined : { since: since.toISOString() },
+  );
+  // Everything the session lists goes into the record; the loop acts on the few it knows.
+  await keepEvents(deps.db, conversationId, sessionId, fresh, log);
+  if (since === undefined) return fresh;
+  const stored = (await storedEventsToActOn(deps.db, conversationId, sessionId)).flatMap(
+    (payload) => {
+      const record = deps.runtime.readStoredEvent(payload);
+      return record === undefined ? [] : [record];
+    },
+  );
+  return mergeEvents(stored, fresh);
+}
+
+/**
+ * One list from the record and a fresh listing: each event once, as most recently reported,
+ * in processing order with queued messages last. Ties keep their order (stored first).
+ */
+export function mergeEvents(
+  stored: readonly AgentEventRecord[],
+  fresh: readonly AgentEventRecord[],
+): AgentEventRecord[] {
+  const latest = new Map<string, AgentEventRecord>();
+  for (const record of [...stored, ...fresh]) latest.set(record.id, record);
+  const order = new Map([...stored, ...fresh].map((record, index) => [record.id, index]));
+  const time = (record: AgentEventRecord) =>
+    record.processedAt === null ? Number.POSITIVE_INFINITY : Date.parse(record.processedAt);
+  return [...latest.values()].sort(
+    (a, b) => time(a) - time(b) || (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0),
+  );
 }
 
 /** Whether an event ends a turn. Waiting for a tool call's approval does not (decision 119). */

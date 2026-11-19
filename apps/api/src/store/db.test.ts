@@ -13,7 +13,12 @@ import {
 } from "./conversations.ts";
 import { createPostgresDb, type Db } from "./db.ts";
 import { listConversations, readAgentEvents, readConversation, readTranscript } from "./reading.ts";
-import { recordUsage, storeAgentEvents } from "./record.ts";
+import {
+  latestStoredEventTime,
+  recordUsage,
+  storeAgentEvents,
+  storedEventsToActOn,
+} from "./record.ts";
 import { applyMigration, applyMigrations } from "./testing.ts";
 
 // The production client (postgres.js) over a real Postgres connection, served by PGlite.
@@ -312,6 +317,39 @@ describe("createPostgresDb", () => {
     expect(
       await readAgentEvents(db, conversation.id, { limit: 10, after: events[0]?.position }),
     ).toEqual([]);
+  });
+
+  it("reads back the latest event time and the payloads the loop acts on (decision 95)", async () => {
+    const key = { source: "slack" as const, workspaceId: "T", channelId: "C", threadId: "9.9" };
+    const conversation = await findOrCreateConversation(db, key);
+    await storeAgentEvents(db, conversation.id, "sesn_9", [
+      {
+        id: "evt_a",
+        type: "agent.message",
+        kind: "agent_message",
+        text: "Hi.",
+        processedAt: "2026-11-18T00:00:05.123456Z",
+        payload: {
+          id: "evt_a",
+          type: "agent.message",
+          processed_at: "2026-11-18T00:00:05.123456Z",
+        },
+      },
+      {
+        id: "evt_b",
+        type: "agent.tool_use",
+        kind: null,
+        text: null,
+        processedAt: "2026-11-18T00:00:06Z",
+        payload: { id: "evt_b", type: "agent.tool_use" },
+      },
+    ]);
+    const latest = await latestStoredEventTime(db, conversation.id, "sesn_9");
+    expect(latest).toBeInstanceOf(Date);
+    expect(latest?.toISOString()).toBe("2026-11-18T00:00:06.000Z");
+    expect(await storedEventsToActOn(db, conversation.id, "sesn_9")).toEqual([
+      { id: "evt_a", type: "agent.message", processed_at: "2026-11-18T00:00:05.123456Z" },
+    ]);
   });
 
   it("commits a transaction, and rolls back when the work throws", async () => {

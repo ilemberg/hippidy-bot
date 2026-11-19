@@ -93,10 +93,14 @@ export function createManagedAgentRuntime(
       });
     },
 
-    async listEvents(sessionId) {
+    async listEvents(sessionId, options) {
       const records: AgentEventRecord[] = [];
+      const since = options?.since;
       try {
-        for await (const event of client.beta.sessions.events.list(sessionId, { order: "asc" })) {
+        for await (const event of client.beta.sessions.events.list(sessionId, {
+          order: "asc",
+          ...(since === undefined ? {} : { "created_at[gte]": since }),
+        })) {
           records.push(toAgentEventRecord(event));
         }
       } catch (error) {
@@ -104,6 +108,21 @@ export function createManagedAgentRuntime(
         throw error;
       }
       return records;
+    },
+
+    readStoredEvent(payload) {
+      if (
+        typeof payload !== "object" ||
+        payload === null ||
+        !("id" in payload) ||
+        typeof payload.id !== "string" ||
+        !("type" in payload) ||
+        typeof payload.type !== "string"
+      ) {
+        return undefined;
+      }
+      // Stored exactly as the API listed it, so it reads back the same way.
+      return toAgentEventRecord(payload as BetaManagedAgentsSessionEvent);
     },
 
     async readUsage(sessionId) {

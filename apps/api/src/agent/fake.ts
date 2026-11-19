@@ -138,11 +138,22 @@ export class FakeAgentRuntime implements AgentRuntime {
     return Promise.resolve();
   }
 
-  listEvents(sessionId: string): Promise<AgentEventRecord[]> {
+  /** Every `since` the API asked for, in order: to check what it reads. */
+  readonly listedSince: (string | undefined)[] = [];
+
+  listEvents(sessionId: string, options?: { since?: string }): Promise<AgentEventRecord[]> {
     this.takeFailure("listEvents");
     const session = this.session(sessionId);
+    const since = options?.since;
+    this.listedSince.push(since);
+    const processed =
+      since === undefined
+        ? session.events
+        : session.events.filter(
+            (record) => record.processedAt !== null && record.processedAt >= since,
+          );
     return Promise.resolve([
-      ...session.events,
+      ...processed,
       ...session.queued.map(({ id }): AgentEventRecord => ({
         id,
         type: TYPE_OF.user_message,
@@ -151,6 +162,15 @@ export class FakeAgentRuntime implements AgentRuntime {
         event: { kind: "user_message", id, processed: false },
       })),
     ]);
+  }
+
+  readStoredEvent(payload: unknown): AgentEventRecord | undefined {
+    if (typeof payload !== "object" || payload === null || !("id" in payload)) return undefined;
+    for (const session of this.sessions.values()) {
+      const found = session.events.find((record) => record.id === payload.id);
+      if (found !== undefined) return found;
+    }
+    return undefined;
   }
 
   async readUsage(sessionId: string): Promise<SessionUsage> {
