@@ -315,6 +315,135 @@ describe("the sender's role and the thread's project (slice 5A, part D)", () => 
   });
 });
 
+describe("which agent a thread gets (decision 167)", () => {
+  async function storedKind() {
+    const rows = await db.query(`select agent_kind from conversations`);
+    return rows[0]?.agent_kind;
+  }
+
+  function startedKinds() {
+    return [...runtime.sessions.values()].map((session) => session.agentKind);
+  }
+
+  it("gives a product manager's thread the product agent, and stores it", async () => {
+    await setActorRole(db, {
+      source: "slack",
+      workspaceId: "T1",
+      actorId: "U1",
+      role: "product_manager",
+    });
+    await receiveMessage(deps, message(1), log);
+    expect(startedKinds()).toEqual(["product"]);
+    expect(await storedKind()).toBe("product");
+    expect(lines).toContainEqual(
+      expect.objectContaining({ msg: "conversation.session_started", agentKind: "product" }),
+    );
+  });
+
+  it("gives a designer's thread the product agent", async () => {
+    await setActorRole(db, { source: "slack", workspaceId: "T1", actorId: "U1", role: "designer" });
+    await receiveMessage(deps, message(1), log);
+    expect(startedKinds()).toEqual(["product"]);
+  });
+
+  it("gives everyone else, and anyone with no role, the engineer", async () => {
+    for (const role of ["engineering_manager", "tech_lead", "engineer", "qa"] as const) {
+      await setActorRole(db, { source: "slack", workspaceId: "T1", actorId: `U_${role}`, role });
+    }
+    const senders = ["U_engineering_manager", "U_tech_lead", "U_engineer", "U_qa", "U_nobody"];
+    for (const [n, id] of senders.entries()) {
+      const conversation = {
+        workspaceId: "T1",
+        channelId: "C1",
+        threadId: `200.00000${n}`,
+        messageId: `200.00000${n}`,
+      };
+      await receiveMessage(deps, message(n + 1, { actor: { id }, conversation }), log);
+    }
+    expect(startedKinds()).toEqual(senders.map(() => "engineer"));
+    const rows = await db.query(`select agent_kind from conversations`);
+    expect(rows.map((row) => row.agent_kind)).toEqual(senders.map(() => "engineer"));
+  });
+
+  it("reads the role in the thread's own workspace only", async () => {
+    await setActorRole(db, {
+      source: "slack",
+      workspaceId: "T2",
+      actorId: "U1",
+      role: "product_manager",
+    });
+    await receiveMessage(deps, message(1), log);
+    expect(startedKinds()).toEqual(["engineer"]);
+  });
+
+  it("is chosen by the thread's first message, not a later sender", async () => {
+    await setActorRole(db, {
+      source: "slack",
+      workspaceId: "T1",
+      actorId: "U2",
+      role: "product_manager",
+    });
+    await receiveMessage(deps, message(1), log);
+    await receiveMessage(deps, message(2, { actor: { id: "U2" } }), log);
+    expect(startedKinds()).toEqual(["engineer"]);
+  });
+
+  it("keeps the stored agent for a later session of the same conversation", async () => {
+    await setActorRole(db, { source: "slack", workspaceId: "T1", actorId: "U1", role: "designer" });
+    await receiveMessage(deps, message(1), log);
+    // The role changes, and the conversation needs a new session.
+    await setActorRole(db, { source: "slack", workspaceId: "T1", actorId: "U1", role: "engineer" });
+    await db.query(`update conversations set agent_session_id = null`);
+    await receiveMessage(deps, message(2), log);
+    expect(startedKinds()).toEqual(["product", "product"]);
+    expect(await storedKind()).toBe("product");
+  });
+
+  it("treats a conversation from before, with no stored agent, as the engineer's", async () => {
+    await setActorRole(db, {
+      source: "slack",
+      workspaceId: "T1",
+      actorId: "U1",
+      role: "product_manager",
+    });
+    const conversation = await findOrCreateConversation(db, {
+      source: "slack",
+      workspaceId: "T1",
+      channelId: "C1",
+      threadId: "100.000001",
+    });
+    // It had a session before agent_kind was stored; that session is gone.
+    await db.query(`update conversations set agent_id = 'agent_old' where id = $1`, [
+      conversation.id,
+    ]);
+    await receiveMessage(deps, message(1), log);
+    expect(startedKinds()).toEqual(["engineer"]);
+    expect(await storedKind()).toBeNull();
+  });
+
+  it("fails closed when the product agent is missing: logged, retried, then a note", async () => {
+    runtime.missingAgents.add("product");
+    await setActorRole(db, {
+      source: "slack",
+      workspaceId: "T1",
+      actorId: "U1",
+      role: "product_manager",
+    });
+    await expect(receiveMessage(deps, message(1), log)).rejects.toThrow(/product agent/);
+    expect(lines).toContainEqual(
+      expect.objectContaining({ msg: "conversation.session_start_failed", agentKind: "product" }),
+    );
+    for (let attempt = 1; attempt < MAX_FORWARD_ATTEMPTS; attempt++) {
+      await age(120);
+      await reconcile(deps, log);
+    }
+    expect(runtime.sessions.size).toBe(0);
+    expect(slack.replies()).toEqual([notes.undeliverable]);
+    // The thread stays the product agent's: no engineer session was started in its place.
+    expect(await storedKind()).toBe("product");
+  });
+});
+
 describe("a change is done when its pull request's CI passes (decision 132)", () => {
   const url = "https://github.com/ilemberg/hippidy-bot/pull/30";
   let verdict: ChecksVerdict;

@@ -21,6 +21,9 @@ describe("readAgentConfig", () => {
     const config = readAgentConfig({ ANTHROPIC_API_KEY: apiKey }, log);
     expect(config).toBeDefined();
     expect(config?.repository).toBeUndefined();
+    // The product agent mounts the public repo without a token (decisions 147, 167).
+    expect(config?.repositoryUrl).toBe(REPOSITORY_URL);
+    expect(config?.productAgentName).toBe("hippidy-bot-product");
     expect(lines).toContainEqual(
       expect.objectContaining({ msg: "config.agent_github_token_missing", reason: "not set" }),
     );

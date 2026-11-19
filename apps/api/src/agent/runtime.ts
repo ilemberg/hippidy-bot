@@ -3,8 +3,15 @@
  * 3). Managed Agents is the only implementation for now; tests use a fake.
  */
 export interface AgentRuntime {
-  /** Starts a session for one conversation, with the per-session budget applied. */
-  startSession(input: { title: string; metadata: Record<string, string> }): Promise<AgentSession>;
+  /**
+   * Starts a session for one conversation, with the per-session budget applied, run by the
+   * agent the conversation was given (decision 167).
+   */
+  startSession(input: {
+    title: string;
+    metadata: Record<string, string>;
+    agentKind: AgentKind;
+  }): Promise<AgentSession>;
   /**
    * Queues a user message. Sessions process queued messages in order. Returns the event id the
    * runtime gave the message, when it reports one.
@@ -44,6 +51,12 @@ export interface AgentRuntime {
    */
   readUsage(sessionId: string): Promise<SessionUsage>;
 }
+
+/**
+ * Which of the bot's two agents runs a conversation (decision 139): the engineer changes code,
+ * as before; the product agent writes the plan, reads the repo and changes nothing.
+ */
+export type AgentKind = "engineer" | "product";
 
 /** The runtime no longer has this session (deleted, or past its retention). */
 export class SessionNotFoundError extends Error {

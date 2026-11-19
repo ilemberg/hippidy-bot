@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
 import { z } from "zod";
@@ -59,6 +59,14 @@ export interface AgentFile {
 /** Reads an agent file: YAML frontmatter for the config, Markdown body for the system prompt. */
 export function readAgentFile(path: string): AgentFile {
   return parseAgentFile(readFileSync(join(repoRoot, path), "utf8"), path);
+}
+
+/** Reads every agent file (`*.md`) in a directory of the repo, in name order. */
+export function readAgentFiles(directory: string): AgentFile[] {
+  return readdirSync(join(repoRoot, directory))
+    .filter((file) => file.endsWith(".md"))
+    .sort()
+    .map((file) => readAgentFile(`${directory}/${file}`));
 }
 
 export function parseAgentFile(text: string, path = "agent file"): AgentFile {

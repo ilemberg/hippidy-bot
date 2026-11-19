@@ -10,39 +10,78 @@ import {
   type SessionUsage,
 } from "./runtime.ts";
 
-interface Ids {
+interface EngineerIds {
   agentId: string;
   environmentId: string;
   vaultId: string;
 }
 
+interface ProductIds {
+  agentId: string;
+  environmentId: string;
+}
+
 /**
- * Claude Managed Agents behind the AgentRuntime interface. The agent and environment are
+ * Claude Managed Agents behind the AgentRuntime interface. The agents and environment are
  * created and updated by the sync script from the files in the repo; here they are looked up
- * by name once per server instance.
+ * by name once per server instance, each agent on its own, so a missing product agent never
+ * holds up the engineer.
  */
 export function createManagedAgentRuntime(
   config: AgentConfig,
   client = new Anthropic({ apiKey: config.apiKey, maxRetries: 2, timeout: 20_000 }),
 ): AgentRuntime {
-  let ids: Promise<Ids> | undefined;
+  let engineerIds: Promise<EngineerIds> | undefined;
+  let productIds: Promise<ProductIds> | undefined;
 
-  const resolveIds = (): Promise<Ids> => {
-    ids ??= lookUpIds(client, config).catch((error: unknown) => {
-      ids = undefined; // try again on the next call
+  const resolveEngineerIds = (): Promise<EngineerIds> => {
+    engineerIds ??= lookUpEngineerIds(client, config).catch((error: unknown) => {
+      engineerIds = undefined; // try again on the next call
       throw error;
     });
-    return ids;
+    return engineerIds;
   };
 
+  const resolveProductIds = (): Promise<ProductIds> => {
+    productIds ??= lookUpProductIds(client, config).catch((error: unknown) => {
+      productIds = undefined; // try again on the next call
+      throw error;
+    });
+    return productIds;
+  };
+
+  const budget = () => ({
+    type: "limit" as const,
+    max_list_cost: { amount: String(config.sessionBudgetCents), currency: "USD" as const },
+  });
+
   return {
-    async startSession({ title, metadata }) {
+    async startSession({ title, metadata, agentKind }) {
+      if (agentKind === "product") {
+        // The product agent (decisions 147, 167): the public repo mounted without a token, so
+        // it can read and clone but not push, and no vault, as it has no MCP servers. Fails
+        // closed like the engineer: if the agent is not found, no session starts.
+        const { agentId, environmentId } = await resolveProductIds();
+        const session = await client.beta.sessions.create({
+          agent: agentId,
+          environment_id: environmentId,
+          title,
+          metadata,
+          resources: [{ type: "github_repository", url: config.repositoryUrl }],
+          budget: budget(),
+        });
+        return {
+          sessionId: session.id,
+          agentId: session.agent.id,
+          agentVersion: session.agent.version,
+        };
+      }
       // Fails closed (decision 122): without the token, no session starts, so the message
       // is answered with a note rather than reaching an agent that cannot see its repo.
       if (config.repository === undefined) {
         throw new Error("AGENT_GITHUB_TOKEN is missing or invalid; sessions cannot mount the repo");
       }
-      const { agentId, environmentId, vaultId } = await resolveIds();
+      const { agentId, environmentId, vaultId } = await resolveEngineerIds();
       const session = await client.beta.sessions.create({
         agent: agentId,
         environment_id: environmentId,
@@ -58,10 +97,7 @@ export function createManagedAgentRuntime(
           },
         ],
         vault_ids: [vaultId],
-        budget: {
-          type: "limit",
-          max_list_cost: { amount: String(config.sessionBudgetCents), currency: "USD" },
-        },
+        budget: budget(),
       });
       return {
         sessionId: session.id,
@@ -154,17 +190,27 @@ function isNotFound(error: unknown): boolean {
   return error instanceof Error && "status" in error && error.status === 404;
 }
 
-async function lookUpIds(client: Anthropic, config: AgentConfig): Promise<Ids> {
+async function findAgentId(client: Anthropic, name: string): Promise<string | undefined> {
   let agentId: string | undefined;
   for await (const agent of client.beta.agents.list()) {
-    if (agent.name === config.agentName && agent.archived_at === null) agentId = agent.id;
+    if (agent.name === name && agent.archived_at === null) agentId = agent.id;
   }
+  return agentId;
+}
+
+async function findEnvironmentId(client: Anthropic, name: string): Promise<string | undefined> {
   let environmentId: string | undefined;
   for await (const environment of client.beta.environments.list()) {
-    if (environment.name === config.environmentName && environment.archived_at === null) {
+    if (environment.name === name && environment.archived_at === null) {
       environmentId = environment.id;
     }
   }
+  return environmentId;
+}
+
+async function lookUpEngineerIds(client: Anthropic, config: AgentConfig): Promise<EngineerIds> {
+  const agentId = await findAgentId(client, config.agentName);
+  const environmentId = await findEnvironmentId(client, config.environmentName);
   let vaultId: string | undefined;
   for await (const vault of client.beta.vaults.list()) {
     if (vault.display_name === config.vaultName && vault.archived_at === null) vaultId = vault.id;
@@ -177,6 +223,18 @@ async function lookUpIds(client: Anthropic, config: AgentConfig): Promise<Ids> {
     );
   }
   return { agentId, environmentId, vaultId };
+}
+
+async function lookUpProductIds(client: Anthropic, config: AgentConfig): Promise<ProductIds> {
+  const agentId = await findAgentId(client, config.productAgentName);
+  const environmentId = await findEnvironmentId(client, config.environmentName);
+  if (agentId === undefined || environmentId === undefined) {
+    throw new Error(
+      `Agent "${config.productAgentName}" or environment "${config.environmentName}" not ` +
+        "found. Run the agent sync (pnpm agent:sync) with this workspace's API key.",
+    );
+  }
+  return { agentId, environmentId };
 }
 
 /** A Managed Agents event as it is recorded: untouched, with what the API makes of it. */

@@ -19,6 +19,7 @@ import type { PullRequestChecks } from "../github/checks.ts";
 import type { Logger } from "../log.ts";
 import {
   attachSession,
+  chooseAgentKind,
   claimSessionStart,
   claimSyncLease,
   conversationsToReconcile,
@@ -281,8 +282,12 @@ async function ensureSession(
     const claim = await claimSessionStart(deps.db, conversation.id);
     if (claim !== undefined) {
       let session;
+      let agentKind;
       try {
+        // Chosen once, from the thread's first message, and kept (decision 167).
+        agentKind = await chooseAgentKind(deps.db, conversation.id);
         session = await deps.runtime.startSession({
+          agentKind,
           title: `${conversation.key.source} ${conversation.key.channelId} ${conversation.key.threadId}`,
           metadata: {
             conversation_id: conversation.id,
@@ -293,6 +298,13 @@ async function ensureSession(
           },
         });
       } catch (error) {
+        // Fails closed for this thread: the message waits, is retried by reconcile, and is
+        // answered with a note if no session can be started (as when an agent is missing).
+        log.error("conversation.session_start_failed", {
+          conversationId: conversation.id,
+          agentKind,
+          error,
+        });
         await releaseSessionStart(deps.db, conversation.id, claim);
         throw error;
       }
@@ -300,6 +312,7 @@ async function ensureSession(
         log.info("conversation.session_started", {
           conversationId: conversation.id,
           sessionId: session.sessionId,
+          agentKind,
           agentVersion: session.agentVersion,
         });
         return session.sessionId;
