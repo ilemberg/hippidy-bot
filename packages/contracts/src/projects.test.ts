@@ -120,3 +120,31 @@ describe("recordApprovalRequestSchema", () => {
     ).toBe("T-1");
   });
 });
+
+describe("request text", () => {
+  const actor = { source: "slack", workspaceId: "T1", actorId: "U1" } as const;
+
+  it("refuses a null character, so the database never sees one", () => {
+    expect(
+      createProjectRequestSchema.safeParse({ name: "a\u0000b", createdBy: actor }).success,
+    ).toBe(false);
+    expect(
+      recordApprovalRequestSchema.safeParse({
+        subject: "plan",
+        subjectRef: "doc\u0000",
+        action: "approve",
+        actor,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("trims a ticket's ref, so the same ticket is one ticket", () => {
+    const parsed = recordApprovalRequestSchema.parse({
+      subject: "ticket",
+      subjectRef: " T-1 ",
+      action: "approve",
+      actor,
+    });
+    expect(parsed.subjectRef).toBe("T-1");
+  });
+});

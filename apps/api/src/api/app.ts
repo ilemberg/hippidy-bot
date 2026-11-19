@@ -229,9 +229,9 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
     return c.json(body);
   });
 
-  // Projects, roles and approvals (slice 5A). They need only storage, which comes with the
-  // conversations' dependencies.
-  addProjectRoutes(api, { db: deps.conversations?.db, auth: readers, limitBody });
+  // Projects, roles and approvals (slice 5A). They need only storage, so they take the
+  // database the status check uses, which is there even when the agent is not configured.
+  addProjectRoutes(api, { db: deps.status.db, auth: readers, limitBody });
 
   // Anthropic calls this when a session changes state (decision 13). The body is thin: it
   // names the session, and the current state is fetched from Anthropic.

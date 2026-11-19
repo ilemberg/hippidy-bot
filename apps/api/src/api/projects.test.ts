@@ -40,12 +40,25 @@ afterEach(async () => {
   await db.close();
 });
 
-function api(options: { storage: "configured" | "missing" } = { storage: "configured" }) {
+/**
+ * The app as compose.ts builds it. The routes take the database from the status check, which
+ * has it whenever storage is configured; "storage only" leaves the agent unconfigured.
+ */
+function api(
+  options: { storage: "configured" | "storage only" | "missing" } = { storage: "configured" },
+) {
   const { log } = memoryLogger();
+  const status = { db, configured: { agent: true, slack: true, github: true } };
+  const services =
+    options.storage === "missing"
+      ? { status: { db: undefined, configured: { agent: false, slack: false, github: false } } }
+      : options.storage === "storage only"
+        ? { status: { ...status, configured: { agent: false, slack: false, github: false } } }
+        : { conversations: deps, status };
   return configureApp(new Hono<ApiEnv>(), {
     env: { API_SERVICE_TOKEN: token, RECONCILE_TOKEN: reconcileToken },
     log,
-    services: options.storage === "missing" ? {} : { conversations: deps },
+    services,
   });
 }
 
@@ -382,5 +395,13 @@ describe("who may use the project routes", () => {
           : await send(app, method, route, bodies[route]);
       await expectError(res, 503, "not_configured");
     }
+  });
+
+  it("works with storage alone, when the agent is not configured", async () => {
+    const app = api({ storage: "storage only" });
+    const res = await send(app, "POST", "/v1/projects", { name: "Search", createdBy: creator });
+    expect(res.status).toBe(201);
+    const list = await app.request("/v1/roles", { headers: auth });
+    expect(list.status).toBe(200);
   });
 });

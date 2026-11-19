@@ -8,8 +8,15 @@ import { messageSourceSchema } from "./messages.ts";
 const timestamp = z.iso.datetime({ offset: true });
 /** A project's or conversation's id: any UUID the database accepts, whatever its version. */
 const uuid = z.guid();
+/**
+ * Text Postgres can hold: a null character is refused here with a 400, rather than by the
+ * database with a 500.
+ */
+const noNull = (value: string) => !value.includes("\u0000");
+const noNullMessage = { message: "Must not contain a null character" };
+
 /** An id in a source system (Slack: a team or user id). */
-const sourceId = z.string().min(1).max(255);
+const sourceId = z.string().min(1).max(255).refine(noNull, noNullMessage);
 
 /** A person in a source system: one person per (source, workspace, actor). */
 const actorSchema = z.strictObject({
@@ -63,7 +70,7 @@ export type Project = z.infer<typeof projectSchema>;
 
 /** Request body of `POST /v1/projects`. A new project starts in `plan`. */
 export const createProjectRequestSchema = z.strictObject({
-  name: z.string().trim().min(1).max(200),
+  name: z.string().trim().min(1).max(200).refine(noNull, noNullMessage),
   createdBy: actorRequestSchema,
 });
 export type CreateProjectRequest = z.infer<typeof createProjectRequestSchema>;
@@ -121,14 +128,15 @@ export type ProjectDetail = z.infer<typeof projectDetailSchema>;
 export const recordApprovalRequestSchema = z
   .strictObject({
     subject: approvalSubjectSchema,
-    subjectRef: z.string().max(2000).default(""),
-    subjectVersion: z.string().max(255).default(""),
+    // Trimmed, so "T-1" and "T-1 " are the same ticket.
+    subjectRef: z.string().trim().max(2000).refine(noNull, noNullMessage).default(""),
+    subjectVersion: z.string().trim().max(255).refine(noNull, noNullMessage).default(""),
     action: approvalActionSchema,
     /** The person who approved or withdrew; their current role is copied onto the record. */
     actor: actorRequestSchema,
     conversationId: uuid.optional(),
   })
-  .refine((body) => body.subject !== "ticket" || body.subjectRef.trim() !== "", {
+  .refine((body) => body.subject !== "ticket" || body.subjectRef !== "", {
     message: "A ticket approval must name its ticket",
     path: ["subjectRef"],
   });
