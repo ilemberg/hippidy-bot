@@ -1,7 +1,7 @@
 # Projects: how a feature moves from an idea to shipped
 
 Status: **draft, 2026-11-19. Planning only; nothing is built.** Written from a conversation
-that is still going, so expect changes. What is decided is in `decisions.md` 134 to 143; what
+that is still going, so expect changes. What is decided is in `decisions.md` 134 to 149; what
 is not is in `open-questions.md`, group E. This file describes the workflow; the slices that
 build it are sketched in `wave-1.md` (5A, 5B, 5C).
 
@@ -35,12 +35,14 @@ Four stages, loose (decision 135): a project can go backwards at any time.
 | 3 | Ship and iterate | The bot develops ticket by ticket. Each pull request comes with a walkthrough. A person merges; the bot checks production. People comment, more tickets may be added | Everyone is done iterating |
 | 4 | End | The epic and tickets are closed | Both approve ending it |
 
-Two rules are hard, checked by the API and not left to an agent's judgement:
+Two rules are firm:
 
 1. No development on a project before its roadmap is approved by both.
 2. No merge without an approver. Only the bot opens pull requests; a person merges by hand.
 
-Everything else is a habit the bot follows and reminds people of.
+Neither is a gate in code for now (decision 145). The agents are told the sender's role and
+the project's stage and follow the rules; the API checks nothing. Everything else is a habit
+the bot follows and reminds people of.
 
 ## Approval
 
@@ -68,9 +70,10 @@ claiming a role they do not hold.
 | Edit the plan document (stage 1) | Yes | Yes | Yes | Comment | Comment | Yes |
 | Edit tickets (stage 2) | Yes | Yes | Yes | Comment | Comment | Comment |
 | Approve the plan, the roadmap, an added ticket, the end | Yes | Yes | - | - | - | - |
-| Withdraw an approval, stop development | Yes | Yes | - | - | - | - |
+| Withdraw an approval | Yes | Yes | - | - | - | - |
+| Stop the bot | Yes | Yes | Yes | Yes | Yes | Yes |
 | Ask for development | Yes | - | Yes | Yes | Yes | - |
-| Merge a pull request | Yes | - | Yes | Yes | Open (E10) | - |
+| Merge a pull request | Yes | - | Yes | Yes | Yes | - |
 
 "Edit" means asking the bot to change the content, or changing it by hand, while it is not
 frozen. "Comment" means the same person may only add comments.
@@ -86,18 +89,21 @@ it; people should not need to care.
 | | Product agent | Engineer agent |
 |---|---|---|
 | Used for | Stages 1 and 2: documents, the epic, tickets | Stage 3, and development without a project |
-| Code | Does not change it. Whether it may read the repo is open (E8) | Changes it, as today |
+| Code | Reads the repo, cannot change it (decision 146) | Changes it, as today |
 | GitHub | None | The four tools it has today |
 | Documents | Create, edit, comment | Read, comment |
 | Tickets | Create, edit, comment | Read, comment, change status |
 
-Why two: a thread that belongs to the product agent cannot touch code, so rule 1 becomes a
-matter of which agent a thread is given. The API decides that from the project's stage and
-the sender's role. It also keeps the text of documents and tickets away from the right to
-push, except for the ticket the engineer agent is working on.
+Why two: a thread that belongs to the product agent cannot change code, whatever it is
+asked. It also keeps the text of documents and tickets away from the right to push, except
+for the ticket the engineer agent is working on.
+
+In the document and ticket systems both agents write through one account, the bot's own, and
+each comment says who asked for it (decision 148).
 
 A thread belongs to one agent from its first message, because one thread is one session.
-How a thread is tied to a project and to an agent is open (E6).
+How a thread is tied to a project and to an agent is open (E6), and so is where an approval
+is written down now that the API does not check it (E15).
 
 ## Threads and updates
 
@@ -122,7 +128,7 @@ Decision 141.
   and also keeps the ticket up to date: status and comments.
 - With the pull request comes a **walkthrough**: screenshots from the agent's sandbox with a
   short text explaining each, posted in the thread as images. Having the screenshots means
-  the change ran. Where there is nothing to show (a change only visible in Slack), the
+  the change ran. How the images get out of the sandbox needs a probe first (decision 149). Where there is nothing to show (a change only visible in Slack), the
   walkthrough is text.
 - So that an API change has something to show, the API gets a generated reference page
   (OpenAPI, made from the schemas in `packages/contracts`). The page is public.
