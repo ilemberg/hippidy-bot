@@ -39,6 +39,7 @@ import {
   recordForwardFailure,
   recordInbound,
   releaseSessionStart,
+  readAgentKind,
   releaseSyncLease,
   renewSyncLease,
   sessionIdOf,
@@ -556,6 +557,9 @@ async function judgeTurn(
   const turn = before.slice(before.findLastIndex(endsTurn) + 1);
   if (!turn.some((event) => event.kind === "pushed" || event.kind === "pull_request")) return done;
   if ((await pendingMessageCount(deps.db, conversationId)) === 0) return done;
+  // The product agent cannot open pull requests; a GitHub link inside an Atlassian page it
+  // read must not make its turn wait for someone else's CI (decision 169).
+  if ((await readAgentKind(deps.db, conversationId)) === "product") return done;
 
   const pullRequest = before.findLast((event) => event.kind === "pull_request");
   if (pullRequest?.kind !== "pull_request") {
