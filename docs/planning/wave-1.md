@@ -22,7 +22,7 @@ Rules that hold for the whole wave:
 2. The Core API is channel-agnostic. It knows "conversation" and "message", not "Slack thread".
 3. Agent runtime, work-item system and knowledge system each sit behind an interface, because
    those are the parts that would change. The product direction is decided (a project moving
-   through stages, `decisions.md` 134); which work-item and knowledge systems is not.
+   through stages, `decisions.md` 135); which work-item and knowledge systems is not.
 4. Where the agent needs an outside system, it uses an MCP server when one exists, unless
    that makes things worse: for one, when it would go around rule 1 (`decisions.md` 98).
 
@@ -232,7 +232,7 @@ Revised 2026-11-18 after the plan was checked against the code and the SDK
 
 ## Slice 5: a feature moves through a project
 
-Re-sketched 2026-11-19 (`decisions.md` 134 to 157). The sketch before that was "work from a
+Re-sketched 2026-11-19 (`decisions.md` 135 to 158). The sketch before that was "work from a
 ticket instead of a sentence": `@hippidy-bot pick up HB-12`, with a work-item provider and a
 knowledge provider behind interfaces. That is now only the last stage of a longer workflow,
 described in `projects.md`: a project goes from a plan document, to an epic and tickets, to
@@ -311,7 +311,7 @@ What makes this work for an agent:
 
 - Web UI. Until then, the Anthropic Console session viewer and the Supabase table editor.
 - More than two agents, or agent personas. Slice 5 has two agents behind the one bot, and
-  people do not see which one answered (`decisions.md` 138).
+  people do not see which one answered (`decisions.md` 139).
 - More than one repository or more than one Slack workspace.
 
 ## Retros

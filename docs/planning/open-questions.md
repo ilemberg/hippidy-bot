@@ -19,7 +19,7 @@ those you care about most, because it tells us where to spend effort and where t
 and keep the plumbing as thin and replaceable as possible.
 
 Z2 (factory, employee, or knowledge and task system) is answered: the unit is a project
-moving through stages. See `decisions.md` 134 and `projects.md`.
+moving through stages. See `decisions.md` 135 and `projects.md`.
 
 Z3 (personas), Z4 (success measure) and Z5 (budget) are answered: see `decisions.md` 9 to 11.
 
@@ -109,36 +109,36 @@ workflow in `release`). All answered: see `decisions.md` 115, 120 and 118.
 ## E. Blocks slice 5
 
 Slice 5 became the project workflow in `projects.md`, built in three parts (5A, 5B, 5C). The
-questions were asked again on 2026-11-19 and all are answered, in `decisions.md` 134 to 157.
+questions were asked again on 2026-11-19 and all are answered, in `decisions.md` 135 to 158.
 Two answers wait for a probe.
 
 **E1. Which document system and which ticket system?** Waits for a probe (`decisions.md`
-150): on a free Atlassian site, can a service account key be made, and does the MCP server
+151): on a free Atlassian site, can a service account key be made, and does the MCP server
 accept it as a bearer token for Jira and for Confluence? If yes, Jira and Confluence. If
 not, Linear. The candidates and their sources are in `stack-and-tools.md`. Where the probe
-stands is in `decisions.md` 157.
+stands is in `decisions.md` 158.
 
 **E11. How do screenshots get from the sandbox to Slack?** Waits for a probe before 5C is
-planned (`decisions.md` 149): does Chromium run in the sandbox, and how does a session hand
+planned (`decisions.md` 150): does Chromium run in the sandbox, and how does a session hand
 files to the API. Posting them needs a new Slack permission.
 
 Answered:
 
 | Question | Answer | Decision |
 |---|---|---|
-| E2. The agents' rights in each system | The two tables in `projects.md` | 137, 138 |
-| E3. How a ticket is linked to a conversation, a branch and a pull request | The project links them | 134 |
-| E4. What makes a ticket ready | One template; ready when the roadmap is approved | 153 |
-| E5. Where the bot asks clarifying questions | In the thread it is working in, with a note in the project's main thread | 154 |
-| E6. Which project and which agent a thread gets | Named in the first message; "start development" opens an engineer thread | 152 |
-| E7. How the API recognises the actions it checks | It checks none for now | 145 |
-| E8. May the product agent read the repo | Yes, read-only | 146 |
-| E9. Who may stop the bot | Anyone | 147 |
-| E10. May QA merge | Yes | 144 |
-| E12. What the production check covers | Deployed, public routes, then a person for what only Slack shows | 156 |
-| E13. One epic per project, or several | Usually one; no rule | 155 |
-| E14. Whose name is on the bot's edits | The bot's own account; comments say who asked | 148 |
-| E15. Where an approval is written down | On the content, and recorded by the API | 151 |
+| E2. The agents' rights in each system | The two tables in `projects.md` | 138, 139 |
+| E3. How a ticket is linked to a conversation, a branch and a pull request | The project links them | 135 |
+| E4. What makes a ticket ready | One template; ready when the roadmap is approved | 154 |
+| E5. Where the bot asks clarifying questions | In the thread it is working in, with a note in the project's main thread | 155 |
+| E6. Which project and which agent a thread gets | Named in the first message; "start development" opens an engineer thread | 153 |
+| E7. How the API recognises the actions it checks | It checks none for now | 146 |
+| E8. May the product agent read the repo | Yes, read-only | 147 |
+| E9. Who may stop the bot | Anyone | 148 |
+| E10. May QA merge | Yes | 145 |
+| E12. What the production check covers | Deployed, public routes, then a person for what only Slack shows | 157 |
+| E13. One epic per project, or several | Usually one; no rule | 156 |
+| E14. Whose name is on the bot's edits | The bot's own account; comments say who asked | 149 |
+| E15. Where an approval is written down | On the content, and recorded by the API | 152 |
 
 ## F. Blocks slice 6
 
