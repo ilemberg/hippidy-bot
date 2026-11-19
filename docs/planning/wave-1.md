@@ -230,6 +230,8 @@ Revised 2026-11-18 after the plan was checked against the code and the SDK
   the connectors, the GitHub token as `AGENT_GITHUB_TOKEN`, no bypass on `main`, and a
   monthly spend limit on the workspace.
 
+Done 2026-11-19: see `slice-4.md` (its live checks at close) and the retro below.
+
 ## Slice 5: a feature moves through a project
 
 Re-sketched 2026-11-19 (`decisions.md` 135 to 158). The sketch before that was "work from a
@@ -262,7 +264,9 @@ Every question in group E is answered. Two answers wait for a probe, like slice 
 experiment: whether Atlassian's MCP server accepts a token our vault can hold on a free site
 (E1, before 5A), and how screenshots leave the sandbox (E11, before 5C).
 
-Still owed before any of it: slice 4's close (live checks, database size, retro).
+Slice 4 closed on 2026-11-19 (retro below), with three live checks still to run in Slack
+(`slice-4.md`, "Live checks at close"). The Atlassian probe is a workflow run by hand
+(decision 159).
 
 ## Slice 6: auto-merge with confidence
 
@@ -463,3 +467,47 @@ count of conversations left unstored.
 
 **Still to do by hand:** move the CI secrets into the `release` environment before slice 4;
 update and reinstall the Slack app so the bot gets the sender's name (both in the README).
+
+### Slice 4 (finished 2026-11-19)
+
+**Shipped:** ilemberg/hippidy-bot pull requests 16 and 17 (plan, revised), 18 (the
+experiment), 19 (lease owner column), 20 (a CI log probe), 21 (the loop for long turns), 23
+(the repo, the sandbox and GitHub), 24 (read only new events), 25 (done means green CI, and
+the skill), 26 (progress notes, eval cases) and 27 (a Vercel build fix). Demo done, for real
+rather than the planned 🫡: in Slack, "can you add a /status route" got a clarifying
+question, then pull request 28 with CI green, its link in the thread and ✅; the follow-up
+landed on the same pull request; "can you merge this" was refused; the owner merged it and
+production `/status` answers 200. The session cost $0.75 for 7 active minutes over four turns.
+
+**What was learned:**
+
+- **The bot built a real feature of itself end to end on its first try.** It asked before
+  building (the prompt's "ask one short clarifying question"), and that question changed the
+  design: public, with no reasons in the response (decision 134).
+- **The experiment paid for itself again.** About $1 settled eight questions (decisions 127
+  to 129) and dropped the grader (132): it caught nothing, cost about $0.33 a question and
+  changed what the thread read.
+- **"Merged and green" still is not "works".** D merged green and the production deploy
+  failed on Vercel's type check (`Response` is empty there), so Vercel kept serving B2 until
+  27. CI's Vercel-like check did not catch a global `Response` read through a parameter type.
+  It was found by looking at the deployment, not by a test.
+- **The agent cannot see production.** Asked "make sure it's working" after the merge, it
+  could not reach `*.vercel.app` and said so plainly, with the command to run. Decision 157
+  (one more allowed host) is the answer for 5C; until then the check is a person's.
+- **The record carried the close.** Every "done when" line that could be checked was
+  checked from the database and Vercel by the build session, with no screenshots (the slice 3
+  retro asked for exactly this). The eval-case view already links requests to pull requests.
+- **Size is not a worry yet.** A coding session is about 150 events and 140 kB of
+  `agent_events`; the database went from 13 to 14 MB.
+
+**What changes for the next slices:**
+
+- Three "done when" lines need a person in Slack (a failing check, a stop mid-turn, a turn
+  past 30 minutes); they are written as one message each in `slice-4.md` and run before 5A
+  depends on them.
+- A deploy is not done until Vercel has built it: the production check of decision 157 waits
+  for the deployment's success, which would have caught D.
+- The plan for slice 5 (`projects.md`, 5A to 5C) starts with the Atlassian probe (159).
+
+**Carried forward:** a long reply that fails partway is re-posted from the start; lazy-load
+Bolt; Dependabot alerts; the GitHub token's expiry date (README).

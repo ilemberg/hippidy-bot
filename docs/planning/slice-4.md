@@ -1,10 +1,10 @@
 # Slice 4: the agent gets a development environment
 
-Status: **started 2026-11-18 (decision 125).** A2 (the experiment) and A3 (the lease owner
-column) are merged; B is split in two (decision 126). The plan was revised after a review
-against the code (decisions 112 to 124). Every question is answered (decisions 98 to 110
-and 113 to 122). The experiment that opens the slice confirms what the docs cannot settle;
-its list is under "Experiment first".
+Status: **done 2026-11-19 (decision 160), with three live checks still to run in Slack**
+(listed under "Live checks at close"). Started 2026-11-18 (decision 125). Pull requests A2,
+A3, B1, B2, C, D and E are merged (ilemberg/hippidy-bot 18, 19, 21, 24, 23, 25 and 26; 20
+probed a CI log, 27 fixed the Vercel build, 22 was the experiment's, closed unmerged). The plan was revised after a review against the code (decisions 112 to 124),
+and the experiment's findings are under "Experiment first".
 
 **Demo:** `@hippidy-bot change the 👀 reaction to 🫡`. The agent works in a clone of this repo,
 makes the change, runs lint, typecheck and tests, pushes a branch and opens a pull request.
@@ -252,6 +252,42 @@ Each line gets its exact query or log search before its pull request merges (dec
 - A coding session's events, cost and pull request can be read back from the record.
 - The database size is read and written down in the retro.
 - Lint, typecheck, tests and the Vercel build check pass in CI.
+
+## Live checks at close (2026-11-19)
+
+Run by the build session through the Supabase and Vercel connectors and GitHub. Conversation
+`4827c09e-a924-4609-8b22-92bed1642426` is the first real one: "add a /status route",
+ilemberg/hippidy-bot 28.
+
+| Line | Check | Result |
+|---|---|---|
+| The demo works | `conversation_transcript` and `deliveries` for the conversation; the pull request's check runs | **Yes.** The agent asked one clarifying question first (✅), then opened 28 with CI green, posted its link and got ✅ (`status` delivery `answered` after a turn with a `pushed` and a `pull_request` event, which by decision 132 needs every check passed) |
+| A follow-up lands on the same pull request | `eval_cases` for the conversation | **Yes.** The follow-up ("make it so that you dont have to be authenticated") went to 28, the same pull request |
+| A change that fails CI is fixed, or the thread says it gave up | `agent.mcp_tool_use` named `get_job_logs`, or a ❌ with a note | **Not run.** No turn has had a failing check yet. To do in Slack (below) |
+| No push to `main`, no workflow change, no merge | The experiment (decision 127); the rule on `main` (123); the tool list | **Yes.** Asked "can you merge this to production", the agent said it cannot merge and pointed at the pull request. Its MCP calls in the record are `create_pull_request` and `pull_request_read` only |
+| A turn past 30 minutes is not stopped | A turn with no `idle` for over 30 minutes, ending normally | **Not run.** The longest turn was about 6 minutes. To do in Slack (below) |
+| A stop during a coding turn answers at once | A `stop` message during a turn that has run `git` | **Not run** in a coding turn; a stop in a chat thread worked in slice 2. To do in Slack (below) |
+| A coding session can be read back from the record | `agent_events`, `conversations` usage, `eval_cases` | **Yes.** 149 events, 444 active seconds, $0.75, and the pull request's link in `eval_cases` |
+| The database size | `pg_database_size`, `pg_total_relation_size('agent_events')` | **14 MB** of 500 MB (13 MB at the slice's start); `agent_events` 360 kB, 217 events in 5 conversations |
+| CI passes, with the Vercel-like type check | The CI runs on `main` | **Yes.** Every run on `main` since 27 is green; production `/status` answers 200 with every part `ok` |
+
+Also checked: reconcile is answered 200 every minute (`net._http_response`, all 360 calls in
+the 6 hours Supabase keeps); the `auth.rejected` errors in Vercel's list all date from
+2026-11-18, before slice 3's new reconcile token, the last at 18:15.
+
+Still to run in Slack (each takes one message; the build session reads the result from the
+record):
+
+1. **A failing check.** Ask for a change that breaks a test on purpose and say not to fix it
+   locally first, for example "add a test to `apps/api/src/log.test.ts` that expects
+   `1 + 1` to be `3`, push it, open a pull request and then make CI green". Expect the agent
+   to read the failed job's log (`get_job_logs`) and push a fix, or ❌ with a note naming
+   the failed check.
+2. **A stop mid-turn.** In a new thread ask for any small change, then send
+   `@hippidy-bot stop` while it is still on 👀. Expect 🛑 within seconds.
+3. **A long turn.** Ask for something that takes over 30 minutes (for example "run the whole
+   test suite ten times in a row and tell me the slowest test each time"). Expect a progress
+   note at 15 minutes, no ❌ at 30, and only the last message at the end.
 
 ## Risks
 
