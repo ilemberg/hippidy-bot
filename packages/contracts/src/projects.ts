@@ -177,3 +177,19 @@ export const actorRoleListSchema = z.strictObject({
   roles: z.array(actorRoleSchema),
 });
 export type ActorRoleList = z.infer<typeof actorRoleListSchema>;
+
+/**
+ * Request body of `PUT /v1/conversations/:id/project`: ties a thread to a project (decision
+ * 153), or unties it with `null`. Only the project changes; which agent the thread has does not.
+ */
+export const setConversationProjectRequestSchema = z.strictObject({
+  projectId: uuid.nullable(),
+});
+export type SetConversationProjectRequest = z.infer<typeof setConversationProjectRequestSchema>;
+
+/** Response of `PUT /v1/conversations/:id/project`. */
+export const conversationProjectSchema = z.strictObject({
+  conversationId: uuid,
+  projectId: uuid.nullable(),
+});
+export type ConversationProject = z.infer<typeof conversationProjectSchema>;

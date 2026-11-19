@@ -1,11 +1,13 @@
 import {
   createProjectRequestSchema,
   recordApprovalRequestSchema,
+  setConversationProjectRequestSchema,
   setRoleRequestSchema,
   updateProjectRequestSchema,
   type ActorRoleList,
   type Approval,
   type ApprovalResult,
+  type ConversationProject,
   type Project,
   type ProjectDetail,
   type ProjectList,
@@ -22,12 +24,14 @@ import {
   listProjects,
   recordApproval,
   setActorRole,
+  setConversationProject,
   setProjectStage,
 } from "../store/projects.ts";
 import { errorResponse } from "./errors.ts";
 import type { ApiEnv } from "./types.ts";
 
 const projectIdSchema = z.guid();
+const conversationIdSchema = z.guid();
 
 export interface ProjectRouteDeps {
   /** Storage. Undefined until it is configured: every route then answers 503. */
@@ -72,6 +76,9 @@ const notConfigured = (c: Context<ApiEnv>) =>
   errorResponse(c, 503, "not_configured", "Projects are not configured");
 
 const noProject = (c: Context<ApiEnv>) => errorResponse(c, 404, "not_found", "No such project");
+
+const noConversation = (c: Context<ApiEnv>) =>
+  errorResponse(c, 404, "not_found", "No such conversation");
 
 /**
  * Projects, roles and approvals (slice 5A). Recording only: an approval never moves a stage,
@@ -167,6 +174,30 @@ export function addProjectRoutes(api: Hono<ApiEnv>, deps: ProjectRouteDeps): voi
       role: role.role,
     });
     return c.json(role);
+  });
+
+  // Ties a thread to a project, or unties it (decision 153). The agent kind is left as it is.
+  api.put("/v1/conversations/:id/project", auth, limitBody, async (c) => {
+    const id = conversationIdSchema.safeParse(c.req.param("id"));
+    if (!id.success) return noConversation(c);
+    const body = await readBody(c, setConversationProjectRequestSchema);
+    if (body.kind === "invalid") return body.response;
+    if (deps.db === undefined) return notConfigured(c);
+    const result = await setConversationProject(deps.db, id.data, body.data.projectId);
+    switch (result.kind) {
+      case "no_conversation":
+        return noConversation(c);
+      case "no_project":
+        return noProject(c);
+      case "set": {
+        const response: ConversationProject = {
+          conversationId: id.data,
+          projectId: result.projectId,
+        };
+        c.var.log.info("conversation.project_set", response);
+        return c.json(response);
+      }
+    }
   });
 
   api.get("/v1/roles", auth, async (c) => {

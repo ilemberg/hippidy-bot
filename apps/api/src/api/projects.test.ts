@@ -2,6 +2,7 @@ import {
   actorRoleListSchema,
   actorRoleSchema,
   approvalResultSchema,
+  conversationProjectSchema,
   errorResponseSchema,
   projectDetailSchema,
   projectListSchema,
@@ -350,6 +351,82 @@ describe("approvals", () => {
   });
 });
 
+describe("linking a thread to a project", () => {
+  async function thread() {
+    return await findOrCreateConversation(db, {
+      source: "slack",
+      workspaceId: "T1",
+      channelId: "C1",
+      threadId: "100.1",
+    });
+  }
+
+  async function stored(conversationId: string) {
+    const rows = await db.query(
+      `select project_id, agent_kind, updated_at from conversations where id = $1`,
+      [conversationId],
+    );
+    return rows[0];
+  }
+
+  const link = (app: App, conversationId: string, projectId: string | null) =>
+    send(app, "PUT", `/v1/conversations/${conversationId}/project`, { projectId });
+
+  it("links a thread and unlinks it, leaving the agent kind and updated_at alone", async () => {
+    const app = api();
+    const project = await create(app);
+    const conversation = await thread();
+    const before = await stored(conversation.id);
+
+    const res = await link(app, conversation.id, project.id);
+    expect(res.status).toBe(200);
+    expect(conversationProjectSchema.parse(await res.json())).toEqual({
+      conversationId: conversation.id,
+      projectId: project.id,
+    });
+    expect(await stored(conversation.id)).toEqual({ ...before, project_id: project.id });
+
+    const unlinked = await link(app, conversation.id, null);
+    expect(unlinked.status).toBe(200);
+    expect(conversationProjectSchema.parse(await unlinked.json())).toEqual({
+      conversationId: conversation.id,
+      projectId: null,
+    });
+    expect(await stored(conversation.id)).toEqual(before);
+  });
+
+  it("answers 404 for an unknown conversation or project", async () => {
+    const app = api();
+    const project = await create(app);
+    const conversation = await thread();
+    await expectError(await link(app, missing, project.id), 404, "not_found");
+    await expectError(await link(app, "not-a-uuid", project.id), 404, "not_found");
+    await expectError(await link(app, conversation.id, missing), 404, "not_found");
+    expect((await stored(conversation.id))?.project_id).toBeNull();
+  });
+
+  it("answers 400 for a bad body", async () => {
+    const app = api();
+    const conversation = await thread();
+    const route = `/v1/conversations/${conversation.id}/project`;
+    for (const body of [{}, { projectId: "nope" }, { projectId: null, agentKind: "product" }]) {
+      await expectError(await send(app, "PUT", route, body), 400, "invalid_request");
+    }
+    await expectError(
+      await app.request(route, { method: "PUT", headers: json, body: "{" }),
+      400,
+      "invalid_request",
+    );
+  });
+
+  it("works with storage alone, when the agent is not configured", async () => {
+    const app = api({ storage: "storage only" });
+    const project = await create(app);
+    const conversation = await thread();
+    expect((await link(app, conversation.id, project.id)).status).toBe(200);
+  });
+});
+
 describe("who may use the project routes", () => {
   const routes: [string, string][] = [
     ["POST", "/v1/projects"],
@@ -359,6 +436,7 @@ describe("who may use the project routes", () => {
     ["POST", `/v1/projects/${missing}/approvals`],
     ["PUT", "/v1/roles"],
     ["GET", "/v1/roles"],
+    ["PUT", `/v1/conversations/${missing}/project`],
   ];
 
   it("needs the service token; the reconcile token does not do", async () => {
@@ -387,6 +465,7 @@ describe("who may use the project routes", () => {
         actor: { source: "slack", workspaceId: "T1", actorId: "U1" },
       },
       "/v1/roles": { source: "slack", workspaceId: "T1", actorId: "U1", role: "qa" },
+      [`/v1/conversations/${missing}/project`]: { projectId: null },
     };
     for (const [method, route] of routes) {
       const res =
