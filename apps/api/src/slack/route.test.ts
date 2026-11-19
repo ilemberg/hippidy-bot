@@ -62,6 +62,7 @@ function setup(appEnv: Env = env) {
       return Promise.resolve();
     },
     userName: () => Promise.resolve(undefined),
+    threadReplies: () => Promise.resolve([]),
   });
   const conversations = {
     db,

@@ -72,7 +72,7 @@ All behind the service token, like `/v1/messages`. Shapes in `packages/contracts
 
 ## C to F, for the owner to start
 
-- **C. Reading the thread.** Slack's `conversations.replies` needs `channels:history` (and
+- **C. Reading the thread** (built 2026-11-19, decision 164; on once the app is reinstalled). Slack's `conversations.replies` needs `channels:history` (and
   `groups:history` for private channels). The manifest changes and the app is reinstalled
   by hand. If the scope is missing, the adapter sends the mention alone, as today.
 - **D. Project and role in the message.** The first line the agent gets becomes

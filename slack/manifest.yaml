@@ -12,6 +12,9 @@ oauth_config:
   scopes:
     bot:
       - app_mentions:read
+      # Read a thread's messages since the bot's last reply when it is mentioned (decision 140).
+      - channels:history
+      - groups:history
       - chat:write
       - reactions:read
       - reactions:write

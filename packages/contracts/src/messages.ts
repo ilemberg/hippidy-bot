@@ -9,6 +9,31 @@ export type MessageSource = z.infer<typeof messageSourceSchema>;
 
 const id = z.string().min(1).max(255);
 
+/** The most context messages one inbound message may carry. */
+export const MAX_CONTEXT_MESSAGES = 50;
+/** The longest text of one context message, in characters. */
+export const MAX_CONTEXT_TEXT = 4000;
+/**
+ * The largest body `POST /v1/messages` accepts, in bytes. A sender that adds context trims
+ * it (oldest first) to stay under this.
+ */
+export const MAX_INBOUND_MESSAGE_BYTES = 64 * 1024;
+
+/**
+ * Something said in the conversation since the agent last answered, that was not addressed
+ * to it (decision 140).
+ */
+export const contextMessageSchema = z.strictObject({
+  /** The sender's id in the source system. */
+  actorId: id,
+  /** How the sender is called, when the source could tell. */
+  actorName: z.string().min(1).max(255).optional(),
+  text: z.string().min(1).max(MAX_CONTEXT_TEXT),
+  /** When it was said, as an ISO 8601 timestamp. */
+  sentAt: z.iso.datetime({ offset: true }),
+});
+export type ContextMessage = z.infer<typeof contextMessageSchema>;
+
 /**
  * One message arriving at the API from any channel.
  *
@@ -41,6 +66,12 @@ export const inboundMessageSchema = z.strictObject({
   text: z.string().max(40_000),
   /** When the message was sent, as an ISO 8601 timestamp. */
   sentAt: z.iso.datetime({ offset: true }),
+  /**
+   * Messages said in the conversation since the agent last answered, that were not addressed
+   * to it, oldest first. Absent or empty when there are none or the source could not read
+   * them.
+   */
+  context: z.array(contextMessageSchema).max(MAX_CONTEXT_MESSAGES).optional(),
 });
 export type InboundMessage = z.infer<typeof inboundMessageSchema>;
 

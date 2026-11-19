@@ -4,6 +4,7 @@ import {
   inboundMessageSchema,
   listAgentEventsQuerySchema,
   listConversationsQuerySchema,
+  MAX_INBOUND_MESSAGE_BYTES,
   stopRequestSchema,
   type AcceptedMessage,
   type AgentEventList,
@@ -53,7 +54,8 @@ export interface ApiDeps {
 /** Webhook types after which the session may have something new to deliver. */
 const SYNC_ON_WEBHOOK = new Set(["session.status_idled", "session.status_terminated"]);
 
-const MAX_BODY_BYTES = 64 * 1024;
+/** The contract's limit; the Slack adapter trims a message's context to fit it. */
+const MAX_BODY_BYTES = MAX_INBOUND_MESSAGE_BYTES;
 const correlationIdPattern = /^[\w.:-]{1,255}$/;
 
 /** The core API: channel-agnostic, the only door to the system. */
