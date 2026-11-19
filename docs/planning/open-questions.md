@@ -109,13 +109,14 @@ workflow in `release`). All answered: see `decisions.md` 115, 120 and 118.
 ## E. Blocks slice 5
 
 Slice 5 became the project workflow in `projects.md`, built in three parts (5A, 5B, 5C). The
-questions were asked again on 2026-11-19 and all are answered, in `decisions.md` 134 to 156.
+questions were asked again on 2026-11-19 and all are answered, in `decisions.md` 134 to 157.
 Two answers wait for a probe.
 
 **E1. Which document system and which ticket system?** Waits for a probe (`decisions.md`
 150): on a free Atlassian site, can a service account key be made, and does the MCP server
 accept it as a bearer token for Jira and for Confluence? If yes, Jira and Confluence. If
-not, Linear. The candidates and their sources are in `stack-and-tools.md`.
+not, Linear. The candidates and their sources are in `stack-and-tools.md`. Where the probe
+stands is in `decisions.md` 157.
 
 **E11. How do screenshots get from the sandbox to Slack?** Waits for a probe before 5C is
 planned (`decisions.md` 149): does Chromium run in the sandbox, and how does a session hand

@@ -232,7 +232,7 @@ Revised 2026-11-18 after the plan was checked against the code and the SDK
 
 ## Slice 5: a feature moves through a project
 
-Re-sketched 2026-11-19 (`decisions.md` 134 to 156). The sketch before that was "work from a
+Re-sketched 2026-11-19 (`decisions.md` 134 to 157). The sketch before that was "work from a
 ticket instead of a sentence": `@hippidy-bot pick up HB-12`, with a work-item provider and a
 knowledge provider behind interfaces. That is now only the last stage of a longer workflow,
 described in `projects.md`: a project goes from a plan document, to an epic and tickets, to

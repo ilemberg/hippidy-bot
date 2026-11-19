@@ -1,7 +1,7 @@
 # Projects: how a feature moves from an idea to shipped
 
 Status: **draft, 2026-11-19. Planning only; nothing is built.** Written from a conversation
-that is still going, so expect changes. What is decided is in `decisions.md` 134 to 156; what
+that is still going, so expect changes. What is decided is in `decisions.md` 134 to 157; what
 is not is in `open-questions.md`, group E. This file describes the workflow; the slices that
 build it are sketched in `wave-1.md` (5A, 5B, 5C).
 
