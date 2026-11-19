@@ -4,6 +4,7 @@ import app from "../src/index.ts";
 
 const checks: [string, Request, number][] = [
   ["health", new Request("http://smoke/health"), 200],
+  ["status without config", new Request("http://smoke/status"), 503],
   ["messages without token", new Request("http://smoke/v1/messages", { method: "POST" }), 401],
   [
     "slack events without config",
