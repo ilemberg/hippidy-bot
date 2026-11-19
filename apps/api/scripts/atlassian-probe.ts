@@ -299,7 +299,10 @@ async function main(): Promise<void> {
 
   // 2. What the key may reach, and who it is. A service account may lack the scopes the
   // identity tools need (read:me, read:account); that does not stop the reads below.
-  await call("Discover", "discover", {});
+  // `discover` requires a query (run 44572488405): ask for what the project workflow uses.
+  await call("Discover", "discover", {
+    query: "search, read, create and comment on Jira issues and Confluence pages",
+  });
   await call("Identity", "atlassianUserInfo", {});
   const sites: AtlassianSite[] = parseSites(
     (await call("Sites and scopes", "getAccessibleAtlassianResources", {})) ?? "",
