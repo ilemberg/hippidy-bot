@@ -33,6 +33,7 @@ import {
 } from "./conversations.ts";
 import { errorResponse } from "./errors.ts";
 import { backfillRecord } from "./record.ts";
+import { readStatus, type StatusDeps } from "./status.ts";
 import type { ApiEnv } from "./types.ts";
 
 const conversationIdSchema = z.guid();
@@ -44,6 +45,8 @@ export interface ApiDeps {
   conversations: ConversationDeps | undefined;
   /** Checks Anthropic's webhook signatures. Undefined until the signing key is set. */
   verifyAgentWebhook: VerifyAgentWebhook | undefined;
+  /** What `GET /status` checks. */
+  status: StatusDeps;
 }
 
 /** Webhook types after which the session may have something new to deliver. */
@@ -67,6 +70,13 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
   });
 
   api.get("/health", (c) => c.json({ status: "ok" }));
+
+  // Public, like /health, but checks the parts the API depends on. It says only whether each
+  // works, never why not; the reason is logged.
+  api.get("/status", async (c) => {
+    const status = await readStatus(deps.status, c.var.log);
+    return c.json(status, status.status === "ok" ? 200 : 503);
+  });
 
   const limitBody = bodyLimit({
     maxSize: MAX_BODY_BYTES,
