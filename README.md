@@ -376,6 +376,29 @@ from `main`, by hand, in the `release` environment, and needs `ANTHROPIC_API_KEY
 Locally, with the three variables set (`GITHUB_REPOSITORY` is `owner/name`):
 `pnpm agent:experiment --probes-only`.
 
+## Slice 5: the Atlassian probe
+
+Before Jira and Confluence are chosen for the project workflow, a probe checks that
+Atlassian's MCP server accepts the bot's service account key as a bearer token, which is the
+only kind of credential the agent's vault holds (decisions 151, 158 and 159). It calls the
+server straight from a GitHub runner: no agent, no Anthropic cost.
+
+1. On the Atlassian site, make sure the service account has access to both Jira and
+   Confluence (**Administration**, **Directory**, **Service accounts**, the account, product
+   access), and that its key was made with the scopes for both.
+2. Copy the key straight into the repo's **Settings**, **Environments**, `release`, **Add
+   environment secret**, named `ATLASSIAN_SERVICE_KEY`. Never into a chat, a file or your
+   shell history.
+3. **Actions**, **Atlassian probe**, **Run workflow** on `main`, with `writes` off. The run's
+   summary says whether the key was accepted, which tools the server serves, who the key is,
+   which sites and scopes it reaches, and whether it can read Jira and Confluence.
+4. If that looks right, run it again with `writes` on, a Jira project key and a Confluence
+   space key. It creates one issue and one page, comments on each, and leaves them, marked
+   as the probe's: the server has no tool that deletes, so delete them by hand.
+
+Locally, with `ATLASSIAN_SERVICE_KEY` set: `pnpm atlassian:probe` (add `--writes` with
+`ATLASSIAN_PROBE_PROJECT` and `ATLASSIAN_PROBE_SPACE`).
+
 ## Planning docs
 
 | Doc                                                                  | What it is                                                                                 |

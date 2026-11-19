@@ -17,7 +17,8 @@
     "build": "pnpm --filter @hippidy/api build",
     "smoke": "pnpm --filter @hippidy/api smoke",
     "agent:sync": "pnpm --filter @hippidy/api agent:sync",
-    "agent:experiment": "pnpm --filter @hippidy/api agent:experiment"
+    "agent:experiment": "pnpm --filter @hippidy/api agent:experiment",
+    "atlassian:probe": "pnpm --filter @hippidy/api atlassian:probe"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
