@@ -170,6 +170,71 @@ describe("toAgentEvent", () => {
       toolUseId: "sevt_7",
     });
   });
+
+  it("reads a custom tool call and its answer (decision 167)", () => {
+    const use: BetaManagedAgentsSessionEvent = {
+      id: "sevt_11",
+      type: "agent.custom_tool_use",
+      name: "link_project",
+      input: { name: "Search" },
+      processed_at: "2026-11-18T00:00:11.000Z",
+    };
+    expect(toAgentEvent(use)).toEqual({
+      kind: "custom_tool_use",
+      id: "sevt_11",
+      name: "link_project",
+      input: { name: "Search" },
+      processedAt: "2026-11-18T00:00:11.000Z",
+    });
+    const result: BetaManagedAgentsSessionEvent = {
+      id: "sevt_12",
+      type: "user.custom_tool_result",
+      custom_tool_use_id: "sevt_11",
+      content: [{ type: "text", text: "{}" }],
+      is_error: false,
+      processed_at: null,
+    };
+    expect(toAgentEvent(result)).toEqual({
+      kind: "custom_tool_result",
+      id: "sevt_12",
+      customToolUseId: "sevt_11",
+    });
+  });
+});
+
+describe("answering a custom tool call", () => {
+  it("sends the result as text, with whether it is an error", async () => {
+    const sent: unknown[] = [];
+    const client = {
+      beta: {
+        sessions: {
+          events: {
+            send: (sessionId: string, body: unknown) => {
+              sent.push([sessionId, body]);
+              return Promise.resolve({ data: [] });
+            },
+          },
+        },
+      },
+    } as unknown as Anthropic;
+    const runtime = createManagedAgentRuntime(config, client);
+    await runtime.answerCustomTool("sesn_1", "sevt_11", { text: "no such tool", isError: true });
+    expect(sent).toEqual([
+      [
+        "sesn_1",
+        {
+          events: [
+            {
+              type: "user.custom_tool_result",
+              custom_tool_use_id: "sevt_11",
+              content: [{ type: "text", text: "no such tool" }],
+              is_error: true,
+            },
+          ],
+        },
+      ],
+    ]);
+  });
 });
 
 describe("toSessionUsage", () => {

@@ -18,6 +18,8 @@ interface FakeSession {
   interrupted: number;
   /** Tool calls the API denied, in order (decision 119). */
   denied: string[];
+  /** Custom tool calls the API answered, in order (decision 167). */
+  answered: { customToolUseId: string; text: string; isError: boolean }[];
   usage: SessionUsage;
 }
 
@@ -32,6 +34,8 @@ const TYPE_OF: Record<AgentEvent["kind"], string> = {
   tool_confirmation: "user.tool_confirmation",
   pull_request: "agent.mcp_tool_result",
   pushed: "agent.tool_use",
+  custom_tool_use: "agent.custom_tool_use",
+  custom_tool_result: "user.custom_tool_result",
 };
 
 const NO_USAGE: SessionUsage = {
@@ -55,8 +59,9 @@ const NO_USAGE: SessionUsage = {
 export class FakeAgentRuntime implements AgentRuntime {
   readonly sessions = new Map<string, FakeSession>();
   /** Set to make the next call of that kind fail once. */
-  failNext: Partial<Record<"startSession" | "sendMessage" | "listEvents" | "readUsage", Error>> =
-    {};
+  failNext: Partial<
+    Record<"startSession" | "sendMessage" | "listEvents" | "readUsage" | "answerCustomTool", Error>
+  > = {};
   /** Set to make every send fail, as for a session paused at its budget. */
   rejectAllSends: Error | undefined;
   /** Runs while a usage read is under way: to look at, or hold up, what happens meanwhile. */
@@ -111,6 +116,7 @@ export class FakeAgentRuntime implements AgentRuntime {
       queued: [],
       interrupted: 0,
       denied: [],
+      answered: [],
       usage: NO_USAGE,
     });
     return Promise.resolve({ sessionId, agentId: "agent_fake", agentVersion: 1 });
@@ -137,6 +143,18 @@ export class FakeAgentRuntime implements AgentRuntime {
       session.denied.push(toolUseId);
       this.push(session, { kind: "tool_confirmation", id: this.id("sevt"), toolUseId });
     }
+    return Promise.resolve();
+  }
+
+  answerCustomTool(
+    sessionId: string,
+    customToolUseId: string,
+    result: { text: string; isError: boolean },
+  ): Promise<void> {
+    this.takeFailure("answerCustomTool");
+    const session = this.session(sessionId);
+    session.answered.push({ customToolUseId, ...result });
+    this.push(session, { kind: "custom_tool_result", id: this.id("sevt"), customToolUseId });
     return Promise.resolve();
   }
 
@@ -235,6 +253,36 @@ export class FakeAgentRuntime implements AgentRuntime {
       blockedOn: toolUseIds,
     });
     return toolUseIds;
+  }
+
+  /**
+   * The agent calls custom tools, in a turn already running, then waits on them, and on
+   * `approvals` new tool calls that wait for approval besides (decision 167). Returns the ids
+   * of the custom calls and of the others.
+   */
+  callCustomTools(
+    sessionId: string,
+    calls: readonly { name: string; input: unknown }[],
+    approvals = 0,
+  ): { custom: string[]; approvals: string[] } {
+    const session = this.session(sessionId);
+    const custom = calls.map(({ name, input }) => {
+      const id = this.id("sevt");
+      // The time `push` gives the event's record: one second after the one before it.
+      const processedAt = new Date(this.clock + 1000).toISOString();
+      this.push(session, { kind: "custom_tool_use", id, name, input, processedAt });
+      return id;
+    });
+    const others = Array.from({ length: approvals }, () =>
+      this.other(sessionId, "agent.mcp_tool_use"),
+    );
+    this.push(session, {
+      kind: "idle",
+      id: this.id("sevt"),
+      reason: "requires_action",
+      blockedOn: [...custom, ...others],
+    });
+    return { custom, approvals: others };
   }
 
   /** One turn: the oldest queued message is processed, the agent says each text, then idles. */

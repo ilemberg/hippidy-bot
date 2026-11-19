@@ -9,12 +9,15 @@ import {
   enqueueDelivery,
   findConversationBySession,
   findOrCreateConversation,
+  markForwarded,
+  recordInbound,
   unsentDeliveries,
 } from "./conversations.ts";
 import { createPostgresDb, type Db } from "./db.ts";
 import {
   createProject,
   getProject,
+  readTurnSender,
   recordApproval,
   setActorRole,
   setProjectStage,
@@ -464,6 +467,57 @@ describe("createPostgresDb", () => {
     for (const seq of seqs) expect(typeof seq).toBe("number");
     const [first = 0, second = 0] = seqs;
     expect(second).toBeGreaterThan(first);
+  });
+
+  // The rows a custom tool call already made are read back by a second query (decision 167):
+  // the same shape, `seq` as a number, through this client.
+  it("returns the same project and approval when a custom tool call is answered again", async () => {
+    const createdBy = { source: "slack" as const, workspaceId: "T", actorId: "U1" };
+    const project = await createProject(db, { name: "Tool", createdBy }, "sevt_db_1");
+    expect(await createProject(db, { name: "Tool", createdBy }, "sevt_db_1")).toEqual(project);
+    const request = {
+      subject: "plan" as const,
+      subjectRef: "",
+      subjectVersion: "",
+      action: "approve" as const,
+      actor: { source: "slack" as const, workspaceId: "T", actorId: "EM" },
+    };
+    const recorded = await recordApproval(db, project.id, request, "sevt_db_2");
+    const again = await recordApproval(db, project.id, request, "sevt_db_2");
+    expect(again).toEqual(recorded);
+    expect(again.kind === "recorded" ? typeof again.approval.seq : undefined).toBe("number");
+  });
+
+  // Two text arrays bound and unnested together, times compared at microsecond precision.
+  it("finds whose message a custom tool call's turn answers", async () => {
+    const conversation = await findOrCreateConversation(db, {
+      source: "slack",
+      workspaceId: "T",
+      channelId: "C",
+      threadId: "turn.1",
+    });
+    for (const [n, actorId] of [
+      [1, "U1"],
+      [2, "U2"],
+    ] as const) {
+      const message = await recordInbound(db, conversation.id, {
+        source: "slack",
+        sourceEventId: `EvTurn${n}`,
+        conversation: { workspaceId: "T", channelId: "C", threadId: "turn.1", messageId: `t${n}` },
+        actor: { id: actorId },
+        text: "hi",
+        sentAt: "2026-11-18T00:00:00.000Z",
+      });
+      await markForwarded(db, message.id, `sevt_turn_${n}`);
+    }
+    const messages = [
+      { eventId: "sevt_turn_1", processedAt: "2026-11-18T00:00:01.000001Z" },
+      { eventId: "sevt_turn_2", processedAt: "2026-11-18T00:00:01.000003Z" },
+    ];
+    const at = (time: string) => readTurnSender(db, conversation.id, time, messages);
+    expect(await at("2026-11-18T00:00:01.000002Z")).toBe("U1");
+    expect(await at("2026-11-18T00:00:01.000003Z")).toBe("U2");
+    expect(await at("2026-11-18T00:00:01Z")).toBeUndefined();
   });
 });
 

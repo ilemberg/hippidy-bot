@@ -18,6 +18,15 @@ export interface AgentRuntime {
    */
   denyToolCalls(sessionId: string, toolUseIds: readonly string[], message: string): Promise<void>;
   /**
+   * Answers one custom tool call with its result (decision 167). The session waits on the call
+   * until it is answered; `isError` tells the agent the call failed, and the text says why.
+   */
+  answerCustomTool(
+    sessionId: string,
+    customToolUseId: string,
+    result: { text: string; isError: boolean },
+  ): Promise<void>;
+  /**
    * Every event of the session so far, oldest first, exactly as the runtime reported it, each
    * with what the API makes of it. With `since` (an ISO 8601 time), only the events processed
    * at or after it, plus user messages still in the queue (decisions 95, 127). Throws
@@ -67,6 +76,19 @@ export type AgentEvent =
   | { kind: "pushed"; id: string }
   /** An answer to a tool call that waited for approval. */
   | { kind: "tool_confirmation"; id: string; toolUseId: string }
+  /**
+   * The agent called a custom tool the API answers (decision 167); `id` is the call's id.
+   * `processedAt` is when, by the runtime's clock, exactly as given; null if it gave none.
+   */
+  | {
+      kind: "custom_tool_use";
+      id: string;
+      name: string;
+      input: unknown;
+      processedAt: string | null;
+    }
+  /** An answer to a custom tool call. */
+  | { kind: "custom_tool_result"; id: string; customToolUseId: string }
   | { kind: "terminated"; id: string }
   | { kind: "error"; id: string; message: string };
 

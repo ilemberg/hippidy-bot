@@ -1,14 +1,17 @@
 import type { Approval, RecordApprovalRequest, Role } from "@hippidy/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { findOrCreateConversation } from "./conversations.ts";
+import { findOrCreateConversation, markForwarded, recordInbound } from "./conversations.ts";
 import {
   createProject,
   getActorRole,
   getProject,
+  hasWrittenInConversation,
   isApproved,
   listActorRoles,
   listProjects,
   readSenderAndProject,
+  readToolCallContext,
+  readTurnSender,
   recordApproval,
   setActorRole,
   setConversationProject,
@@ -229,6 +232,128 @@ describe("recordApproval", () => {
     expect(await recordApproval(db, missing, approval("EM", "approve"))).toEqual({
       kind: "no_project",
     });
+    expect(await recordApproval(db, missing, approval("EM", "approve"), "sevt_1")).toEqual({
+      kind: "no_project",
+    });
+  });
+});
+
+describe("writes made by a custom tool call (decision 167)", () => {
+  it("makes one project per call, returning the same one when called again", async () => {
+    const first = await createProject(db, { name: "Search", createdBy: creator }, "sevt_1");
+    const again = await createProject(db, { name: "Other", createdBy: creator }, "sevt_1");
+    expect(again).toEqual(first);
+    const other = await createProject(db, { name: "Search", createdBy: creator }, "sevt_2");
+    expect(other.id).not.toBe(first.id);
+    // Without a call's id, nothing is keyed: two projects of one name are two projects.
+    await createProject(db, { name: "Search", createdBy: creator });
+    await createProject(db, { name: "Search", createdBy: creator });
+    expect(await listProjects(db)).toHaveLength(4);
+    const rows = await db.query(
+      `select custom_tool_use_id from projects order by custom_tool_use_id nulls last`,
+    );
+    expect(rows.map((row) => row.custom_tool_use_id)).toEqual(["sevt_1", "sevt_2", null, null]);
+  });
+
+  it("records one approval per call, returning the same row when called again", async () => {
+    const project = await createProject(db, { name: "Search", createdBy: creator });
+    const first = await recordApproval(db, project.id, approval("EM", "approve"), "sevt_1");
+    const again = await recordApproval(db, project.id, approval("EM", "withdraw"), "sevt_1");
+    expect(first.kind).toBe("recorded");
+    expect(again).toEqual(first);
+    await recordApproval(db, project.id, approval("EM", "withdraw"), "sevt_2");
+    await recordApproval(db, project.id, approval("EM", "approve"));
+    const found = await getProject(db, project.id);
+    expect(found?.approvals.map((a) => a.action)).toEqual(["approve", "withdraw", "approve"]);
+  });
+});
+
+describe("readToolCallContext", () => {
+  it("reads the thread's place and its project", async () => {
+    const conversation = await thread();
+    expect(await readToolCallContext(db, conversation.id)).toEqual({
+      source: "slack",
+      workspaceId: "T1",
+      projectId: null,
+    });
+    const project = await createProject(db, { name: "Search", createdBy: creator });
+    await setConversationProject(db, conversation.id, project.id);
+    expect(await readToolCallContext(db, conversation.id)).toEqual({
+      source: "slack",
+      workspaceId: "T1",
+      projectId: project.id,
+    });
+    expect(await readToolCallContext(db, missing)).toBeUndefined();
+  });
+});
+
+async function thread() {
+  return await findOrCreateConversation(db, {
+    source: "slack",
+    workspaceId: "T1",
+    channelId: "C1",
+    threadId: "100.1",
+  });
+}
+
+function inbound(n: number, actorId: string, workspaceId = "T1") {
+  return {
+    source: "slack" as const,
+    sourceEventId: `Ev${n}`,
+    conversation: { workspaceId, channelId: "C1", threadId: "100.1", messageId: `${n}` },
+    actor: { id: actorId },
+    text: "hi",
+    sentAt: "2026-11-18T00:00:00.000Z",
+  };
+}
+
+describe("readTurnSender", () => {
+  it("is the sender of the latest message processed at or before the call", async () => {
+    const conversation = await thread();
+    const forward = async (n: number, actorId: string, eventId: string | undefined) => {
+      const message = await recordInbound(db, conversation.id, inbound(n, actorId));
+      await markForwarded(db, message.id, eventId);
+    };
+    await forward(1, "U1", "sevt_1");
+    await forward(2, "U2", "sevt_2");
+    // Handed over but given no event id: it cannot be matched.
+    await forward(3, "U3", undefined);
+    const messages = [
+      { eventId: "sevt_1", processedAt: "2026-11-18T00:00:01.000001Z" },
+      { eventId: "sevt_2", processedAt: "2026-11-18T00:00:03.000000Z" },
+      { eventId: "sevt_other", processedAt: "2026-11-18T00:00:02.000000Z" },
+    ];
+    const at = (time: string) => readTurnSender(db, conversation.id, time, messages);
+    expect(await at("2026-11-18T00:00:01.000000Z")).toBeUndefined();
+    // Compared at the runtime's precision, finer than a JavaScript Date.
+    expect(await at("2026-11-18T00:00:01.000001Z")).toBe("U1");
+    expect(await at("2026-11-18T00:00:02.500000Z")).toBe("U1");
+    expect(await at("2026-11-18T00:00:03.000000Z")).toBe("U2");
+    expect(await readTurnSender(db, conversation.id, "2026-11-18T00:00:09Z", [])).toBeUndefined();
+  });
+});
+
+describe("hasWrittenInConversation", () => {
+  it("is true only for a sender of the thread, in its source and workspace", async () => {
+    const conversation = await thread();
+    await recordInbound(db, conversation.id, inbound(1, "U1"));
+    const other = await findOrCreateConversation(db, {
+      source: "slack",
+      workspaceId: "T1",
+      channelId: "C1",
+      threadId: "200.1",
+    });
+    await recordInbound(db, other.id, {
+      ...inbound(2, "U2"),
+      conversation: { workspaceId: "T1", channelId: "C1", threadId: "200.1", messageId: "2" },
+    });
+    const wrote = (actorId: string, workspaceId = "T1") =>
+      hasWrittenInConversation(db, conversation.id, { source: "slack", workspaceId, actorId });
+    expect(await wrote("U1")).toBe(true);
+    expect(await wrote("U1", "T2")).toBe(false);
+    // Wrote in another thread only.
+    expect(await wrote("U2")).toBe(false);
+    expect(await wrote("U9")).toBe(false);
   });
 });
 
