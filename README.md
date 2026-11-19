@@ -389,12 +389,14 @@ server straight from a GitHub runner: no agent, no Anthropic cost.
 2. Copy the key straight into the repo's **Settings**, **Environments**, `release`, **Add
    environment secret**, named `ATLASSIAN_SERVICE_KEY`. Never into a chat, a file or your
    shell history.
-3. **Actions**, **Atlassian probe**, **Run workflow** on `main`, with `writes` off. The run's
-   summary says whether the key was accepted, which tools the server serves, who the key is,
-   which sites and scopes it reaches, and whether it can read Jira and Confluence.
+3. **Actions**, **Atlassian probe**, **Run workflow** on `main`, with `writes` off and `site`
+   set to the site's address (`example.atlassian.net`). The run's summary lists the tools
+   the server serves and each one's input fields, what the key may reach (`discover`), who
+   it is, and whether it can search Jira and Confluence. The server answers its first call
+   without a valid key, so the rows after "accepted" are what show the key works.
 4. If that looks right, run it again with `writes` on, a Jira project key and a Confluence
-   space key. It creates one issue and one page, comments on each, and leaves them, marked
-   as the probe's: the server has no tool that deletes, so delete them by hand.
+   space key. It creates one issue and comments on it, and creates one page, and leaves
+   them, marked as the probe's: the server has no tool that deletes, so delete them by hand.
 
 Locally, with `ATLASSIAN_SERVICE_KEY` set: `pnpm atlassian:probe` (add `--writes` with
 `ATLASSIAN_PROBE_PROJECT` and `ATLASSIAN_PROBE_SPACE`).
