@@ -176,7 +176,9 @@ async function call(
   }
   const missing = tool.required.filter((field) => !(field in args));
   try {
-    const { text, isError } = toolText(await rpc("tools/call", { name, arguments: args }));
+    const result = toolText(await rpc("tools/call", { name, arguments: args }));
+    const text = redact(result.text, key);
+    const isError = result.isError;
     if (isError) {
       found(
         question,
@@ -196,7 +198,7 @@ async function call(
 function describeError(error: unknown): string {
   const cause =
     error instanceof Error && error.cause instanceof Error ? ` (${error.cause.message})` : "";
-  return clip(`${String(error)}${cause}`, 500);
+  return clip(redact(`${String(error)}${cause}`, key), 500);
 }
 
 function json(text: string | undefined): unknown {
@@ -221,13 +223,18 @@ async function main(): Promise<void> {
     await rpc("notifications/initialized", {}, true);
     found(
       "Bearer key accepted",
-      `yes: initialize answered (server ${clip(JSON.stringify(findString(init, ["name"]) ?? "unnamed"), 80)})`,
+      `yes, so far: initialize answered; the rows below show whether calls work too (server ${clip(JSON.stringify(findString(init, ["name"]) ?? "unnamed"), 80)})`,
     );
   } catch (error) {
     if (error instanceof HttpError) {
       found(
         "Bearer key accepted",
         `no${error.status === 401 || error.status === 403 ? " (refused)" : ""}: ${clip(error.message, 500)}`,
+      );
+    } else if (error instanceof Error && error.message.startsWith("JSON-RPC error")) {
+      found(
+        "Bearer key accepted",
+        `no (the server answered with an error): ${describeError(error)}`,
       );
     } else {
       found("Bearer key accepted", `unknown: could not reach the server: ${describeError(error)}`);
@@ -242,7 +249,7 @@ async function main(): Promise<void> {
       `${String(tools.length)}: ${tools.map((tool) => tool.name).join(", ") || "none"}`,
     );
   } catch (error) {
-    found("Tools served", `tools/list failed: ${clip(String(error), 400)}`);
+    found("Tools served", `tools/list failed: ${describeError(error)}`);
     return;
   }
   for (const { group, present, missing } of coverage(tools.map((tool) => tool.name))) {
@@ -257,9 +264,14 @@ async function main(): Promise<void> {
   const sites: AtlassianSite[] = parseSites(
     (await call("Sites and scopes", "getAccessibleAtlassianResources", {})) ?? "",
   );
-  const site =
-    sites.find((candidate) => siteWanted !== undefined && candidate.url.includes(siteWanted)) ??
-    sites[0];
+  const wanted =
+    siteWanted === undefined
+      ? undefined
+      : sites.find((candidate) => candidate.url.includes(siteWanted));
+  if (siteWanted !== undefined && wanted === undefined && sites.length > 0) {
+    found("Site wanted", `${siteWanted} is not among the sites the key reaches; using the first`);
+  }
+  const site = wanted ?? sites[0];
   const cloudId = site?.id ?? siteWanted;
   if (site !== undefined) {
     found(
@@ -277,7 +289,8 @@ async function main(): Promise<void> {
   await call("Jira: read projects", "getVisibleJiraProjects", { cloudId });
   await call("Jira: search issues", "searchJiraIssuesUsingJql", {
     cloudId,
-    jql: "order by created DESC",
+    // Jira Cloud's search rejects a query with no restriction ("unbounded").
+    jql: "created >= -3650d ORDER BY created DESC",
     maxResults: 1,
   });
   const spacesText = await call("Confluence: read spaces", "getConfluenceSpaces", { cloudId });
@@ -300,7 +313,9 @@ async function main(): Promise<void> {
       description: stamp,
     });
     const issueKey = findString(json(issueText), ["key"]);
-    if (issueKey !== undefined) {
+    if (issueText !== undefined && issueKey === undefined) {
+      found("Jira: comment on it", "not tried: no issue key found in the create result");
+    } else if (issueKey !== undefined) {
       await call("Jira: comment on it", "addCommentToJiraIssue", {
         cloudId,
         issueIdOrKey: issueKey,
@@ -311,7 +326,16 @@ async function main(): Promise<void> {
   if (spaceKey === undefined) {
     found("Confluence: write", "not tried: ATLASSIAN_PROBE_SPACE is not set");
   } else {
-    const spaceId = spaceIdForKey(spacesText ?? "", spaceKey);
+    // The read above returns one page of spaces; on a larger site, ask for this one by key.
+    const spaceId =
+      spaceIdForKey(spacesText ?? "", spaceKey) ??
+      spaceIdForKey(
+        (await call("Confluence: find the space by key", "getConfluenceSpaces", {
+          cloudId,
+          keys: [spaceKey],
+        })) ?? "",
+        spaceKey,
+      );
     if (spaceId === undefined) {
       found("Confluence: write", `not tried: no space with key ${spaceKey} in the spaces read`);
       return;
@@ -323,7 +347,9 @@ async function main(): Promise<void> {
       body: stamp,
     });
     const pageId = findString(json(pageText), ["id"]);
-    if (pageId !== undefined) {
+    if (pageText !== undefined && pageId === undefined) {
+      found("Confluence: comment on it", "not tried: no page id found in the create result");
+    } else if (pageId !== undefined) {
       await call("Confluence: comment on it", "createConfluenceFooterComment", {
         cloudId,
         pageId,
