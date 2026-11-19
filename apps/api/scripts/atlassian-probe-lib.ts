@@ -91,35 +91,6 @@ export function parseSites(text: string): AtlassianSite[] {
   });
 }
 
-/**
- * The id of the Confluence space with the given key, from `getConfluenceSpaces`' text (the
- * Confluence REST shape: `{ results: [{ id, key }] }`). Creating a page takes the id.
- */
-export function spaceIdForKey(text: string, key: string): string | undefined {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return undefined;
-  }
-  const results =
-    typeof parsed === "object" && parsed !== null && "results" in parsed ? parsed.results : parsed;
-  if (!Array.isArray(results)) return undefined;
-  for (const space of results as unknown[]) {
-    if (
-      typeof space === "object" &&
-      space !== null &&
-      "key" in space &&
-      space.key === key &&
-      "id" in space &&
-      (typeof space.id === "string" || typeof space.id === "number")
-    ) {
-      return String(space.id);
-    }
-  }
-  return undefined;
-}
-
 /** The first string found under any of the keys, searching nested objects. */
 export function findString(value: unknown, keys: readonly string[]): string | undefined {
   if (typeof value !== "object" || value === null) return undefined;

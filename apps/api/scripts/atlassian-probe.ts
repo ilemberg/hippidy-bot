@@ -142,6 +142,8 @@ interface Tool {
   name: string;
   required: string[];
   properties: string[];
+  /** What the schema says about `cloudId`, so the report shows what form it expects. */
+  cloudIdHint: string | undefined;
 }
 
 async function listTools(): Promise<Tool[]> {
@@ -169,7 +171,18 @@ async function listTools(): Promise<Tool[]> {
         schema.properties !== null
           ? Object.keys(schema.properties)
           : [];
-      tools.push({ name: String(tool.name), required, properties });
+      const cloudIdSchema =
+        typeof schema === "object" &&
+        schema !== null &&
+        "properties" in schema &&
+        typeof schema.properties === "object" &&
+        schema.properties !== null &&
+        "cloudId" in schema.properties
+          ? schema.properties.cloudId
+          : undefined;
+      const cloudIdHint =
+        cloudIdSchema === undefined ? undefined : clip(JSON.stringify(cloudIdSchema), 300);
+      tools.push({ name: String(tool.name), required, properties, cloudIdHint });
     }
     const next = "nextCursor" in record ? record.nextCursor : undefined;
     if (typeof next !== "string" || next === "") break;
@@ -193,21 +206,19 @@ async function call(
   }
   const sent = argsFor(tool.properties, args);
   const missing = tool.required.filter((field) => !(field in sent));
+  const hint = missing.length > 0 ? ` (it requires ${missing.join(", ")}, not given)` : "";
   try {
     const result = toolText(await rpc("tools/call", { name, arguments: sent }));
     const text = redact(result.text, key);
     const isError = result.isError;
     if (isError) {
-      found(
-        question,
-        `\`${name}\` returned an error${missing.length > 0 ? ` (it requires ${missing.join(", ")}, not given)` : ""}: ${clip(text, 400)}`,
-      );
+      found(question, `\`${name}\` returned an error${hint}: ${clip(text, 400)}`);
       return undefined;
     }
     found(question, `yes: \`${name}\` returned ${clip(text, 400)}`);
     return text;
   } catch (error) {
-    found(question, `\`${name}\` failed: ${describeError(error)}`);
+    found(question, `\`${name}\` failed${hint}: ${describeError(error)}`);
     return undefined;
   }
 }
@@ -280,7 +291,10 @@ async function main(): Promise<void> {
   for (const tool of tools.filter((candidate) =>
     Object.values(WANTED_TOOLS).some((group: readonly string[]) => group.includes(candidate.name)),
   )) {
-    found(`Input of ${tool.name}`, describeInput(tool.required, tool.properties));
+    found(
+      `Input of ${tool.name}`,
+      `${describeInput(tool.required, tool.properties)}${tool.cloudIdHint === undefined ? "" : `; cloudId: ${tool.cloudIdHint}`}`,
+    );
   }
 
   // 2. What the key may reach, and who it is. A service account may lack the scopes the
@@ -295,7 +309,10 @@ async function main(): Promise<void> {
       ? undefined
       : sites.find((candidate) => candidate.url.includes(siteWanted));
   if (siteWanted !== undefined && wanted === undefined && sites.length > 0) {
-    found("Site wanted", `${siteWanted} is not among the sites the key reaches; using the first`);
+    found(
+      "Site wanted",
+      `${siteWanted} is not among the ${String(sites.length)} sites the key lists (${sites.map((candidate) => candidate.url).join(", ")}); trying it as given`,
+    );
   }
   const site = wanted ?? (siteWanted === undefined ? sites[0] : undefined);
   const cloudId = site?.id ?? siteWanted;
