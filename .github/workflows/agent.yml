@@ -61,4 +61,8 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           # Written into the vault for GitHub's MCP server (decision 122).
           AGENT_GITHUB_TOKEN: ${{ secrets.AGENT_GITHUB_TOKEN }}
+          # Written into the vault for Atlassian's MCP server, which the product agent uses
+          # for Jira and Confluence (slice 5A part F). Missing, it leaves that credential as it
+          # is and warns.
+          ATLASSIAN_SERVICE_KEY: ${{ secrets.ATLASSIAN_SERVICE_KEY }}
         run: pnpm agent:sync

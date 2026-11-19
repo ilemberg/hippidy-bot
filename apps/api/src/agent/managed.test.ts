@@ -421,10 +421,13 @@ describe("starting a product session (decisions 147, 167)", () => {
     { id: "agent_2", name: "hippidy-bot-product", archived_at: null },
   ];
 
-  it("starts the product agent with the repo mounted without a token, and no vault", async () => {
-    const { client, created } = fakeClient(both, [
-      { id: "vlt_1", display_name: "hippidy-bot", archived_at: null },
-    ]);
+  const vaults = [
+    { id: "vlt_old", display_name: "hippidy-bot", archived_at: "2026-11-01T00:00:00Z" },
+    { id: "vlt_1", display_name: "hippidy-bot", archived_at: null },
+  ];
+
+  it("starts the product agent with the repo mounted without a token, and the vault", async () => {
+    const { client, created } = fakeClient(both, vaults);
     const runtime = createManagedAgentRuntime(config, client);
     expect(await runtime.startSession({ title: "t", metadata: {}, agentKind: "product" })).toEqual({
       sessionId: "sesn_2",
@@ -438,20 +441,35 @@ describe("starting a product session (decisions 147, 167)", () => {
         title: "t",
         metadata: {},
         resources: [{ type: "github_repository", url: "https://github.com/ilemberg/hippidy-bot" }],
+        vault_ids: ["vlt_1"],
         budget: { type: "limit", max_list_cost: { amount: "200", currency: "USD" } },
       },
     ]);
   });
 
-  it("needs neither the GitHub token nor the vault", async () => {
-    const { client, created } = fakeClient(both);
+  it("needs no GitHub token, and still mounts the repo without one", async () => {
+    const { client, created } = fakeClient(both, vaults);
     const runtime = createManagedAgentRuntime({ ...config, repository: undefined }, client);
     await runtime.startSession({ title: "t", metadata: {}, agentKind: "product" });
-    expect(created).toHaveLength(1);
+    expect(created).toEqual([
+      expect.objectContaining({
+        resources: [{ type: "github_repository", url: "https://github.com/ilemberg/hippidy-bot" }],
+        vault_ids: ["vlt_1"],
+      }),
+    ]);
+  });
+
+  it("starts no session when the vault has not been made, like the engineer", async () => {
+    const { client, created } = fakeClient(both, [vaults[0] ?? {}]);
+    const runtime = createManagedAgentRuntime(config, client);
+    await expect(
+      runtime.startSession({ title: "t", metadata: {}, agentKind: "product" }),
+    ).rejects.toThrow(/vault "hippidy-bot"/);
+    expect(created).toEqual([]);
   });
 
   it("starts no session when the product agent has not been synced", async () => {
-    const { client, created } = fakeClient([both[0] ?? {}]);
+    const { client, created } = fakeClient([both[0] ?? {}], vaults);
     const runtime = createManagedAgentRuntime(config, client);
     await expect(
       runtime.startSession({ title: "t", metadata: {}, agentKind: "product" }),

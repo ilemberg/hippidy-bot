@@ -15,8 +15,12 @@ export interface SyncOptions {
   agents: readonly AgentFile[];
   /** The one environment every agent's sessions run in. */
   environment: EnvironmentFile;
-  /** The GitHub token kept in the vault; undefined or empty leaves the vault as it is. */
-  githubToken: string | undefined;
+  /**
+   * Where the MCP servers' credentials come from: the process environment, read by the
+   * variable names in MCP_SERVER_SECRETS. A missing or empty one leaves its own credential as
+   * it is.
+   */
+  secrets: Readonly<Record<string, string | undefined>>;
   dryRun: boolean;
   say: (line: string) => void;
   /** A GitHub Actions annotation, printed as it is, even in a dry run. */
@@ -122,32 +126,89 @@ async function syncAgent({ client, dryRun, say }: SyncOptions, wanted: AgentFile
   }
 }
 
+/** The secret that holds each MCP server's credential, by the server's host. */
+export interface McpServerSecret {
+  host: string;
+  /** The environment variable (a secret in `release`) holding the bearer token. */
+  variable: string;
+  /** The credential's display name in the vault. */
+  displayName: string;
+  /** Where the README says how to set it, for the warning when it is missing. */
+  readme: string;
+}
+
+export const MCP_SERVER_SECRETS: readonly McpServerSecret[] = [
+  // GitHub's MCP server, for the engineer agent (decisions 105, 116, 122).
+  {
+    host: "api.githubcopilot.com",
+    variable: "AGENT_GITHUB_TOKEN",
+    displayName: "GitHub (AGENT_GITHUB_TOKEN)",
+    readme: "Slice 4 setup: the GitHub token",
+  },
+  // Atlassian's MCP server, for the product agent: the service account's key (decisions 151,
+  // 166; slice 5A part F).
+  {
+    host: "mcp.atlassian.com",
+    variable: "ATLASSIAN_SERVICE_KEY",
+    displayName: "Atlassian (ATLASSIAN_SERVICE_KEY)",
+    readme: "Slice 5A: the product agent",
+  },
+];
+
+/** The secret for an MCP server's URL, by its exact host; undefined when none is known. */
+export function secretForMcpServer(url: string): McpServerSecret | undefined {
+  let host: string;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+  return MCP_SERVER_SECRETS.find((secret) => secret.host === host);
+}
+
 /**
- * Keeps one static bearer credential per MCP server in the one vault, holding
- * AGENT_GITHUB_TOKEN, for the servers of every agent file (today only the engineer's, and
- * only its sessions attach the vault). A stored token cannot be read back, so it is written
- * on every sync: running the sync after the token is replaced is all that rotating it takes.
+ * Keeps one static bearer credential per MCP server URL in the one vault, for the servers of
+ * every agent file, each from its own secret (MCP_SERVER_SECRETS): GitHub's from
+ * AGENT_GITHUB_TOKEN, Atlassian's from ATLASSIAN_SERVICE_KEY. A stored token cannot be read
+ * back, so each is written on every sync: running the sync after a secret is replaced is all
+ * that rotating it takes. A missing secret leaves its own credential as it is, with a warning;
+ * a server with no known secret is skipped, with a warning. Neither touches another server's
+ * credential.
  */
 async function syncVault(options: SyncOptions) {
-  const { client, agents, githubToken: token, dryRun, say } = options;
+  const { client, agents, secrets, dryRun, say, warn } = options;
   const urls = [...new Set(agents.flatMap((agent) => agent.mcp_servers.map((s) => s.url)))];
   let vault;
   for await (const candidate of client.beta.vaults.list()) {
     if (candidate.display_name === VAULT_NAME && candidate.archived_at === null) vault = candidate;
   }
-  if (token === undefined || token === "") {
-    // Without the token, sessions cannot start once the agent needs a vault: say so loudly.
-    options.warn(
-      `::warning::AGENT_GITHUB_TOKEN is not set, so vault "${VAULT_NAME}" was not ${
-        vault === undefined ? "made" : "updated"
-      }. See the README's "Slice 4 setup: the GitHub token".`,
-    );
-    return;
+  const wanted: { url: string; token: string; secret: McpServerSecret }[] = [];
+  for (const url of urls) {
+    const secret = secretForMcpServer(url);
+    if (secret === undefined) {
+      warn(
+        `::warning::MCP server ${url} has no known secret, so it has no credential in vault ` +
+          `"${VAULT_NAME}". Add its host to MCP_SERVER_SECRETS in apps/api/scripts/sync-lib.ts.`,
+      );
+      continue;
+    }
+    const token = secrets[secret.variable];
+    if (token === undefined || token === "") {
+      // Without it, sessions that need this server cannot use it: say so loudly.
+      warn(
+        `::warning::${secret.variable} is not set, so the credential for ${url} in vault ` +
+          `"${VAULT_NAME}" was not ${vault === undefined ? "made" : "updated"}. See the ` +
+          `README's "${secret.readme}".`,
+      );
+      continue;
+    }
+    wanted.push({ url, token, secret });
   }
   if (vault === undefined) {
+    if (wanted.length === 0) return;
     say(`vault "${VAULT_NAME}": create`);
     if (dryRun) {
-      for (const url of urls) say(`vault "${VAULT_NAME}": add credential for ${url}`);
+      for (const { url } of wanted) say(`vault "${VAULT_NAME}": add credential for ${url}`);
       return;
     }
     vault = await client.beta.vaults.create({ display_name: VAULT_NAME });
@@ -157,7 +218,7 @@ async function syncVault(options: SyncOptions) {
   for await (const credential of client.beta.vaults.credentials.list(vault.id)) {
     if (credential.archived_at === null) credentials.push(credential);
   }
-  for (const url of urls) {
+  for (const { url, token, secret } of wanted) {
     const existing = credentials.find(
       (credential) =>
         credential.auth.type === "static_bearer" && credential.auth.mcp_server_url === url,
@@ -166,7 +227,7 @@ async function syncVault(options: SyncOptions) {
       say(`vault "${VAULT_NAME}": add credential for ${url}`);
       if (!dryRun) {
         await client.beta.vaults.credentials.create(vault.id, {
-          display_name: "GitHub (AGENT_GITHUB_TOKEN)",
+          display_name: secret.displayName,
           auth: { type: "static_bearer", mcp_server_url: url, token },
         });
       }
@@ -180,6 +241,8 @@ async function syncVault(options: SyncOptions) {
       }
     }
   }
+  // Only a server no agent file names any more loses its credential: a missing secret or an
+  // unknown server above never archives anything.
   for (const credential of credentials) {
     const url = "mcp_server_url" in credential.auth ? credential.auth.mcp_server_url : undefined;
     if (url !== undefined && !urls.includes(url)) {
