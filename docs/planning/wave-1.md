@@ -21,8 +21,8 @@ Rules that hold for the whole wave:
 1. Slack and the UI talk only to the Core API. Neither talks to Anthropic, Supabase or GitHub.
 2. The Core API is channel-agnostic. It knows "conversation" and "message", not "Slack thread".
 3. Agent runtime, work-item system and knowledge system each sit behind an interface, because
-   the product direction (software factory, AI employee, or knowledge and task system) is not
-   decided yet and those are the parts that would change.
+   those are the parts that would change. The product direction is decided (a project moving
+   through stages, `decisions.md` 134); which work-item and knowledge systems is not.
 4. Where the agent needs an outside system, it uses an MCP server when one exists, unless
    that makes things worse: for one, when it would go around rule 1 (`decisions.md` 98).
 
@@ -230,17 +230,39 @@ Revised 2026-11-18 after the plan was checked against the code and the SDK
   the connectors, the GitHub token as `AGENT_GITHUB_TOKEN`, no bypass on `main`, and a
   monthly spend limit on the workspace.
 
-## Slice 5: work from a ticket instead of a sentence
+## Slice 5: a feature moves through a project
 
-**Demo:** `@hippidy-bot pick up HB-12`. The agent reads the ticket and linked docs, does the
-work, opens the PR, and updates the ticket.
+Re-sketched 2026-11-19 (`decisions.md` 134 to 143). The sketch before that was "work from a
+ticket instead of a sentence": `@hippidy-bot pick up HB-12`, with a work-item provider and a
+knowledge provider behind interfaces. That is now only the last stage of a longer workflow,
+described in `projects.md`: a project goes from a plan document, to an epic and tickets, to
+shipped changes, with two approvals on the way and two agents behind the one bot.
 
-Sketch: a work-item provider and a knowledge provider behind interfaces, each backed by an
-MCP server where one exists (now the rule: `decisions.md` 98). Candidates and tradeoffs are in
-`stack-and-tools.md`. The opinion
-to form by then: for each system, is the agent the only writer, a collaborator, or read-only.
+Three parts, each a slice of its own size. None is planned in detail and none has started.
 
-Decide before starting: questions E1 to E5.
+**5A. Plan and discovery.** Demo: a product manager starts a project in Slack; several
+people and the bot write its plan document in a thread; the product manager and the
+engineering manager approve it. Needs: projects, roles and approvals in the database; the
+product agent; threads tied to a project; the bot reading what was said since its last turn;
+the document system.
+
+**5B. Roadmap.** Demo: the bot turns the approved plan into an epic and tickets; they are
+iterated in a thread and approved by both; after that they take comments only, until an
+approval is withdrawn. Needs: the ticket system; freezing; notes in every active thread of
+the project when something changes.
+
+**5C. Ship and iterate.** Demo: `@hippidy-bot start development on HB-12` on an approved
+roadmap ends with a pull request, a walkthrough with screenshots in the thread and an
+updated ticket; after a person merges, the bot checks production; when everyone is done, the
+project is ended and its tickets are closed. Needs: the engineer agent reading and updating
+tickets; the API's reference page; images from the sandbox to Slack; finding the merge; the
+production check.
+
+Decide before starting: questions E1 and E4 to E14. Two things need a probe first, like
+slice 4's experiment: whether the chosen systems' MCP servers accept a token our vault can
+hold (E1), and how screenshots leave the sandbox (E11).
+
+Still owed before any of it: slice 4's close (live checks, database size, retro).
 
 ## Slice 6: auto-merge with confidence
 
@@ -288,7 +310,8 @@ What makes this work for an agent:
 ## Not in wave 1
 
 - Web UI. Until then, the Anthropic Console session viewer and the Supabase table editor.
-- Multiple agents or agent personas.
+- More than two agents, or agent personas. Slice 5 has two agents behind the one bot, and
+  people do not see which one answered (`decisions.md` 138).
 - More than one repository or more than one Slack workspace.
 
 ## Retros

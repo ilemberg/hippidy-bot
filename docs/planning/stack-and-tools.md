@@ -94,9 +94,9 @@ Anthropic vault; its tools ask before running unless each is set not to (`slice-
 | Server | Runtime agent | Local development |
 |---|---|---|
 | GitHub | Slice 4: pull requests, checks and CI logs (decision 99). Issues from slice 5 | Yes |
-| Atlassian (Jira, Confluence) | Slice 5 candidate | Yes |
-| Linear | Slice 5 candidate | Yes |
-| Notion | Slice 5 candidate | Yes |
+| Atlassian (Jira, Confluence) | Slice 5 candidate (table below) | Yes |
+| Linear | Slice 5 candidate (table below) | Yes |
+| Notion | Slice 5 candidate; its server needs a person to sign in (table below) | Yes |
 | Supabase | No. The API is the only door to the database | Yes, read-only against production: the build session's eyes (decision 101). There is no dev project (decision 63) |
 | Vercel | No | Yes: deployments and logs (decision 101) |
 | Slack | No. The API posts to Slack | Optional |
@@ -104,12 +104,31 @@ Anthropic vault; its tools ask before running unless each is set not to (`slice-
 
 ## Work items and knowledge (slice 5)
 
-| Option | Cost | Realism for your teams | Agent access | Note |
-|---|---|---|---|---|
-| GitHub Issues + Projects + `docs/` | Free, already there | Low | GitHub MCP already attached | Fastest way to prove the flow |
-| Jira + Confluence | Free tier for small teams (*verify*) | High | Official remote MCP server | The real-world case |
-| Linear + Notion | Free tiers (*verify*) | Medium | Official MCP servers | Lighter to administer |
-| Internal, in Supabase | Build time | You define it | Through the Core API | Only if hippidy-bot is meant to own this |
+Researched on the web on 2026-11-19 for the project workflow (`projects.md`). Nothing here
+was tried; plan limits come mostly from pricing write-ups, not the vendors' own pages, so
+each row is *verify* before it is relied on. E1 in `open-questions.md` is still open.
+
+What the workflow needs from a system: a free plan for about seven accounts (six people and
+the bot); documents with comments and versions; an epic with tickets under it, statuses and
+comments; an MCP server the runtime agents can use unattended; and a way for the API to
+learn of changes (webhooks, or an API to poll). The vault holds a fixed bearer token today
+(`static_bearer`, decision 122), so "unattended" means the server accepts one. Whether the
+vault can also hold a login that needs a browser once was not checked.
+
+| Option | Free plan | MCP server, unattended | Changes reach the API | Documents and tickets | Note |
+|---|---|---|---|---|---|
+| Jira + Confluence | 10 users and 2 GB each | Official, `mcp.atlassian.com/v2/mcp`. An admin must switch on token sign-in. A personal token is sent as Basic, which our vault does not do; a service account key is sent as Bearer. Reported to work on free sites at 500 calls an hour; whether a free site can make a service account key is not confirmed | Jira: webhooks, including comments. Confluence: not confirmed | Two products | What your real teams use. Most unknowns: probe first |
+| Linear | Unlimited members, 2 teams, 250 issues | Official, `mcp.linear.app/mcp`. Accepts an API key as Bearer | Webhooks, reported as included | One product: projects, project documents, issues | Closest fit to "a project". The 250-issue limit is the catch |
+| YouTrack | 10 users, knowledge base included | Official, built in. Accepts a permanent token as Bearer | Webhooks for issues created, updated and deleted; comments and articles not confirmed | One product: issues and knowledge base articles | Tickets and documents in one free product |
+| Plane | 12 seats | Official, `mcp.plane.so`. Bearer token plus a second header naming the workspace, which a fixed-token credential may not be able to send | Signed webhooks | Epics and pages; the full wiki may be paid | Open source; can be self-hosted |
+| Notion (for documents) | Not checked | Official server needs a person to sign in; no fixed token. The token-taking server is no longer maintained | Webhooks, comments included; plan not confirmed | Documents strong, tickets as a database | Does not fit the vault as it is |
+| GitHub Issues + `docs/` | Free, already there | Already attached (decision 99) | Webhooks | Sub-issues give epic and tickets; documents are files changed by pull request | Nothing new to set up; least like your real teams |
+| Internal, in Supabase | Build time | Through the Core API | Ours | You define it | Only if hippidy-bot is meant to own the content too |
+
+Sources read: Atlassian's MCP server repository and its "configure authentication via API
+token" page; JetBrains' YouTrack help (remote MCP server, Webhook Triggers) and buy page;
+Notion's developer docs (MCP, webhooks); Plane's MCP server repository and billing docs;
+GitHub's changelog on sub-issues; pricing write-ups for Jira, Confluence and Linear.
 
 ## Cheaper or better
 

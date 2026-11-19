@@ -18,13 +18,8 @@ those you care about most, because it tells us where to spend effort and where t
 *Recommendation:* state it as "the value is the workflow and the record, not the plumbing",
 and keep the plumbing as thin and replaceable as possible.
 
-**Z2. Software factory, AI employee, or knowledge and task system?**
-You do not need to choose now, but each one pulls the data model differently:
-- Factory: the unit is a work item moving through stages. Slack is one of several triggers.
-- Employee: the unit is a conversation with a persistent persona and memory.
-- Knowledge and task system: hippidy-bot owns the tickets and docs, agents are clients of it.
-*Recommendation:* keep `conversation` and `work item` as separate concepts from slice 3 so
-any of the three can grow from it. Revisit after slice 4, when there is real usage to look at.
+Z2 (factory, employee, or knowledge and task system) is answered: the unit is a project
+moving through stages. See `decisions.md` 134 and `projects.md`.
 
 Z3 (personas), Z4 (success measure) and Z5 (budget) are answered: see `decisions.md` 9 to 11.
 
@@ -113,19 +108,81 @@ workflow in `release`). All answered: see `decisions.md` 115, 120 and 118.
 
 ## E. Blocks slice 5
 
-**E1. External tools or internal ones?** Jira and Confluence (what your real teams use, free
-tier, official MCP server), Linear and Notion (lighter, official MCP servers), GitHub Issues
-and docs in the repo (nothing new to set up), or build internal ones in Supabase.
-*Recommendation:* leave open, as you said. Lean: start with GitHub Issues plus `docs/` behind
-the provider interfaces to prove the flow for free, then add the Atlassian provider to test
-the realistic case. Building an internal tracker only makes sense if Z2 lands on "knowledge
-and task system".
+Slice 5 became the project workflow in `projects.md`, built in three parts (5A, 5B, 5C;
+`decisions.md` 134 to 143). The questions were asked again on 2026-11-19 and the grill is
+still going.
 
-**E2. For each system, is the agent the only writer, a collaborator, or read-only?**
-**E3. How is a ticket linked to a conversation, a branch and a PR?**
-**E4. What makes a ticket "ready" for the agent?** A definition of ready is what stops it
-from building the wrong thing confidently.
+**E1. Which document system and which ticket system?** Still open. Six candidates were
+researched on 2026-11-19; the table and its sources are in `stack-and-tools.md`. What decides
+it is whether the system's MCP server takes a fixed token, because that is what our vault
+holds today, and whether that works on the free plan.
+*Recommendation:* probe Jira and Confluence first, since they are what your real teams use:
+on a free site, can a service account key be made and does the MCP server accept it? If not,
+Linear: one product holds projects, documents and issues, and its MCP server takes an API
+key. Its free plan stops at 250 issues.
+
+E2 (the agent's rights in each system) is answered: see `decisions.md` 137 and 138 and the
+two tables in `projects.md`.
+
+E3 (how a ticket is linked to a conversation, a branch and a pull request) is answered in
+outline: the project links them, see `decisions.md` 134. How a thread names its project is E6.
+
+**E4. What makes a ticket "ready" for the agent?**
+*Recommendation:* the product agent writes every ticket to one template (what and why, how to
+tell it is done, what is out of scope), and "ready" is the roadmap's approval by both
+(`decisions.md` 136). No separate ready state.
+
 **E5. Does the agent ask clarifying questions in Slack, on the ticket, or both?**
+*Recommendation:* in the thread it is working in. What was asked and answered is added to
+the ticket as a comment, so the next thread can read it.
+
+**E6. How is a thread tied to a project, and which agent answers it?** A thread belongs to
+one agent from its first message.
+*Recommendation:* the first message names the project, and the bot asks when it cannot tell.
+In a project, "start development on a ticket" opens an engineer thread and everything else
+goes to the product agent. Without a project, the four roles that may ask for development
+get the engineer agent, as today, and the others get the product agent.
+
+**E7. How does the API recognise the actions it must check itself?** Approve, withdraw an
+approval, start development, end a project. Either fixed words at the start of a message,
+read by the API, or the agent asks the API through a tool and the API checks the sender's
+role and the stage.
+*Recommendation:* fixed words. There are four, the check is plain code, and "looks good to
+me" in passing is never read as an approval. The bot answers each with what it recorded.
+
+**E8. May the product agent read the repo?**
+*Recommendation:* yes, read-only, with no GitHub tools. A plan and tickets written without
+seeing the code will not match it.
+
+**E9. Who may stop the bot?** The rights table gives it to the two managers; today anyone
+can.
+*Recommendation:* anyone. Stopping is the safe direction; only starting is gated.
+
+**E10. May QA merge?** It was said both ways: QA "can approve merges", and later "the
+engineer, engineering manager or tech lead can merge".
+
+**E11. How do screenshots get from the sandbox to Slack?** The agents cannot reach Slack, so
+the API has to fetch the images from the session and upload them, which needs a new Slack
+permission. Whether Chromium runs in the sandbox is the experiment decision 24 deferred, and
+how a session hands files out is not known. Both need a probe like slice 4's experiment
+before 5C is planned.
+
+**E12. What does the production check cover?** The sandbox has no general web access and
+must hold no production secret (`decisions.md` 39, 128).
+*Recommendation:* three steps. The API waits until GitHub reports the merge commit's
+deployment as successful. The engineer agent then calls production's public routes from its
+sandbox: health, and the reference page listing what the change added (one more allowed
+host). For anything only visible in Slack, the bot asks the person who asked for the change
+to try it and say so in the thread. A smoke test that needs a secret belongs in a workflow in
+`release`, with slice 6.
+
+**E13. One epic per project, or several?**
+*Recommendation:* one, to start.
+
+**E14. Whose name is on the bot's edits in the document and ticket systems?** Both agents
+write through one account.
+*Recommendation:* an account of its own for the bot, and each comment says who asked for it.
+It uses one of a free plan's seats.
 
 ## F. Blocks slice 6
 
