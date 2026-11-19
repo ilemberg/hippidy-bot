@@ -55,6 +55,13 @@ Vercel does and checks it starts (`pnpm build && pnpm smoke`).
 | `GET /v1/conversations`            | service token       | Conversations, newest first. `limit` (1 to 100, default 20); `before` takes the `next` of the page before                                     |
 | `GET /v1/conversations/:id`        | service token       | One conversation: its state, usage and cost, and the transcript, oldest first                                                                 |
 | `GET /v1/conversations/:id/events` | service token       | Every event the agent session reported, raw, in the order stored. `limit` (1 to 200, default 50); `after` takes the `next` of the page before |
+| `POST /v1/projects`                | service token       | Creates a project in `plan`, returns 201                                                                                                      |
+| `GET /v1/projects`                 | service token       | Every project, newest first                                                                                                                   |
+| `GET /v1/projects/:id`             | service token       | One project, its approvals and whether the plan is approved                                                                                   |
+| `PATCH /v1/projects/:id`           | service token       | Moves the project's stage, in any direction                                                                                                   |
+| `POST /v1/projects/:id/approvals`  | service token       | Records an approval or withdrawal, with the actor's current role; returns 201 and whether the subject is approved. Never moves the stage      |
+| `PUT /v1/roles`                    | service token       | Sets a person's role in a workspace                                                                                                           |
+| `GET /v1/roles`                    | service token       | The map from people to roles                                                                                                                  |
 | `POST /slack/events`               | Slack signature     | Slack's Events API. On `app_mention`: sends the message through `/v1/messages`, then reacts 👀. Answers 503 until Slack is configured         |
 
 The request and response shapes are in `packages/contracts`. Every error from the API has the
@@ -400,6 +407,41 @@ server straight from a GitHub runner: no agent, no Anthropic cost.
 
 Locally, with `ATLASSIAN_SERVICE_KEY` set: `pnpm atlassian:probe` (add `--writes` with
 `ATLASSIAN_PROBE_PROJECT` and `ATLASSIAN_PROBE_SPACE`).
+
+## Slice 5A: projects and roles
+
+Projects, the roles people hold and approvals are kept in Supabase (`projects`,
+`actor_roles`, `approvals`; `docs/planning/slice-5a.md`). Nothing in Slack uses them yet. Until
+there is a UI, roles are set by hand through the API. With the service token from Vercel in
+`HIPPIDY_SERVICE_TOKEN` (read it with `read -s HIPPIDY_SERVICE_TOKEN`, never paste it into a
+chat or your shell history):
+
+```sh
+# Give a Slack user a role: engineering_manager, product_manager, tech_lead, engineer, qa or designer
+curl -s -X PUT https://hippidy-bot.vercel.app/v1/roles \
+  -H "Authorization: Bearer $HIPPIDY_SERVICE_TOKEN" -H 'content-type: application/json' \
+  -d '{"source":"slack","workspaceId":"<team id>","actorId":"<user id>","role":"product_manager"}'
+curl -s -H "Authorization: Bearer $HIPPIDY_SERVICE_TOKEN" https://hippidy-bot.vercel.app/v1/roles
+
+# Start a project (it starts in the plan stage), then read it back with its approvals
+curl -s -X POST https://hippidy-bot.vercel.app/v1/projects \
+  -H "Authorization: Bearer $HIPPIDY_SERVICE_TOKEN" -H 'content-type: application/json' \
+  -d '{"name":"<project name>","createdBy":{"source":"slack","workspaceId":"<team id>","actorId":"<user id>"}}'
+curl -s -H "Authorization: Bearer $HIPPIDY_SERVICE_TOKEN" https://hippidy-bot.vercel.app/v1/projects/<id>
+
+# Record an approval (subject: plan, roadmap, ticket or end; a ticket needs its subjectRef)
+curl -s -X POST https://hippidy-bot.vercel.app/v1/projects/<id>/approvals \
+  -H "Authorization: Bearer $HIPPIDY_SERVICE_TOKEN" -H 'content-type: application/json' \
+  -d '{"subject":"plan","action":"approve","actor":{"source":"slack","workspaceId":"<team id>","actorId":"<user id>"}}'
+```
+
+The Slack team and user ids are in Slack under a person's profile, **More**, **Copy member
+ID**, and in the API's `message.received` log lines. An approval records what it is told and
+checks nothing (decision 146): `planApproved` is true while the latest action (by `seq`, the
+order recorded) of at least one engineering manager and one product manager is `approve`. An
+approver is one person in one workspace: the role copied onto an approval is the one set for
+that same source, workspace and user. The stage moves only through `PATCH /v1/projects/:id`.
+A project with approvals cannot be deleted.
 
 ## Planning docs
 

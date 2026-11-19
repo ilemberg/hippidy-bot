@@ -12,6 +12,13 @@ import {
   unsentDeliveries,
 } from "./conversations.ts";
 import { createPostgresDb, type Db } from "./db.ts";
+import {
+  createProject,
+  getProject,
+  recordApproval,
+  setActorRole,
+  setProjectStage,
+} from "./projects.ts";
 import { listConversations, readAgentEvents, readConversation, readTranscript } from "./reading.ts";
 import {
   latestActivity,
@@ -401,6 +408,62 @@ describe("createPostgresDb", () => {
       }),
     ).rejects.toThrow("abort");
     expect(await db.query("select n from t")).toEqual([{ n: 1 }]);
+  });
+
+  // Typed parameters (uuid, null) and timestamps, as this client sends and returns them.
+  it("records projects, roles and approvals", async () => {
+    const project = await createProject(db, {
+      name: "Search",
+      createdBy: { source: "slack", workspaceId: "T", actorId: "U1" },
+    });
+    expect(project.createdBy).toEqual({ source: "slack", workspaceId: "T", actorId: "U1" });
+    expect((await setProjectStage(db, project.id, "roadmap"))?.stage).toBe("roadmap");
+    await setActorRole(db, { source: "slack", workspaceId: "T", actorId: "EM", role: "qa" });
+    await setActorRole(db, {
+      source: "slack",
+      workspaceId: "T",
+      actorId: "EM",
+      role: "engineering_manager",
+    });
+    const conversation = await findOrCreateConversation(db, {
+      source: "slack",
+      workspaceId: "T",
+      channelId: "C",
+      threadId: "5.5",
+    });
+    const actor = { source: "slack" as const, workspaceId: "T", actorId: "EM" };
+    const base = { subject: "plan" as const, subjectRef: "", subjectVersion: "2", actor };
+    const withConversation = await recordApproval(db, project.id, {
+      ...base,
+      action: "approve",
+      conversationId: conversation.id,
+    });
+    const without = await recordApproval(db, project.id, { ...base, action: "withdraw" });
+    expect(withConversation).toMatchObject({
+      kind: "recorded",
+      approval: { role: "engineering_manager", conversationId: conversation.id },
+    });
+    expect(without).toMatchObject({ kind: "recorded", approval: { conversationId: null } });
+    const found = await getProject(db, project.id);
+    expect(found?.approvals.map((a) => a.action)).toEqual(["approve", "withdraw"]);
+    expect(found?.project.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  // `seq` is a bigint: this client returns it as a string unless the SQL casts it.
+  it("returns an approval's seq as a number, in the order recorded", async () => {
+    const project = await createProject(db, {
+      name: "Search",
+      createdBy: { source: "slack", workspaceId: "T", actorId: "U1" },
+    });
+    const actor = { source: "slack" as const, workspaceId: "T", actorId: "EM" };
+    const base = { subject: "plan" as const, subjectRef: "", subjectVersion: "", actor };
+    await recordApproval(db, project.id, { ...base, action: "approve" });
+    await recordApproval(db, project.id, { ...base, action: "withdraw" });
+    const seqs = (await getProject(db, project.id))?.approvals.map((a) => a.seq) ?? [];
+    expect(seqs).toHaveLength(2);
+    for (const seq of seqs) expect(typeof seq).toBe("number");
+    const [first = 0, second = 0] = seqs;
+    expect(second).toBeGreaterThan(first);
   });
 });
 
