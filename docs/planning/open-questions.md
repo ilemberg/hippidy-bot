@@ -18,13 +18,8 @@ those you care about most, because it tells us where to spend effort and where t
 *Recommendation:* state it as "the value is the workflow and the record, not the plumbing",
 and keep the plumbing as thin and replaceable as possible.
 
-**Z2. Software factory, AI employee, or knowledge and task system?**
-You do not need to choose now, but each one pulls the data model differently:
-- Factory: the unit is a work item moving through stages. Slack is one of several triggers.
-- Employee: the unit is a conversation with a persistent persona and memory.
-- Knowledge and task system: hippidy-bot owns the tickets and docs, agents are clients of it.
-*Recommendation:* keep `conversation` and `work item` as separate concepts from slice 3 so
-any of the three can grow from it. Revisit after slice 4, when there is real usage to look at.
+Z2 (factory, employee, or knowledge and task system) is answered: the unit is a project
+moving through stages. See `decisions.md` 135 and `projects.md`.
 
 Z3 (personas), Z4 (success measure) and Z5 (budget) are answered: see `decisions.md` 9 to 11.
 
@@ -113,19 +108,37 @@ workflow in `release`). All answered: see `decisions.md` 115, 120 and 118.
 
 ## E. Blocks slice 5
 
-**E1. External tools or internal ones?** Jira and Confluence (what your real teams use, free
-tier, official MCP server), Linear and Notion (lighter, official MCP servers), GitHub Issues
-and docs in the repo (nothing new to set up), or build internal ones in Supabase.
-*Recommendation:* leave open, as you said. Lean: start with GitHub Issues plus `docs/` behind
-the provider interfaces to prove the flow for free, then add the Atlassian provider to test
-the realistic case. Building an internal tracker only makes sense if Z2 lands on "knowledge
-and task system".
+Slice 5 became the project workflow in `projects.md`, built in three parts (5A, 5B, 5C). The
+questions were asked again on 2026-11-19 and all are answered, in `decisions.md` 135 to 158.
+Two answers wait for a probe.
 
-**E2. For each system, is the agent the only writer, a collaborator, or read-only?**
-**E3. How is a ticket linked to a conversation, a branch and a PR?**
-**E4. What makes a ticket "ready" for the agent?** A definition of ready is what stops it
-from building the wrong thing confidently.
-**E5. Does the agent ask clarifying questions in Slack, on the ticket, or both?**
+**E1. Which document system and which ticket system?** Waits for a probe (`decisions.md`
+151): on a free Atlassian site, can a service account key be made, and does the MCP server
+accept it as a bearer token for Jira and for Confluence? If yes, Jira and Confluence. If
+not, Linear. The candidates and their sources are in `stack-and-tools.md`. Where the probe
+stands is in `decisions.md` 158.
+
+**E11. How do screenshots get from the sandbox to Slack?** Waits for a probe before 5C is
+planned (`decisions.md` 150): does Chromium run in the sandbox, and how does a session hand
+files to the API. Posting them needs a new Slack permission.
+
+Answered:
+
+| Question | Answer | Decision |
+|---|---|---|
+| E2. The agents' rights in each system | The two tables in `projects.md` | 138, 139 |
+| E3. How a ticket is linked to a conversation, a branch and a pull request | The project links them | 135 |
+| E4. What makes a ticket ready | One template; ready when the roadmap is approved | 154 |
+| E5. Where the bot asks clarifying questions | In the thread it is working in, with a note in the project's main thread | 155 |
+| E6. Which project and which agent a thread gets | Named in the first message; "start development" opens an engineer thread | 153 |
+| E7. How the API recognises the actions it checks | It checks none for now | 146 |
+| E8. May the product agent read the repo | Yes, read-only | 147 |
+| E9. Who may stop the bot | Anyone | 148 |
+| E10. May QA merge | Yes | 145 |
+| E12. What the production check covers | Deployed, public routes, then a person for what only Slack shows | 157 |
+| E13. One epic per project, or several | Usually one; no rule | 156 |
+| E14. Whose name is on the bot's edits | The bot's own account; comments say who asked | 149 |
+| E15. Where an approval is written down | On the content, and recorded by the API | 152 |
 
 ## F. Blocks slice 6
 
