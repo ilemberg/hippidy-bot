@@ -443,6 +443,24 @@ approver is one person in one workspace: the role copied onto an approval is the
 that same source, workspace and user. The stage moves only through `PATCH /v1/projects/:id`.
 A project with approvals cannot be deleted.
 
+## Slice 5A: reading the thread
+
+When the bot is mentioned inside a thread, it first reads what people said there since its
+last reply (decision 140): up to the latest 50 messages, leaving out bots and messages that
+mention it (those reach it on their own). The agent gets them above the message, one line
+each. Reading the thread needs two more Slack permissions, `channels:history` and
+`groups:history` (private channels). After this pull request merges:
+
+1. At https://api.slack.com/apps, open **hippidy-bot**, then **App Manifest**.
+2. Switch to **YAML**, replace everything with the contents of `slack/manifest.yaml`, and
+   click **Save Changes**.
+3. Reinstall the app when Slack asks (**Install App**, then **Reinstall to Workspace**). The
+   bot token stays the same, so nothing changes in Vercel.
+
+Until the app is reinstalled, the bot answers exactly as before, from the mention alone, and
+logs `slack.thread_read_failed` with `slackError: "missing_scope"` for each mention in a
+thread. The same happens if Slack takes longer than 1.5 seconds to answer.
+
 ## Planning docs
 
 | Doc                                                                  | What it is                                                                                 |

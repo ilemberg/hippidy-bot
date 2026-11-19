@@ -1,4 +1,5 @@
 import type {
+  ContextMessage,
   Deliverer,
   DeliveryTarget,
   InboundMessage,
@@ -162,7 +163,7 @@ export async function receiveMessage(
     }
     const agentEventId = await deps.runtime.sendMessage(
       sessionId,
-      formatForAgent(message.actor.id, message.text, message.actor.displayName),
+      formatForAgent(message.actor.id, message.text, message.actor.displayName, message.context),
     );
     await markForwarded(deps.db, recorded.id, agentEventId);
     await markWaiting(deps.db, conversation.id);
@@ -179,12 +180,32 @@ export async function receiveMessage(
   return { id: recorded.id, duplicate: recorded.duplicate };
 }
 
-/** The text the agent sees: who sent it (by name when known), then what they wrote. */
-export function formatForAgent(actorId: string, text: string, displayName?: string): string {
+/** The line that introduces what was said in the conversation since the agent's last reply. */
+export const CONTEXT_LEAD = "Said in the thread since your last reply:";
+
+/**
+ * The text the agent sees: what was said in the thread since its last reply, when the source
+ * sent any (decision 140), then who sent this message (by name when known) and what they
+ * wrote. Without context it is exactly the sender and the message.
+ */
+export function formatForAgent(
+  actorId: string,
+  text: string,
+  displayName?: string,
+  context: readonly ContextMessage[] = [],
+): string {
   const body = text.trim() === "" ? "(no text, just a mention)" : text;
   const sender =
     displayName === undefined ? `Slack user ${actorId}` : `${displayName} (Slack user ${actorId})`;
-  return `From: ${sender}\n\n${body}`;
+  const message = `From: ${sender}\n\n${body}`;
+  if (context.length === 0) return message;
+  const lines = context.map((said) => {
+    const time = new Date(said.sentAt).toISOString().slice(11, 16);
+    // Lines after the first are indented, so a message of several lines stays one item.
+    const words = said.text.replace(/\r?\n/g, "\n  ");
+    return `- ${said.actorName ?? said.actorId} (${time} UTC): ${words}`;
+  });
+  return `${CONTEXT_LEAD}\n${lines.join("\n")}\n\n${message}`;
 }
 
 async function ensureSession(
@@ -627,6 +648,8 @@ async function forwardPending(
   for (const message of pending) {
     try {
       const sessionId = await ensureSession(deps, conversation, log);
+      // Without the thread's context: it is not stored (the session's events record what was
+      // sent), so a message handed over late goes as it would have before decision 140.
       const agentEventId = await deps.runtime.sendMessage(
         sessionId,
         formatForAgent(message.actorId, message.text, message.actorName),

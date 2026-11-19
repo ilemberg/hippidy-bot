@@ -8,6 +8,7 @@ import type { ApiClient } from "./api-client.ts";
 import { boltLogger } from "./bolt-logger.ts";
 import { readSlackConfig } from "./config.ts";
 import { handleMention, handleReaction, type SlackActions } from "./handler.ts";
+import type { SlackThreadMessage } from "./thread.ts";
 
 export type SlackEventsHandler = (request: Request) => Promise<Response>;
 
@@ -39,6 +40,57 @@ const realSlackActions = (client: webApi.WebClient): SlackActions => ({
     names.set(userId, { name, until: Date.now() + NAME_TTL_MS });
     return name;
   },
+  async threadReplies(channel, threadTs) {
+    // Needs `channels:history` and `groups:history` (decision 140). Slack returns a thread
+    // oldest first, 200 at a time, and the newest messages are the ones that matter, so it
+    // reads on through up to five pages (1,000 messages). The handler bounds the time it
+    // waits for all of them; a longer thread misses only messages past the fifth page.
+    const messages: SlackThreadMessage[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < MAX_REPLY_PAGES; page++) {
+      const response = await client.conversations.replies({
+        channel,
+        ts: threadTs,
+        limit: 200,
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      const parsed = repliesSchema.safeParse(response);
+      if (!parsed.success) {
+        throw Object.assign(new Error("Unexpected conversations.replies response"), {
+          code: "invalid_response",
+        });
+      }
+      for (const message of parsed.data.messages) {
+        messages.push({
+          ts: message.ts,
+          ...(typeof message.user === "string" ? { user: message.user } : {}),
+          ...(typeof message.bot_id === "string" ? { botId: message.bot_id } : {}),
+          ...(typeof message.text === "string" ? { text: message.text } : {}),
+        });
+      }
+      const next = parsed.data.response_metadata?.next_cursor;
+      if (next === undefined || next === null || next === "") break;
+      cursor = next;
+    }
+    return messages;
+  },
+});
+
+const MAX_REPLY_PAGES = 5;
+
+/** The parts of a `conversations.replies` response the adapter reads. */
+const repliesSchema = z.object({
+  messages: z
+    .array(
+      z.object({
+        ts: z.string().regex(/^\d+\.\d+$/),
+        user: z.string().nullish(),
+        bot_id: z.string().nullish(),
+        text: z.string().nullish(),
+      }),
+    )
+    .default([]),
+  response_metadata: z.object({ next_cursor: z.string().nullish() }).nullish(),
 });
 
 function botUserIdFromBody(body: unknown): string | undefined {

@@ -1,19 +1,35 @@
+import type { ContextMessage } from "@hippidy/contracts";
 import type { Logger } from "../log.ts";
 import type { ApiClient } from "./api-client.ts";
 import { z } from "zod";
-import { appMentionEnvelopeSchema, toInboundMessage } from "./map.ts";
+import {
+  appMentionEnvelopeSchema,
+  botUserIdOf,
+  toInboundMessage,
+  type AppMentionEnvelope,
+} from "./map.ts";
+import {
+  fitContext,
+  readThreadContext,
+  THREAD_READ_TIMEOUT_MS,
+  type SlackThreadMessage,
+} from "./thread.ts";
 
 /** The Slack Web API calls the adapter makes. */
 export interface SlackActions {
   addReaction(input: { channel: string; timestamp: string; name: string }): Promise<void>;
   /** The person's display name, or undefined if Slack could not say. */
   userName(userId: string): Promise<string | undefined>;
+  /** One page of a thread's messages, oldest first (`conversations.replies`). */
+  threadReplies(channel: string, threadTs: string): Promise<SlackThreadMessage[]>;
 }
 
 export interface MentionDeps {
   api: ApiClient;
   slack: SlackActions;
   log: Logger;
+  /** How long reading the thread may take; `THREAD_READ_TIMEOUT_MS` unless a test says. */
+  threadReadTimeoutMs?: number;
 }
 
 export interface MentionDelivery {
@@ -103,13 +119,19 @@ export async function handleMention(
     }
   }
 
-  const displayName = await deps.slack
-    .userName(envelope.event.user)
-    .catch((error: unknown): undefined => {
+  const [displayName, context] = await Promise.all([
+    deps.slack.userName(envelope.event.user).catch((error: unknown): undefined => {
       log.warn("slack.user_lookup_failed", { error });
       return undefined;
-    });
+    }),
+    threadContext(envelope, deps, log),
+  ]);
   if (displayName !== undefined) message.actor.displayName = displayName;
+  if (context.length > 0) {
+    message.context = context;
+    const dropped = fitContext(message);
+    log.info("slack.thread_read", { contextMessages: context.length - dropped, dropped });
+  }
 
   let result;
   try {
@@ -137,6 +159,52 @@ export async function handleMention(
   }
   log.info("slack.mention.handled", { messageId: result.accepted.id });
   return "reacted";
+}
+
+/**
+ * What was said in the thread since the bot's last message (decision 140). A top-level mention
+ * starts its thread, so it has none. Any failure (`missing_scope` until the app is reinstalled
+ * with the history scopes, a timeout, a bad response) is logged by its code and the mention
+ * goes without context, exactly as before.
+ *
+ * Latency: Bolt acknowledges an Events API delivery before it calls the listener, and
+ * `@vercel/slack-bolt` keeps the listener running after the response with `waitUntil`, so this
+ * call is outside Slack's 3 second limit. It still delays 👀 and the agent, so it is bounded
+ * by `THREAD_READ_TIMEOUT_MS` (1.5 s), and runs alongside the sender's name lookup.
+ */
+async function threadContext(
+  envelope: AppMentionEnvelope,
+  deps: MentionDeps,
+  log: Logger,
+): Promise<ContextMessage[]> {
+  const { event } = envelope;
+  if (event.thread_ts === undefined || event.thread_ts === event.ts) return [];
+  try {
+    return await readThreadContext(
+      {
+        channel: event.channel,
+        threadTs: event.thread_ts,
+        mentionTs: event.ts,
+        botUserId: botUserIdOf(envelope),
+      },
+      deps.slack,
+      deps.threadReadTimeoutMs ?? THREAD_READ_TIMEOUT_MS,
+    );
+  } catch (error) {
+    log.warn("slack.thread_read_failed", { slackError: errorCode(error) });
+    return [];
+  }
+}
+
+/** Slack's error code (`missing_scope`), else the error's own code (`timeout`), else `unknown`. */
+function errorCode(error: unknown): string {
+  const slack = slackErrorCode(error);
+  if (slack !== undefined) return slack;
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const { code } = error;
+    if (typeof code === "string") return code;
+  }
+  return "unknown";
 }
 
 /**

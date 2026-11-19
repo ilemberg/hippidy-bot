@@ -10,6 +10,7 @@ import {
   type MentionDelivery,
   type SlackActions,
 } from "./handler.ts";
+import type { SlackThreadMessage } from "./thread.ts";
 
 const accepted: PostMessageResult = {
   kind: "accepted",
@@ -21,8 +22,10 @@ function setup(
     api?: () => Promise<PostMessageResult>;
     react?: () => Promise<void>;
     userName?: (id: string) => Promise<string | undefined>;
+    threadReplies?: (channel: string, threadTs: string) => Promise<SlackThreadMessage[]>;
   } = {},
 ) {
+  const threadReads: { channel: string; threadTs: string }[] = [];
   const posted: { message: InboundMessage; correlationId: string }[] = [];
   const stops: StopRequest[] = [];
   const reactions: { channel: string; timestamp: string; name: string }[] = [];
@@ -42,9 +45,20 @@ function setup(
       await (options.react ?? (() => Promise.resolve()))();
     },
     userName: options.userName ?? (() => Promise.resolve("Ilya")),
+    threadReplies: (channel, threadTs) => {
+      threadReads.push({ channel, threadTs });
+      return (options.threadReplies ?? (() => Promise.resolve([])))(channel, threadTs);
+    },
   };
   const { log, lines } = memoryLogger();
-  return { deps: { api, slack, log }, posted, stops, reactions, lines };
+  return {
+    deps: { api, slack, log, threadReadTimeoutMs: 50 },
+    posted,
+    stops,
+    reactions,
+    lines,
+    threadReads,
+  };
 }
 
 function mentionSaying(text: string): MentionDelivery {
@@ -161,6 +175,188 @@ describe("names", () => {
     expect(await handleMention(first, deps)).toBe("reacted");
     expect(posted[0]?.message.actor).toEqual({ id: "U061F7AUR" });
     expect(lines).toContainEqual(expect.objectContaining({ msg: "slack.user_lookup_failed" }));
+  });
+});
+
+describe("reading the thread (decision 140)", () => {
+  const BOT = "U0LAN0Z89";
+  const THREAD = "1515449000.000100";
+  const MENTION = "1515449522.000016";
+  const inThread: MentionDelivery = {
+    body: { ...fixture, event: { ...fixture.event, thread_ts: THREAD } },
+    retryNum: 0,
+    retryReason: "",
+  };
+  const names: Record<string, string> = { U1: "Ana", U2: "Ben" };
+  const userName = (id: string) => Promise.resolve(names[id]);
+
+  function said(ts: string, user: string, text: string): SlackThreadMessage {
+    return { ts, user, text };
+  }
+
+  it("sends what people said since the bot's latest message, oldest first, with names", async () => {
+    const { deps, posted, threadReads, lines } = setup({
+      userName,
+      threadReplies: () =>
+        Promise.resolve([
+          said(THREAD, "U1", "starting the thread"),
+          { ts: "1515449100.000001", user: BOT, botId: "B1", text: "the bot's answer" },
+          said("1515449200.000001", "U1", "what about caching?"),
+          said("1515449300.000001", "U3", "no idea\nreally"),
+          said(MENTION, "U061F7AUR", `<@${BOT}> what do you think?`),
+          said("1515449600.000001", "U2", "said after the mention"),
+        ]),
+    });
+    expect(await handleMention(inThread, deps)).toBe("reacted");
+    expect(threadReads).toEqual([{ channel: "C0LAN2Q65", threadTs: THREAD }]);
+    expect(posted[0]?.message.context).toEqual([
+      {
+        actorId: "U1",
+        actorName: "Ana",
+        text: "what about caching?",
+        sentAt: "2018-01-08T22:06:40.000Z",
+      },
+      { actorId: "U3", text: "no idea\nreally", sentAt: "2018-01-08T22:08:20.000Z" },
+    ]);
+    expect(lines).toContainEqual(
+      expect.objectContaining({ msg: "slack.thread_read", contextMessages: 2, dropped: 0 }),
+    );
+    expect(JSON.stringify(lines)).not.toContain("caching");
+  });
+
+  it("takes the whole thread before the mention when the bot has not spoken in it", async () => {
+    const { deps, posted } = setup({
+      userName,
+      threadReplies: () =>
+        Promise.resolve([said(THREAD, "U1", "first"), said("1515449100.000001", "U2", "second")]),
+    });
+    await handleMention(inThread, deps);
+    expect(posted[0]?.message.context?.map((m) => m.text)).toEqual(["first", "second"]);
+  });
+
+  it("leaves out messages that mention the bot, other bots' messages and empty ones", async () => {
+    const { deps, posted } = setup({
+      userName,
+      threadReplies: () =>
+        Promise.resolve([
+          said("1515449100.000001", "U1", `<@${BOT}> an earlier question`),
+          said("1515449101.000001", "U1", `also <@${BOT}|hippidy> this`),
+          said("1515449102.000001", "U2", "   "),
+          { ts: "1515449103.000001", user: "U2" },
+          said("1515449104.000001", "U2", "kept"),
+          said("1515449105.000001", "U2", "<@U9OTHER> a mention of someone else"),
+        ]),
+    });
+    await handleMention(inThread, deps);
+    expect(posted[0]?.message.context?.map((m) => m.text)).toEqual([
+      "kept",
+      "<@U9OTHER> a mention of someone else",
+    ]);
+  });
+
+  it("treats any bot's message as the boundary, and never sends it", async () => {
+    const { deps, posted } = setup({
+      userName,
+      threadReplies: () =>
+        Promise.resolve([
+          said("1515449100.000001", "U1", "before the bot"),
+          { ts: "1515449101.000001", botId: "B2", text: "another bot" },
+          said("1515449102.000001", "U1", "after"),
+        ]),
+    });
+    await handleMention(inThread, deps);
+    expect(posted[0]?.message.context?.map((m) => m.text)).toEqual(["after"]);
+  });
+
+  it("sends no context when nothing was said since the bot's latest message", async () => {
+    const { deps, posted } = setup({
+      threadReplies: () =>
+        Promise.resolve([
+          said(THREAD, "U1", "question"),
+          { ts: "1515449100.000001", user: BOT, text: "answer" },
+        ]),
+    });
+    await handleMention(inThread, deps);
+    expect(posted[0]?.message).not.toHaveProperty("context");
+  });
+
+  it("does not read the thread for a top-level mention", async () => {
+    const { deps, posted, threadReads } = setup({
+      threadReplies: () => Promise.resolve([said("1515449100.000001", "U1", "x")]),
+    });
+    await handleMention(first, deps);
+    expect(threadReads).toEqual([]);
+    expect(posted[0]?.message).not.toHaveProperty("context");
+  });
+
+  it("keeps the latest 50 messages and caps each at 4000 characters", async () => {
+    const messages = Array.from({ length: 60 }, (_, i) =>
+      said(`1515449${String(100 + i)}.000001`, "U1", `${String(i)} ${"x".repeat(5000)}`),
+    );
+    const { deps, posted } = setup({ userName, threadReplies: () => Promise.resolve(messages) });
+    await handleMention(inThread, deps);
+    const context = posted[0]?.message.context ?? [];
+    // 50 messages of 4000 characters are more than the API takes in one body, so the oldest
+    // are dropped to fit; the newest is always kept.
+    expect(context.length).toBeGreaterThan(0);
+    expect(context.length).toBeLessThanOrEqual(50);
+    expect(context.at(-1)?.text.startsWith("59 ")).toBe(true);
+    expect(context.every((m) => m.text.length === 4000)).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(posted[0]?.message))).toBeLessThanOrEqual(64 * 1024);
+  });
+
+  it("keeps at most 50 messages", async () => {
+    const messages = Array.from({ length: 60 }, (_, i) =>
+      said(`1515449${String(100 + i)}.000001`, "U1", `m${String(i)}`),
+    );
+    const { deps, posted } = setup({ threadReplies: () => Promise.resolve(messages) });
+    await handleMention(inThread, deps);
+    const texts = posted[0]?.message.context?.map((m) => m.text) ?? [];
+    expect(texts).toHaveLength(50);
+    expect(texts[0]).toBe("m10");
+    expect(texts.at(-1)).toBe("m59");
+  });
+
+  it("leaves a name out when its lookup fails", async () => {
+    const { deps, posted } = setup({
+      userName: (id) => (id === "U1" ? Promise.reject(new Error("x")) : Promise.resolve("Me")),
+      threadReplies: () => Promise.resolve([said("1515449100.000001", "U1", "hi")]),
+    });
+    await handleMention(inThread, deps);
+    expect(posted[0]?.message.context).toEqual([
+      { actorId: "U1", text: "hi", sentAt: "2018-01-08T22:05:00.000Z" },
+    ]);
+    expect(posted[0]?.message.actor.displayName).toBe("Me");
+  });
+
+  it("answers as before, with a warning, when Slack refuses to read the thread", async () => {
+    const { deps, posted, reactions, lines } = setup({
+      threadReplies: () =>
+        Promise.reject(
+          Object.assign(new Error("An API error occurred: missing_scope"), {
+            code: "slack_webapi_platform_error",
+            data: { ok: false, error: "missing_scope", needed: "channels:history" },
+          }),
+        ),
+    });
+    expect(await handleMention(inThread, deps)).toBe("reacted");
+    expect(posted).toHaveLength(1);
+    expect(posted[0]?.message).not.toHaveProperty("context");
+    expect(reactions).toHaveLength(1);
+    const warning = lines.find((line) => line.msg === "slack.thread_read_failed");
+    expect(warning).toMatchObject({ level: "warn", slackError: "missing_scope" });
+    expect(Object.keys(warning ?? {})).not.toContain("error");
+  });
+
+  it("answers as before when reading the thread takes too long", async () => {
+    const { deps, posted, lines } = setup({
+      threadReplies: () => new Promise<never>(() => undefined),
+    });
+    expect(await handleMention(inThread, deps)).toBe("reacted");
+    expect(posted[0]?.message).not.toHaveProperty("context");
+    expect(lines).toContainEqual(
+      expect.objectContaining({ msg: "slack.thread_read_failed", slackError: "timeout" }),
+    );
   });
 });
 

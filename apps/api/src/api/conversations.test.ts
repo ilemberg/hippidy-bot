@@ -149,6 +149,47 @@ describe("receiveMessage", () => {
   });
 });
 
+describe("what was said in the thread (decision 140)", () => {
+  const context = [
+    {
+      actorId: "U2",
+      actorName: "Ana",
+      text: "what about caching?",
+      sentAt: "2026-11-18T09:05:30Z",
+    },
+    { actorId: "U3", text: "no idea\nreally", sentAt: "2026-11-18T10:07:00.000+01:00" },
+  ];
+
+  it("puts the context before the sender, one line each, with the time in UTC", () => {
+    expect(formatForAgent("U1", "what do you think?", "Ilya", context)).toBe(
+      [
+        "Said in the thread since your last reply:",
+        "- Ana (09:05 UTC): what about caching?",
+        "- U3 (09:07 UTC): no idea",
+        "  really",
+        "",
+        "From: Ilya (Slack user U1)",
+        "",
+        "what do you think?",
+      ].join("\n"),
+    );
+  });
+
+  it("is exactly today's text without context", () => {
+    expect(formatForAgent("U1", "hi", "Ilya", [])).toBe("From: Ilya (Slack user U1)\n\nhi");
+    expect(formatForAgent("U1", "hi")).toBe("From: Slack user U1\n\nhi");
+  });
+
+  it("hands the context to the agent with the message", async () => {
+    await receiveMessage(deps, message(1, { context }), log);
+    const sessionId = runtime.onlySessionId();
+    expect(runtime.sessions.get(sessionId)?.sent).toEqual([
+      formatForAgent("U1", "question 1", undefined, context),
+    ]);
+    expect(runtime.sessions.get(sessionId)?.sent[0]).toContain("- Ana (09:05 UTC)");
+  });
+});
+
 describe("a change is done when its pull request's CI passes (decision 132)", () => {
   const url = "https://github.com/ilemberg/hippidy-bot/pull/30";
   let verdict: ChecksVerdict;
