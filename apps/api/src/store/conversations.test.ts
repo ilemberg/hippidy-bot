@@ -408,7 +408,15 @@ describe("transactions", () => {
 });
 
 describe("schema", () => {
-  const tables = ["agent_events", "conversations", "deliveries", "inbound_messages"];
+  const tables = [
+    "actor_roles",
+    "agent_events",
+    "approvals",
+    "conversations",
+    "deliveries",
+    "inbound_messages",
+    "projects",
+  ];
 
   it("has row level security on every table", async () => {
     const rows = await db.query(
