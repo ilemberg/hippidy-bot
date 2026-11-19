@@ -6,10 +6,12 @@ import { createWebhookVerifier, type VerifyAgentWebhook } from "./agent/webhooks
 import { createApi } from "./api/app.ts";
 import type { ConversationDeps } from "./api/conversations.ts";
 import { errorResponse } from "./api/errors.ts";
+import type { StatusDeps } from "./api/status.ts";
 import type { ApiEnv } from "./api/types.ts";
 import { readApiConfig, type Env } from "./config.ts";
 import type { Logger } from "./log.ts";
 import { createApiClient, type ResponseLike } from "./slack/api-client.ts";
+import { readSlackConfig } from "./slack/config.ts";
 import { createSlackDeliverer, slackPosterFromEnv, type SlackPoster } from "./slack/deliver.ts";
 import { createSlackEventsHandler, type SlackRouteDeps } from "./slack/route.ts";
 import { createGitHubChecks } from "./github/checks.ts";
@@ -25,6 +27,7 @@ export interface AppDeps {
     verifyAgentWebhook?: VerifyAgentWebhook;
     slackActions?: SlackRouteDeps["slackActions"];
     slackPoster?: SlackPoster;
+    status?: StatusDeps;
   };
 }
 
@@ -52,6 +55,7 @@ export function configureApp(app: Hono<ApiEnv>, { env, log, services }: AppDeps)
       log,
       conversations: services?.conversations ?? real.conversations,
       verifyAgentWebhook: services?.verifyAgentWebhook ?? real.verifyAgentWebhook,
+      status: services?.status ?? real.status,
     }),
   );
 
@@ -88,20 +92,36 @@ function realServices(
   env: Env,
   log: Logger,
   deliverers: ConversationDeps["deliverers"],
-): { conversations?: ConversationDeps; verifyAgentWebhook?: VerifyAgentWebhook } {
+): {
+  conversations?: ConversationDeps;
+  verifyAgentWebhook?: VerifyAgentWebhook;
+  status: StatusDeps;
+} {
   const dbConfig = readDbConfig(env, log);
   const agentConfig = readAgentConfig(env, log);
-  if (agentConfig === undefined) return {};
+  // Connects lazily, so creating it costs nothing until a query runs.
+  const db = dbConfig === undefined ? undefined : createPostgresDb(dbConfig.url);
+  const status: StatusDeps = {
+    db,
+    configured: {
+      agent: agentConfig !== undefined,
+      slack: readSlackConfig(env, log) !== undefined,
+      github: agentConfig?.repository !== undefined,
+    },
+  };
+  if (agentConfig === undefined) return { status };
 
   const client = new Anthropic({ apiKey: agentConfig.apiKey, maxRetries: 2, timeout: 20_000 });
   const verifyAgentWebhook =
     agentConfig.webhookSigningKey === undefined
       ? undefined
       : createWebhookVerifier(agentConfig.webhookSigningKey, client);
-  if (dbConfig === undefined) return verifyAgentWebhook === undefined ? {} : { verifyAgentWebhook };
+  if (db === undefined) {
+    return verifyAgentWebhook === undefined ? { status } : { verifyAgentWebhook, status };
+  }
 
   const conversations: ConversationDeps = {
-    db: createPostgresDb(dbConfig.url),
+    db,
     runtime: createManagedAgentRuntime(agentConfig, client),
     deliverers,
     // The same token that mounts the repo reads its pull requests' checks (decision 132).
@@ -115,6 +135,6 @@ function realServices(
         }),
   };
   return verifyAgentWebhook === undefined
-    ? { conversations }
-    : { conversations, verifyAgentWebhook };
+    ? { conversations, status }
+    : { conversations, verifyAgentWebhook, status };
 }

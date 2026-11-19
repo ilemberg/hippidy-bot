@@ -2,6 +2,7 @@ import {
   acceptedMessageSchema,
   CORRELATION_ID_HEADER,
   errorResponseSchema,
+  statusResponseSchema,
   type InboundMessage,
 } from "@hippidy/contracts";
 import { Hono } from "hono";
@@ -105,6 +106,35 @@ describe("GET /health", () => {
   it("works with no configuration at all", async () => {
     const { app } = setup({});
     expect((await app.request("/health")).status).toBe(200);
+  });
+});
+
+describe("GET /status", () => {
+  it("answers 200 without a token when every part works", async () => {
+    const { log } = memoryLogger();
+    const app = configureApp(new Hono<ApiEnv>(), {
+      env: {},
+      log,
+      services: { status: { db, configured: { agent: true, slack: true, github: true } } },
+    });
+    const res = await app.request("/status");
+    expect(res.status).toBe(200);
+    expect(statusResponseSchema.parse(await res.json()).status).toBe("ok");
+  });
+
+  it("answers 503 with no configuration at all, naming what is missing", async () => {
+    const { app } = setup({});
+    const res = await app.request("/status");
+    expect(res.status).toBe(503);
+    expect(statusResponseSchema.parse(await res.json())).toEqual({
+      status: "degraded",
+      checks: {
+        database: "not_configured",
+        agent: "not_configured",
+        slack: "not_configured",
+        github: "not_configured",
+      },
+    });
   });
 });
 

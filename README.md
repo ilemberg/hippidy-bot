@@ -48,6 +48,7 @@ Vercel does and checks it starts (`pnpm build && pnpm smoke`).
 | Route                              | Auth                | What it does                                                                                                                                  |
 | ---------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GET /health`                      | none                | Returns `{"status":"ok"}`. Works with no configuration at all                                                                                 |
+| `GET /status`                      | none                | Health of each part: `database` (answers `select 1`), `agent`, `slack`, `github`. 200 when all are `ok`, else 503 with `degraded`             |
 | `POST /v1/messages`                | service token       | Accepts one inbound message, hands it to the thread's agent session, returns 202                                                              |
 | `POST /v1/webhooks/agent`          | Anthropic signature | Anthropic says a session went idle or ended; the API posts any new replies                                                                    |
 | `POST /v1/reconcile`               | reconcile token     | The safety net: delivers replies whose webhook was lost, retries failed posts. Called every minute                                            |
