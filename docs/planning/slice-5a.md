@@ -1,6 +1,9 @@
 # Slice 5A: plan and discovery
 
-Status: **started 2026-11-19 (decision 163).** The workflow is in `projects.md`; the decisions
+Status: **started 2026-11-19 (decision 163). Parts A and B are merged and live**: the schema
+(ilemberg/hippidy-bot 34, applied by CI and checked in production) and the API routes
+(ilemberg/hippidy-bot 35). Each was reviewed by an independent agent and corrected before it
+merged. C to F wait for the owner; E1 still waits for the Atlassian probe (decision 162). The workflow is in `projects.md`; the decisions
 behind it are 135 to 158. This file plans the first of slice 5's three parts.
 
 **Demo:** a product manager starts a project in Slack. Several people and the bot write its
@@ -59,6 +62,13 @@ All behind the service token, like `/v1/messages`. Shapes in `packages/contracts
 - `POST /v1/projects/:id/approvals` records an approval or a withdrawal. When both managers
   have approved the plan and neither has withdrawn since, the response says so; the stage is
   not changed by it (146).
+
+## Live checks for A and B
+
+- `select relname, relrowsecurity from pg_class where relname in ('projects', 'actor_roles',
+  'approvals')`: all three, row level security on, no `anon` privilege (checked 2026-11-19).
+- `curl -s -o /dev/null -w '%{http_code}' https://hippidy-bot.vercel.app/v1/projects`: 401
+  without the token. With it, the README's curl examples create a project and set a role.
 
 ## C to F, for the owner to start
 
