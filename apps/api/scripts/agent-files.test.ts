@@ -1,4 +1,10 @@
+import {
+  customToolNameSchema,
+  linkProjectInputSchema,
+  recordApprovalInputSchema,
+} from "@hippidy/contracts";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   digest,
   parseAgentFile,
@@ -14,6 +20,27 @@ describe("agent and environment files", () => {
     expect(agent).toMatchObject({ name: "hippidy-bot", model: "claude-opus-5-5" });
     expect(agent.system).toContain("You are hippidy-bot");
     expect(agent.system).not.toContain("---");
+  });
+
+  it("reads agents/product.md: same model, no MCP servers, web off, the two custom tools", () => {
+    const engineer = readAgentFile("agents/hippidy.md");
+    const product = readAgentFile("agents/product.md");
+    expect(product).toMatchObject({ name: "hippidy-bot-product", model: engineer.model });
+    expect(product.mcp_servers).toEqual([]);
+    expect(product.tools).toContainEqual(
+      engineer.tools.find(
+        (tool) => z.object({ type: z.literal("agent_toolset_20260401") }).safeParse(tool).success,
+      ),
+    );
+    expect(
+      product.tools.filter(
+        (tool) => z.object({ type: z.literal("mcp_toolset") }).safeParse(tool).success,
+      ),
+    ).toEqual([]);
+    expect(customTools(product.tools).map((tool) => tool.name)).toEqual(
+      customToolNameSchema.options,
+    );
+    expect(customTools(engineer.tools)).toEqual([]);
   });
 
   it("reads environments/hippidy.yaml", () => {
@@ -107,4 +134,53 @@ describe("digest", () => {
     expect(digest({ a: 1 })).not.toBe(digest({ a: 2 }));
     expect(digest({ a: [1, 2] })).not.toBe(digest({ a: [2, 1] }));
   });
+});
+
+const customTool = z.strictObject({
+  type: z.literal("custom"),
+  name: z.string(),
+  description: z.string().min(1),
+  input_schema: z.looseObject({ type: z.literal("object") }),
+});
+
+function customTools(tools: readonly unknown[]): z.infer<typeof customTool>[] {
+  return tools.flatMap((tool) => {
+    if (z.object({ type: z.literal("custom") }).safeParse(tool).success) {
+      return [customTool.parse(tool)];
+    }
+    return [];
+  });
+}
+
+/**
+ * A JSON schema without what is there for the model to read (descriptions) or what the agent
+ * file leaves to the contract alone: defaults, formats and patterns, and the `$schema` line.
+ */
+function shape(schema: unknown): unknown {
+  if (Array.isArray(schema)) return schema.map(shape);
+  if (typeof schema !== "object" || schema === null) return schema;
+  return Object.fromEntries(
+    Object.entries(schema)
+      .filter(([key]) => !["description", "default", "format", "pattern", "$schema"].includes(key))
+      .map(([key, value]) => [key, shape(value)]),
+  );
+}
+
+// The product agent's custom tools are answered by the API against the contracts in
+// packages/contracts/src/agent-tools.ts (decision 167): what the agent is told it may send
+// must be what the API accepts. Rules a JSON schema cannot say (exactly one of projectId and
+// name; a ticket must name its ticket) are in the tools' descriptions and checked by the API.
+describe("the product agent's custom tools agree with the contracts", () => {
+  const tools = customTools(readAgentFile("agents/product.md").tools);
+  const contracts = {
+    link_project: linkProjectInputSchema,
+    record_approval: recordApprovalInputSchema,
+  };
+
+  for (const [name, contract] of Object.entries(contracts)) {
+    it(name, () => {
+      const tool = tools.find((candidate) => candidate.name === name);
+      expect(shape(tool?.input_schema)).toEqual(shape(z.toJSONSchema(contract, { io: "input" })));
+    });
+  }
 });

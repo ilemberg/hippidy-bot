@@ -472,6 +472,29 @@ Until the app is reinstalled, the bot answers exactly as before, from the mentio
 logs `slack.thread_read_failed` with `slackError: "missing_scope"` for each mention in a
 thread. The same happens if Slack takes longer than 1.5 seconds to answer.
 
+## Slice 5A: the product agent
+
+Slack still shows one bot, but behind it are two agents (decisions 139, 167), and a reply
+never says which one answered. A thread whose first message comes from someone with the role
+`product_manager` or `designer` (set with `PUT /v1/roles`, above) gets the **product agent**,
+`agents/product.md`; everyone else, and anyone with no role, gets today's agent, the
+engineer. The choice is stored on the conversation (`agent_kind`) when its session starts and
+kept for the life of the thread; threads from before keep the engineer.
+
+The product agent writes and iterates the plan with people, in the thread for now (the
+document system comes in part F). It reads the repo to ground the plan: its session mounts the
+public repo without a token, so it can read and clone but not push (decision 147). It has no
+GitHub tools, no MCP servers and no vault, and never changes code or opens pull requests. It
+has two tools the API answers itself: `link_project` links the thread to a project (creating
+one only when a product manager or engineering manager asks), and `record_approval` records
+an approval given in the thread by the person approving.
+
+Nothing needs setting up by hand: on merge, the agent sync (`pnpm agent:sync`, run by CI)
+creates `hippidy-bot-product` beside `hippidy-bot`, in the same environment. Until it has,
+a product manager's or designer's new thread fails closed: the API logs
+`conversation.session_start_failed`, retries, and then answers with the same note as when the
+agent is missing.
+
 ## Planning docs
 
 | Doc                                                                  | What it is                                                                                 |

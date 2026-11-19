@@ -10,6 +10,7 @@ import {
   type SessionState,
 } from "@hippidy/contracts";
 import { z } from "zod";
+import type { AgentKind } from "../agent/runtime.ts";
 import type { Db, Row } from "./db.ts";
 import { toJsonText } from "./json.ts";
 
@@ -297,6 +298,39 @@ export async function releaseSessionStart(
      where id = $1 and agent_session_id = $2`,
     [conversationId, claim],
   );
+}
+
+const agentKindRow = z.object({ agent_kind: z.enum(["engineer", "product"]).nullable() });
+
+/**
+ * The agent that runs the conversation's sessions (decisions 153, 167), stored on the
+ * conversation the first time a session is started for it, and kept from then on. A thread
+ * gets the product agent when the sender of its first message is a product manager or a
+ * designer in `actor_roles` (exact source, workspace and person); everyone else, and anyone
+ * with no role, gets the engineer. A conversation that had a session before this was stored
+ * keeps null, which is the engineer. Called by the holder of the session start claim.
+ */
+export async function chooseAgentKind(db: Db, conversationId: string): Promise<AgentKind> {
+  const rows = await db.query(
+    `update conversations c
+     set agent_kind = coalesce(
+       c.agent_kind,
+       case when c.agent_id is null then (
+         select case when (select r.role from actor_roles r
+                           where r.source = m.source
+                             and r.workspace_id = m.workspace_id
+                             and r.actor_id = m.actor_id) in ('product_manager', 'designer')
+                     then 'product' else 'engineer' end
+         from inbound_messages m
+         where m.conversation_id = c.id
+         order by m.sent_at, m.created_at, m.id
+         limit 1
+       ) end)
+     where c.id = $1
+     returning c.agent_kind`,
+    [conversationId],
+  );
+  return agentKindRow.parse(one(rows)).agent_kind ?? "engineer";
 }
 
 /**

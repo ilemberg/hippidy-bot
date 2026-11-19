@@ -15,6 +15,7 @@ on:
       - "environments/**"
       - "apps/api/scripts/sync-agent.ts"
       - "apps/api/scripts/agent-files.ts"
+      - "apps/api/scripts/sync-lib.ts"
       - ".github/workflows/agent.yml"
   workflow_dispatch:
 

@@ -2,6 +2,7 @@ import {
   SessionNotFoundError,
   type AgentEvent,
   type AgentEventRecord,
+  type AgentKind,
   type AgentRuntime,
   type AgentSession,
   type IdleReason,
@@ -9,6 +10,8 @@ import {
 } from "./runtime.ts";
 
 interface FakeSession {
+  /** The agent the session was started with. */
+  agentKind: AgentKind;
   metadata: Record<string, string>;
   sent: string[];
   /** Processed events, in the order the runtime lists them. */
@@ -62,6 +65,8 @@ export class FakeAgentRuntime implements AgentRuntime {
   failNext: Partial<
     Record<"startSession" | "sendMessage" | "listEvents" | "readUsage" | "answerCustomTool", Error>
   > = {};
+  /** Agents the runtime does not have, as before the sync made them: starting one fails. */
+  readonly missingAgents = new Set<AgentKind>();
   /** Set to make every send fail, as for a session paused at its budget. */
   rejectAllSends: Error | undefined;
   /** Runs while a usage read is under way: to look at, or hold up, what happens meanwhile. */
@@ -106,10 +111,18 @@ export class FakeAgentRuntime implements AgentRuntime {
     session.events.push(this.record(TYPE_OF[event.kind], event.id, event));
   }
 
-  startSession(input: { title: string; metadata: Record<string, string> }): Promise<AgentSession> {
+  startSession(input: {
+    title: string;
+    metadata: Record<string, string>;
+    agentKind: AgentKind;
+  }): Promise<AgentSession> {
     this.takeFailure("startSession");
+    if (this.missingAgents.has(input.agentKind)) {
+      return Promise.reject(new Error(`the ${input.agentKind} agent was not found`));
+    }
     const sessionId = this.id("sesn");
     this.sessions.set(sessionId, {
+      agentKind: input.agentKind,
       metadata: input.metadata,
       sent: [],
       events: [],
@@ -119,7 +132,11 @@ export class FakeAgentRuntime implements AgentRuntime {
       answered: [],
       usage: NO_USAGE,
     });
-    return Promise.resolve({ sessionId, agentId: "agent_fake", agentVersion: 1 });
+    return Promise.resolve({
+      sessionId,
+      agentId: input.agentKind === "product" ? "agent_fake_product" : "agent_fake",
+      agentVersion: 1,
+    });
   }
 
   sendMessage(sessionId: string, text: string): Promise<string | undefined> {

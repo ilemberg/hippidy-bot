@@ -8,6 +8,8 @@ export interface AgentConfig {
   webhookSigningKey: string | undefined;
   /** The agent and environment names in `agents/` and `environments/`. */
   agentName: string;
+  /** The product agent's name in `agents/product.md` (decisions 139, 167). */
+  productAgentName: string;
   environmentName: string;
   /** Hard spend cap per session, in US cents (decision 55). */
   sessionBudgetCents: number;
@@ -17,11 +19,17 @@ export interface AgentConfig {
    * answered with a note instead of reaching an agent without its repo.
    */
   repository: { url: string; token: string } | undefined;
+  /**
+   * The same repo, for the product agent: mounted without a token, so its sessions can read
+   * and clone the public repo but not push (decisions 147, 167).
+   */
+  repositoryUrl: string;
   /** The vault holding the GitHub MCP server's credential, made by the agent sync. */
   vaultName: string;
 }
 
 export const AGENT_NAME = "hippidy-bot";
+export const PRODUCT_AGENT_NAME = "hippidy-bot-product";
 export const ENVIRONMENT_NAME = "hippidy-bot";
 export const VAULT_NAME = "hippidy-bot";
 export const REPOSITORY_URL = "https://github.com/ilemberg/hippidy-bot";
@@ -73,9 +81,11 @@ export function readAgentConfig(env: Env, log: Logger): AgentConfig | undefined 
     apiKey: parsed.data.ANTHROPIC_API_KEY,
     webhookSigningKey: parsed.data.ANTHROPIC_WEBHOOK_SIGNING_KEY,
     agentName: AGENT_NAME,
+    productAgentName: PRODUCT_AGENT_NAME,
     environmentName: ENVIRONMENT_NAME,
     sessionBudgetCents: parsed.data.SESSION_BUDGET_CENTS ?? DEFAULT_SESSION_BUDGET_CENTS,
     repository: token.success ? { url: REPOSITORY_URL, token: token.data } : undefined,
+    repositoryUrl: REPOSITORY_URL,
     vaultName: VAULT_NAME,
   };
 }
