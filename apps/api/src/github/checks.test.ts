@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createGitHubChecks, verdictOf } from "./checks.ts";
+import { createGitHubChecks, verdictOf, type GitHubFetch } from "./checks.ts";
 
 describe("verdictOf", () => {
   const run = (name: string, status: string, conclusion: string | null) => ({
@@ -29,9 +29,9 @@ describe("verdictOf", () => {
 describe("createGitHubChecks", () => {
   function github(responses: Record<string, unknown>) {
     const asked: { url: string; auth: string | null }[] = [];
-    const fetch = (input: string, init?: RequestInit) => {
+    const fetch: GitHubFetch = (input, init) => {
       const url = input;
-      asked.push({ url, auth: new Headers(init?.headers).get("authorization") });
+      asked.push({ url, auth: init.headers.Authorization ?? null });
       const body = responses[url.replace("https://api.github.com", "")];
       return Promise.resolve(
         body === undefined
@@ -39,10 +39,10 @@ describe("createGitHubChecks", () => {
           : new Response(JSON.stringify(body), { status: 200 }),
       );
     };
-    return { fetch: fetch as unknown as typeof globalThis.fetch, asked };
+    return { fetch, asked };
   }
 
-  const checks = (fetch: typeof globalThis.fetch) =>
+  const checks = (fetch: GitHubFetch) =>
     createGitHubChecks({
       repositoryUrl: "https://github.com/ilemberg/hippidy-bot",
       token: "github_pat_test",
