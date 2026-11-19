@@ -172,6 +172,7 @@ export function addProjectRoutes(api: Hono<ApiEnv>, deps: ProjectRouteDeps): voi
       workspaceId: role.workspaceId,
       actorId: role.actorId,
       role: role.role,
+      extraRoles: role.extraRoles,
     });
     return c.json(role);
   });

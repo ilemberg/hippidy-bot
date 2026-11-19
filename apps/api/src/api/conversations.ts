@@ -234,7 +234,11 @@ export function formatForAgent(
     displayName === undefined
       ? `Slack user ${actorId}`
       : `${oneLine(displayName)} (Slack user ${actorId})`;
-  const role = about.role === undefined ? "" : `\nRole: ${roleInWords[about.role]}`;
+  const roles =
+    about.role === undefined
+      ? []
+      : [about.role, ...(about.extraRoles ?? [])].map((r) => roleInWords[r]);
+  const role = roles.length === 0 ? "" : `\nRole: ${roles.join(", ")}`;
   const project =
     about.project === undefined
       ? ""

@@ -225,6 +225,15 @@ describe("the sender's role and the thread's project (slice 5A, part D)", () => 
     );
   });
 
+  it("names every role the sender holds, main role first (decision 170)", () => {
+    expect(
+      formatForAgent("U1", "hi", "Ilya", [], {
+        role: "product_manager",
+        extraRoles: ["engineering_manager"],
+      }),
+    ).toBe("From: Ilya (Slack user U1)\nRole: product manager, engineering manager\n\nhi");
+  });
+
   it("puts the project and stage after the sender and role", () => {
     expect(formatForAgent("U1", "hi", "Ilya", [], { role: "tech_lead", project })).toBe(
       "From: Ilya (Slack user U1)\nRole: tech lead\nProject: Search (stage: roadmap)\n\nhi",

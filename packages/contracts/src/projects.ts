@@ -100,6 +100,8 @@ export const approvalSchema = z.strictObject({
   actor: actorSchema,
   /** The role the person held when they acted; null if they had none. */
   role: roleSchema.nullable(),
+  /** Any other roles they held when they acted (decision 170); each counts as `role` does. */
+  extraRoles: z.array(roleSchema),
   /** The conversation the approval was given in, when there is one. */
   conversationId: uuid.nullable(),
   recordedAt: timestamp,
@@ -153,13 +155,23 @@ export const approvalResultSchema = z.strictObject({
 });
 export type ApprovalResult = z.infer<typeof approvalResultSchema>;
 
-/** Request body of `PUT /v1/roles`: sets a person's role, replacing any they held. */
-export const setRoleRequestSchema = z.strictObject({
-  source: messageSourceSchema,
-  workspaceId: sourceId,
-  actorId: sourceId,
-  role: roleSchema,
-});
+/**
+ * Request body of `PUT /v1/roles`: sets a person's roles, replacing any they held. `role` is
+ * their main role, which chooses the agent for threads they start; `extraRoles` are any others
+ * they also hold (decision 170). Duplicates, and the main role repeated, are dropped.
+ */
+export const setRoleRequestSchema = z
+  .strictObject({
+    source: messageSourceSchema,
+    workspaceId: sourceId,
+    actorId: sourceId,
+    role: roleSchema,
+    extraRoles: z.array(roleSchema).max(5).default([]),
+  })
+  .transform((body) => ({
+    ...body,
+    extraRoles: [...new Set(body.extraRoles)].filter((role) => role !== body.role),
+  }));
 export type SetRoleRequest = z.infer<typeof setRoleRequestSchema>;
 
 /** The role a person holds in a workspace. Response of `PUT /v1/roles`. */
@@ -168,6 +180,8 @@ export const actorRoleSchema = z.strictObject({
   workspaceId: z.string(),
   actorId: z.string(),
   role: roleSchema,
+  /** Other roles the person also holds (decision 170); empty for most people. */
+  extraRoles: z.array(roleSchema),
   updatedAt: timestamp,
 });
 export type ActorRole = z.infer<typeof actorRoleSchema>;

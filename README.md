@@ -60,7 +60,7 @@ Vercel does and checks it starts (`pnpm build && pnpm smoke`).
 | `GET /v1/projects/:id`             | service token       | One project, its approvals and whether the plan is approved                                                                                   |
 | `PATCH /v1/projects/:id`           | service token       | Moves the project's stage, in any direction                                                                                                   |
 | `POST /v1/projects/:id/approvals`  | service token       | Records an approval or withdrawal, with the actor's current role; returns 201 and whether the subject is approved. Never moves the stage      |
-| `PUT /v1/roles`                    | service token       | Sets a person's role in a workspace                                                                                                           |
+| `PUT /v1/roles`                    | service token       | Sets a person's roles in a workspace: a main role and any others (`extraRoles`)                                                               |
 | `GET /v1/roles`                    | service token       | The map from people to roles                                                                                                                  |
 | `POST /slack/events`               | Slack signature     | Slack's Events API. On `app_mention`: sends the message through `/v1/messages`, then reacts 👀. Answers 503 until Slack is configured         |
 
@@ -422,6 +422,12 @@ chat or your shell history):
 curl -s -X PUT https://hippidy-bot.vercel.app/v1/roles \
   -H "Authorization: Bearer $HIPPIDY_SERVICE_TOKEN" -H 'content-type: application/json' \
   -d '{"source":"slack","workspaceId":"<team id>","actorId":"<user id>","role":"product_manager"}'
+# Someone may hold more than one role (decision 170): "role" is their main one, which picks the
+# agent for threads they start; "extraRoles" are the others. Holding both product_manager and
+# engineering_manager, their one approval counts for both. Each PUT replaces all their roles.
+curl -s -X PUT https://hippidy-bot.vercel.app/v1/roles \
+  -H "Authorization: Bearer $HIPPIDY_SERVICE_TOKEN" -H 'content-type: application/json' \
+  -d '{"source":"slack","workspaceId":"<team id>","actorId":"<user id>","role":"product_manager","extraRoles":["engineering_manager"]}'
 curl -s -H "Authorization: Bearer $HIPPIDY_SERVICE_TOKEN" https://hippidy-bot.vercel.app/v1/roles
 
 # Start a project (it starts in the plan stage), then read it back with its approvals

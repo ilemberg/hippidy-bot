@@ -452,6 +452,38 @@ describe("createPostgresDb", () => {
     expect(found?.project.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
+  // A JS array bound to `$5::text[]`, and text[] columns read back as arrays (decision 170).
+  it("stores and reads a person's extra roles, and copies them onto an approval", async () => {
+    const actor = { source: "slack" as const, workspaceId: "T", actorId: "BOTH" };
+    const set = await setActorRole(db, {
+      ...actor,
+      role: "product_manager",
+      extraRoles: ["engineering_manager"],
+    });
+    expect(set.extraRoles).toEqual(["engineering_manager"]);
+    expect((await setActorRole(db, { ...actor, role: "product_manager" })).extraRoles).toEqual([]);
+    await setActorRole(db, {
+      ...actor,
+      role: "product_manager",
+      extraRoles: ["engineering_manager"],
+    });
+    const project = await createProject(db, { name: "Both", createdBy: actor });
+    const recorded = await recordApproval(db, project.id, {
+      subject: "plan",
+      subjectRef: "",
+      subjectVersion: "1",
+      action: "approve",
+      actor,
+    });
+    expect(recorded).toMatchObject({
+      kind: "recorded",
+      approval: { role: "product_manager", extraRoles: ["engineering_manager"] },
+    });
+    expect((await getProject(db, project.id))?.approvals[0]?.extraRoles).toEqual([
+      "engineering_manager",
+    ]);
+  });
+
   // `seq` is a bigint: this client returns it as a string unless the SQL casts it.
   it("returns an approval's seq as a number, in the order recorded", async () => {
     const project = await createProject(db, {
