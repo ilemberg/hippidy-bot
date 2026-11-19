@@ -442,8 +442,8 @@ curl -s -X PUT https://hippidy-bot.vercel.app/v1/conversations/<conversation id>
 ```
 
 From then on, every message the agent gets in that thread carries a
-`Project: <name> (stage: <stage>)` line after the `From:` line, and the `From:` line ends with
-the sender's role when they hold one (for example `, product manager`). A person with no role
+`Project: <name> (stage: <stage>)` line after the `From:` line, and a `Role:` line (for example
+`Role: product manager`) when the sender holds a role. A person with no role
 and a thread with no project get exactly the text they got before.
 
 The Slack team and user ids are in Slack under a person's profile, **More**, **Copy member

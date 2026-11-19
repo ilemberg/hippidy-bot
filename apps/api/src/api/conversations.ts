@@ -221,14 +221,18 @@ export function formatForAgent(
   about: Partial<SenderAndProject> = {},
 ): string {
   const body = text.trim() === "" ? "(no text, just a mention)" : text;
-  const name =
-    displayName === undefined ? `Slack user ${actorId}` : `${displayName} (Slack user ${actorId})`;
-  const sender = about.role === undefined ? name : `${name}, ${roleInWords[about.role]}`;
+  // The display name is chosen by the sender, so it is kept to one line, and the role goes on
+  // a line of its own: no name can start a line or pose as a role.
+  const sender =
+    displayName === undefined
+      ? `Slack user ${actorId}`
+      : `${oneLine(displayName)} (Slack user ${actorId})`;
+  const role = about.role === undefined ? "" : `\nRole: ${roleInWords[about.role]}`;
   const project =
     about.project === undefined
       ? ""
       : `\nProject: ${oneLine(about.project.name)} (stage: ${about.project.stage})`;
-  const message = `From: ${sender}${project}\n\n${body}`;
+  const message = `From: ${sender}${role}${project}\n\n${body}`;
   if (context.length === 0) return message;
   const lines = context.map((said) => {
     const time = new Date(said.sentAt).toISOString().slice(11, 16);
