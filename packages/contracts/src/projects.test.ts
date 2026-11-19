@@ -70,6 +70,20 @@ describe("setRoleRequestSchema", () => {
       false,
     );
   });
+
+  it("takes extra roles, dropping duplicates and the main role (decision 170)", () => {
+    expect(setRoleRequestSchema.parse({ ...actor, role: "qa" }).extraRoles).toEqual([]);
+    expect(
+      setRoleRequestSchema.parse({
+        ...actor,
+        role: "product_manager",
+        extraRoles: ["engineering_manager", "product_manager", "engineering_manager"],
+      }).extraRoles,
+    ).toEqual(["engineering_manager"]);
+    expect(
+      setRoleRequestSchema.safeParse({ ...actor, role: "qa", extraRoles: ["owner"] }).success,
+    ).toBe(false);
+  });
 });
 
 describe("recordApprovalRequestSchema", () => {

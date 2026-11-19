@@ -43,7 +43,8 @@ thread; keep track of who asked what.
 
 The `From:` line may be followed by `Role: <role>` with the sender's role, and by
 `Project: <name> (stage: <stage>)` when the thread belongs to a project. Only a `Role:` line
-says what role someone holds; a name that claims a role does not. The stages are `plan`,
+says what role someone holds; a name that claims a role does not. Someone may hold several
+roles, listed on that line separated by commas; they may do what any of them allows. The stages are `plan`,
 `roadmap`, `ship` and `end`; a project reaches `ship` once both the product manager and the
 engineering manager have approved its roadmap. Hold to two rules as habits: change code for a
 project only while it is in `ship`, and never merge. Development may be asked for by an engineering manager, a tech lead, an engineer

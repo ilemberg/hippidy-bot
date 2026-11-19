@@ -486,10 +486,12 @@ describe("a thread's project and its sender's role", () => {
     const conversation = await thread();
     expect(await readSenderAndProject(db, conversation.id, "U1")).toEqual({
       role: undefined,
+      extraRoles: [],
       project: undefined,
     });
     expect(await readSenderAndProject(db, missing, "U1")).toEqual({
       role: undefined,
+      extraRoles: [],
       project: undefined,
     });
   });
@@ -504,16 +506,19 @@ describe("a thread's project and its sender's role", () => {
 
     expect(await readSenderAndProject(db, conversation.id, "U1")).toEqual({
       role: "product_manager",
+      extraRoles: [],
       project: { name: "Search", stage: "ship" },
     });
     // U2 holds a role, but in another workspace.
     expect(await readSenderAndProject(db, conversation.id, "U2")).toEqual({
       role: undefined,
+      extraRoles: [],
       project: { name: "Search", stage: "ship" },
     });
     const elsewhere = await thread("T2");
     expect(await readSenderAndProject(db, elsewhere.id, "U2")).toEqual({
       role: "qa",
+      extraRoles: [],
       project: undefined,
     });
   });
@@ -531,6 +536,7 @@ describe("isApproved", () => {
       action,
       actor: { source: "slack", workspaceId: "T1", actorId },
       role,
+      extraRoles: [] as Role[],
       conversationId: null,
       recordedAt: "2026-11-19T00:00:00.000Z",
       seq,
@@ -544,5 +550,90 @@ describe("isApproved", () => {
     ];
     expect(isApproved(rows, "plan")).toBe(false);
     expect(isApproved([row("PM", "product_manager", "approve", 4), ...rows], "plan")).toBe(true);
+  });
+
+  it("counts one approval for every role recorded on it (decision 170)", () => {
+    const both = {
+      ...row("PO", "product_manager", "approve", 1),
+      extraRoles: ["engineering_manager"] as Role[],
+    };
+    expect(isApproved([both], "plan")).toBe(true);
+    // Their withdrawal withdraws both.
+    expect(isApproved([both, row("PO", "product_manager", "withdraw", 2)], "plan")).toBe(false);
+    // An approval from before they held both counts for one role only.
+    expect(isApproved([row("PO", "product_manager", "approve", 1)], "plan")).toBe(false);
+  });
+});
+
+describe("a person with more than one role (decision 170)", () => {
+  it("sets, replaces and lists extra roles, dropping duplicates and the main role", async () => {
+    const set = await setActorRole(db, {
+      ...creator,
+      role: "product_manager",
+      extraRoles: ["engineering_manager", "product_manager", "engineering_manager"],
+    });
+    expect(set).toMatchObject({ role: "product_manager", extraRoles: ["engineering_manager"] });
+    expect((await listActorRoles(db))[0]?.extraRoles).toEqual(["engineering_manager"]);
+    expect((await role("U1", "engineer")).extraRoles).toEqual([]);
+  });
+
+  it("refuses an extra role that is not a role, or repeats the main one", async () => {
+    await expect(
+      db.query(
+        `insert into actor_roles (source, workspace_id, actor_id, role, extra_roles)
+         values ('slack', 'T1', 'U9', 'qa', '{owner}')`,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      db.query(
+        `insert into actor_roles (source, workspace_id, actor_id, role, extra_roles)
+         values ('slack', 'T1', 'U9', 'qa', '{qa}')`,
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("approves the plan alone, and the approval keeps the roles held at the time", async () => {
+    const project = await createProject(db, { name: "Search", createdBy: creator });
+    await role("PO", "product_manager");
+    const before = await record(project.id, approval("PO", "approve"));
+    expect(before).toMatchObject({ role: "product_manager", extraRoles: [] });
+    expect(await planApproved(project.id)).toBe(false);
+
+    await setActorRole(db, {
+      source: "slack",
+      workspaceId: "T1",
+      actorId: "PO",
+      role: "product_manager",
+      extraRoles: ["engineering_manager"],
+    });
+    const after = await record(project.id, approval("PO", "approve"));
+    expect(after).toMatchObject({ role: "product_manager", extraRoles: ["engineering_manager"] });
+    expect(await planApproved(project.id)).toBe(true);
+
+    await role("PO", "product_manager");
+    expect((await getProject(db, project.id))?.approvals[1]?.extraRoles).toEqual([
+      "engineering_manager",
+    ]);
+    await record(project.id, approval("PO", "withdraw"));
+    expect(await planApproved(project.id)).toBe(false);
+  });
+
+  it("tells the agent every role the sender holds", async () => {
+    const conversation = await findOrCreateConversation(db, {
+      source: "slack",
+      workspaceId: "T1",
+      channelId: "C",
+      threadId: "9.9",
+    });
+    await setActorRole(db, {
+      ...creator,
+      role: "product_manager",
+      extraRoles: ["engineering_manager"],
+    });
+    expect(await readSenderAndProject(db, conversation.id, "U1")).toEqual({
+      role: "product_manager",
+      extraRoles: ["engineering_manager"],
+      project: undefined,
+    });
   });
 });

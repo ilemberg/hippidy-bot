@@ -58,7 +58,8 @@ function toProject(row: Row): Project {
 // exact far beyond any number of approvals.
 const approvalColumns = `
   id, project_id, subject, subject_ref, subject_version, action, actor_source,
-  actor_workspace_id, actor_id, role, conversation_id, recorded_at, seq::float8 as seq`;
+  actor_workspace_id, actor_id, role, extra_roles, conversation_id, recorded_at,
+  seq::float8 as seq`;
 
 const approvalRow = z.object({
   id: z.string(),
@@ -71,6 +72,7 @@ const approvalRow = z.object({
   actor_workspace_id: z.string(),
   actor_id: z.string(),
   role: roleSchema.nullable(),
+  extra_roles: z.array(roleSchema),
   conversation_id: z.string().nullable(),
   recorded_at: z.date(),
   seq: z.number().int().positive(),
@@ -87,19 +89,21 @@ function toApproval(row: Row): Approval {
     action: r.action,
     actor: { source: r.actor_source, workspaceId: r.actor_workspace_id, actorId: r.actor_id },
     role: r.role,
+    extraRoles: r.extra_roles,
     conversationId: r.conversation_id,
     recordedAt: r.recorded_at.toISOString(),
     seq: r.seq,
   };
 }
 
-const roleColumns = "source, workspace_id, actor_id, role, updated_at";
+const roleColumns = "source, workspace_id, actor_id, role, extra_roles, updated_at";
 
 const roleRow = z.object({
   source: messageSourceSchema,
   workspace_id: z.string(),
   actor_id: z.string(),
   role: roleSchema,
+  extra_roles: z.array(roleSchema),
   updated_at: z.date(),
 });
 
@@ -110,6 +114,7 @@ function toActorRole(row: Row): ActorRole {
     workspaceId: r.workspace_id,
     actorId: r.actor_id,
     role: r.role,
+    extraRoles: r.extra_roles,
     updatedAt: r.updated_at.toISOString(),
   };
 }
@@ -196,15 +201,19 @@ export async function setProjectStage(
   return rows[0] === undefined ? undefined : toProject(rows[0]);
 }
 
-/** Sets a person's role in a workspace, replacing the one they held. */
-export async function setActorRole(db: Db, request: SetRoleRequest): Promise<ActorRole> {
+/** Sets a person's roles in a workspace, replacing the ones they held. */
+export async function setActorRole(
+  db: Db,
+  request: Omit<SetRoleRequest, "extraRoles"> & { extraRoles?: readonly Role[] },
+): Promise<ActorRole> {
+  const extraRoles = [...new Set(request.extraRoles ?? [])].filter((role) => role !== request.role);
   const rows = await db.query(
-    `insert into actor_roles (source, workspace_id, actor_id, role)
-     values ($1, $2, $3, $4)
+    `insert into actor_roles (source, workspace_id, actor_id, role, extra_roles)
+     values ($1, $2, $3, $4, $5::text[])
      on conflict (source, workspace_id, actor_id)
-       do update set role = excluded.role, updated_at = now()
+       do update set role = excluded.role, extra_roles = excluded.extra_roles, updated_at = now()
      returning ${roleColumns}`,
-    [request.source, request.workspaceId, request.actorId, request.role],
+    [request.source, request.workspaceId, request.actorId, request.role, extraRoles],
   );
   return toActorRole(one(rows));
 }
@@ -217,7 +226,7 @@ export async function listActorRoles(db: Db): Promise<ActorRole[]> {
   return rows.map(toActorRole);
 }
 
-/** The role a person holds, or undefined if they hold none. */
+/** A person's main role, or undefined if they hold none. */
 export async function getActorRole(
   db: Db,
   actor: { source: MessageSource; workspaceId: string; actorId: string },
@@ -234,8 +243,8 @@ export type RecordApprovalResult =
   { kind: "recorded"; approval: Approval } | { kind: "no_project" } | { kind: "no_conversation" };
 
 /**
- * Appends an approval or a withdrawal. The actor's role at this moment is copied onto the row
- * (null if they hold none), so a later change of role does not rewrite it. Recorded by a
+ * Appends an approval or a withdrawal. The actor's roles at this moment are copied onto the row
+ * (role null if they hold none), so a later change of roles does not rewrite it. Recorded by a
  * custom tool call (decision 167), it is keyed on the call's id: the same call made again
  * returns the row it already recorded.
  */
@@ -256,13 +265,13 @@ export async function recordApproval(
   const rows = await db.query(
     `insert into approvals (
        project_id, subject, subject_ref, subject_version, action, actor_source,
-       actor_workspace_id, actor_id, role, conversation_id, custom_tool_use_id
+       actor_workspace_id, actor_id, role, extra_roles, conversation_id, custom_tool_use_id
      )
      select p.id, $2::text, $3::text, $4::text, $5::text, $6::text, $7::text, $8::text,
-       (select r.role from actor_roles r
-        where r.source = $6::text and r.workspace_id = $7::text and r.actor_id = $8::text),
-       $9::uuid, $10::text
+       r.role, coalesce(r.extra_roles, '{}'), $9::uuid, $10::text
      from projects p
+     left join actor_roles r
+       on r.source = $6::text and r.workspace_id = $7::text and r.actor_id = $8::text
      where p.id = $1::uuid
      on conflict (custom_tool_use_id) do nothing
      returning ${approvalColumns}`,
@@ -296,7 +305,8 @@ const APPROVING_ROLES: readonly Role[] = ["engineering_manager", "product_manage
 /**
  * Whether a subject is approved now: take each approver's latest row for it; approved when the
  * latest action of at least one engineering manager and at least one product manager is
- * `approve`. The role is the one recorded on that row. For a ticket, only the rows of the same
+ * `approve`. The roles are the ones recorded on that row: someone who held both when they
+ * approved counts for both (decision 170), and their withdrawal withdraws both. For a ticket, only the rows of the same
  * ticket (`subjectRef`) count; the plan, the roadmap and the end are one subject each.
  *
  * An approver is one person: the same source, workspace and actor. `approvals` may be in any
@@ -317,7 +327,9 @@ export function isApproved(
   }
   const approvedBy = new Set<Role>();
   for (const approval of latest.values()) {
-    if (approval.action === "approve" && approval.role !== null) approvedBy.add(approval.role);
+    if (approval.action !== "approve" || approval.role === null) continue;
+    approvedBy.add(approval.role);
+    for (const role of approval.extraRoles) approvedBy.add(role);
   }
   return APPROVING_ROLES.every((role) => approvedBy.has(role));
 }
@@ -437,14 +449,17 @@ export async function hasWrittenInConversation(
 
 /** What the agent is told about a message besides its text (slice 5A, part D). */
 export interface SenderAndProject {
-  /** The sender's role, when they hold one in the conversation's source and workspace. */
+  /** The sender's main role, when they hold one in the conversation's source and workspace. */
   role: Role | undefined;
+  /** Any other roles the sender holds (decision 170). */
+  extraRoles?: readonly Role[];
   /** The conversation's project, when it has one. */
   project: { name: string; stage: ProjectStage } | undefined;
 }
 
 const senderAndProjectRow = z.object({
   role: roleSchema.nullable(),
+  extra_roles: z.array(roleSchema).nullable(),
   project_name: z.string().nullable(),
   project_stage: projectStageSchema.nullable(),
 });
@@ -459,7 +474,7 @@ export async function readSenderAndProject(
   actorId: string,
 ): Promise<SenderAndProject> {
   const rows = await db.query(
-    `select r.role, p.name as project_name, p.stage as project_stage
+    `select r.role, r.extra_roles, p.name as project_name, p.stage as project_stage
      from conversations c
      left join actor_roles r
        on r.source = c.source and r.workspace_id = c.workspace_id and r.actor_id = $2
@@ -467,10 +482,11 @@ export async function readSenderAndProject(
      where c.id = $1`,
     [conversationId, actorId],
   );
-  if (rows[0] === undefined) return { role: undefined, project: undefined };
+  if (rows[0] === undefined) return { role: undefined, extraRoles: [], project: undefined };
   const r = senderAndProjectRow.parse(rows[0]);
   return {
     role: r.role ?? undefined,
+    extraRoles: r.extra_roles ?? [],
     project:
       r.project_name !== null && r.project_stage !== null
         ? { name: r.project_name, stage: r.project_stage }
