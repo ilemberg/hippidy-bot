@@ -264,7 +264,7 @@ Every question in group E is answered. Two answers wait for a probe, like slice 
 experiment: whether Atlassian's MCP server accepts a token our vault can hold on a free site
 (E1, before 5A), and how screenshots leave the sandbox (E11, before 5C).
 
-Slice 4 closed on 2026-11-19 (retro below), with three live checks still to run in Slack
+Slice 4 closed on 2026-11-19 (retro below), with four live checks still to run in Slack
 (`slice-4.md`, "Live checks at close"). The Atlassian probe is a workflow run by hand
 (decision 159).
 
@@ -475,8 +475,8 @@ experiment), 19 (lease owner column), 20 (a CI log probe), 21 (the loop for long
 (the repo, the sandbox and GitHub), 24 (read only new events), 25 (done means green CI, and
 the skill), 26 (progress notes, eval cases) and 27 (a Vercel build fix). Demo done, for real
 rather than the planned 🫡: in Slack, "can you add a /status route" got a clarifying
-question, then pull request 28 with CI green, its link in the thread and ✅; the follow-up
-landed on the same pull request; "can you merge this" was refused; the owner merged it and
+question, then pull request 28 with CI green, its link in the thread and ✅; "can you merge
+this" was refused; the owner merged it and
 production `/status` answers 200. The session cost $0.75 for 7 active minutes over four turns.
 
 **What was learned:**
@@ -484,8 +484,8 @@ production `/status` answers 200. The session cost $0.75 for 7 active minutes ov
 - **The bot built a real feature of itself end to end on its first try.** It asked before
   building (the prompt's "ask one short clarifying question"), and that question changed the
   design: public, with no reasons in the response (decision 134).
-- **The experiment paid for itself again.** About $1 settled eight questions (decisions 127
-  to 129) and dropped the grader (132): it caught nothing, cost about $0.33 a question and
+- **The experiment paid for itself again.** About $1 settled the questions of "Experiment
+  first" (decisions 127 to 129) and dropped the grader (132): it caught nothing, cost about $0.33 a question and
   changed what the thread read.
 - **"Merged and green" still is not "works".** D merged green and the production deploy
   failed on Vercel's type check (`Response` is empty there), so Vercel kept serving B2 until
@@ -497,13 +497,16 @@ production `/status` answers 200. The session cost $0.75 for 7 active minutes ov
 - **The record carried the close.** Every "done when" line that could be checked was
   checked from the database and Vercel by the build session, with no screenshots (the slice 3
   retro asked for exactly this). The eval-case view already links requests to pull requests.
-- **Size is not a worry yet.** A coding session is about 150 events and 140 kB of
+- **Size is not a worry yet.** A coding session is about 150 events and 220 kB of
   `agent_events`; the database went from 13 to 14 MB.
+- **A second reviewer checked this close against the record**, and found two "done when"
+  lines marked done on weaker evidence than they claimed: the follow-up, and the date of
+  the last rejected reconcile call. Checking a close is worth an independent pass too.
 
 **What changes for the next slices:**
 
-- Three "done when" lines need a person in Slack (a failing check, a stop mid-turn, a turn
-  past 30 minutes); they are written as one message each in `slice-4.md` and run before 5A
+- Four "done when" lines need a person in Slack (a failing check, a follow-up on an open
+  pull request, a stop mid-turn, a turn past 30 minutes); they are written as one message each in `slice-4.md` and run before 5A
   depends on them.
 - A deploy is not done until Vercel has built it: the production check of decision 157 waits
   for the deployment's success, which would have caught D.

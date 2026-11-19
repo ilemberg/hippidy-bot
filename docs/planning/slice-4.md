@@ -1,6 +1,6 @@
 # Slice 4: the agent gets a development environment
 
-Status: **done 2026-11-19 (decision 160), with three live checks still to run in Slack**
+Status: **done 2026-11-19 (decision 160), with four live checks still to run in Slack**
 (listed under "Live checks at close"). Started 2026-11-18 (decision 125). Pull requests A2,
 A3, B1, B2, C, D and E are merged (ilemberg/hippidy-bot 18, 19, 21, 24, 23, 25 and 26; 20
 probed a CI log, 27 fixed the Vercel build, 22 was the experiment's, closed unmerged). The plan was revised after a review against the code (decisions 112 to 124),
@@ -262,18 +262,21 @@ ilemberg/hippidy-bot 28.
 | Line | Check | Result |
 |---|---|---|
 | The demo works | `conversation_transcript` and `deliveries` for the conversation; the pull request's check runs | **Yes.** The agent asked one clarifying question first (✅), then opened 28 with CI green, posted its link and got ✅ (`status` delivery `answered` after a turn with a `pushed` and a `pull_request` event, which by decision 132 needs every check passed) |
-| A follow-up lands on the same pull request | `eval_cases` for the conversation | **Yes.** The follow-up ("make it so that you dont have to be authenticated") went to 28, the same pull request |
+| A follow-up lands on the same pull request | `eval_cases` and `agent_events` for the conversation; the commits of 28 | **Not run.** The message that went into 28 answered the agent's clarifying question before 28 existed (28 has one commit, made in that turn). The two later messages ("can you merge this", "make sure it's working") changed nothing. To do in Slack (below) |
 | A change that fails CI is fixed, or the thread says it gave up | `agent.mcp_tool_use` named `get_job_logs`, or a ❌ with a note | **Not run.** No turn has had a failing check yet. To do in Slack (below) |
 | No push to `main`, no workflow change, no merge | The experiment (decision 127); the rule on `main` (123); the tool list | **Yes.** Asked "can you merge this to production", the agent said it cannot merge and pointed at the pull request. Its MCP calls in the record are `create_pull_request` and `pull_request_read` only |
 | A turn past 30 minutes is not stopped | A turn with no `idle` for over 30 minutes, ending normally | **Not run.** The longest turn was about 6 minutes. To do in Slack (below) |
-| A stop during a coding turn answers at once | A `stop` message during a turn that has run `git` | **Not run** in a coding turn; a stop in a chat thread worked in slice 2. To do in Slack (below) |
+| A stop during a coding turn answers at once | A `stop` message during a turn that has run `git` | **Not run** in a coding turn. The one stop in the record (conversation `d0fa1fab`, 2026-11-18 20:13) was answered in a second, in a chat thread before pull request C gave the agent the repo. To do in Slack (below) |
 | A coding session can be read back from the record | `agent_events`, `conversations` usage, `eval_cases` | **Yes.** 149 events, 444 active seconds, $0.75, and the pull request's link in `eval_cases` |
 | The database size | `pg_database_size`, `pg_total_relation_size('agent_events')` | **14 MB** of 500 MB (13 MB at the slice's start); `agent_events` 360 kB, 217 events in 5 conversations |
 | CI passes, with the Vercel-like type check | The CI runs on `main` | **Yes.** Every run on `main` since 27 is green; production `/status` answers 200 with every part `ok` |
 
 Also checked: reconcile is answered 200 every minute (`net._http_response`, all 360 calls in
-the 6 hours Supabase keeps); the `auth.rejected` errors in Vercel's list all date from
-2026-11-18, before slice 3's new reconcile token, the last at 18:15.
+the 6 hours Supabase keeps). Vercel's `auth.rejected` lines (`service_token_not_configured`
+until 18:16, then `wrong_token`, `malformed_header` and `missing_token`, the last at 22:42)
+are all dated 2026-11-18, while slice 3's reconcile token was being replaced; none since.
+Vercel's error list is capped at 50 groups, so this was read from the runtime errors since
+18:16, not from the list alone.
 
 Still to run in Slack (each takes one message; the build session reads the result from the
 record):
@@ -285,7 +288,10 @@ record):
    the failed check.
 2. **A stop mid-turn.** In a new thread ask for any small change, then send
    `@hippidy-bot stop` while it is still on 👀. Expect 🛑 within seconds.
-3. **A long turn.** Ask for something that takes over 30 minutes (for example "run the whole
+3. **A follow-up on an open pull request.** In the thread of a change whose pull request is
+   open, ask for a small change to it ("also rename X"). Expect a new commit on the same
+   pull request, no second one, and ✅ when its checks pass again.
+4. **A long turn.** Ask for something that takes over 30 minutes (for example "run the whole
    test suite ten times in a row and tell me the slowest test each time"). Expect a progress
    note at 15 minutes, no ❌ at 30, and only the last message at the end.
 
