@@ -93,6 +93,19 @@ export function createManagedAgentRuntime(
       });
     },
 
+    async answerCustomTool(sessionId, customToolUseId, { text, isError }) {
+      await client.beta.sessions.events.send(sessionId, {
+        events: [
+          {
+            type: "user.custom_tool_result",
+            custom_tool_use_id: customToolUseId,
+            content: [{ type: "text", text }],
+            is_error: isError,
+          },
+        ],
+      });
+    },
+
     async listEvents(sessionId, options) {
       const records: AgentEventRecord[] = [];
       const since = options?.since;
@@ -265,6 +278,20 @@ export function toAgentEvent(event: BetaManagedAgentsSessionEvent): AgentEvent |
     }
     case "user.tool_confirmation":
       return { kind: "tool_confirmation", id: event.id, toolUseId: event.tool_use_id };
+    case "agent.custom_tool_use":
+      return {
+        kind: "custom_tool_use",
+        id: event.id,
+        name: event.name,
+        input: event.input,
+        processedAt: processedAtOf(event),
+      };
+    case "user.custom_tool_result":
+      return {
+        kind: "custom_tool_result",
+        id: event.id,
+        customToolUseId: event.custom_tool_use_id,
+      };
     case "session.status_terminated":
       return { kind: "terminated", id: event.id };
     case "session.error":

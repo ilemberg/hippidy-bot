@@ -120,20 +120,36 @@ function one(rows: Row[]): Row {
   return row;
 }
 
-/** Creates a project in the `plan` stage. */
-export async function createProject(db: Db, request: CreateProjectRequest): Promise<Project> {
+/**
+ * Creates a project in the `plan` stage. Made by a custom tool call (decision 167), it is
+ * keyed on the call's id: the same call made again returns the project it already made.
+ */
+export async function createProject(
+  db: Db,
+  request: CreateProjectRequest,
+  customToolUseId?: string,
+): Promise<Project> {
+  const toolUseId = customToolUseId ?? null;
   const rows = await db.query(
-    `insert into projects (name, created_by_source, created_by_workspace_id, created_by_actor_id)
-     values ($1, $2, $3, $4)
+    `insert into projects
+       (name, created_by_source, created_by_workspace_id, created_by_actor_id, custom_tool_use_id)
+     values ($1, $2, $3, $4, $5::text)
+     on conflict (custom_tool_use_id) do nothing
      returning ${projectColumns}`,
     [
       request.name,
       request.createdBy.source,
       request.createdBy.workspaceId,
       request.createdBy.actorId,
+      toolUseId,
     ],
   );
-  return toProject(one(rows));
+  if (rows[0] !== undefined || toolUseId === null) return toProject(one(rows));
+  const made = await db.query(
+    `select ${projectColumns} from projects where custom_tool_use_id = $1`,
+    [toolUseId],
+  );
+  return toProject(one(made));
 }
 
 /** Every project, newest first. */
@@ -219,13 +235,17 @@ export type RecordApprovalResult =
 
 /**
  * Appends an approval or a withdrawal. The actor's role at this moment is copied onto the row
- * (null if they hold none), so a later change of role does not rewrite it.
+ * (null if they hold none), so a later change of role does not rewrite it. Recorded by a
+ * custom tool call (decision 167), it is keyed on the call's id: the same call made again
+ * returns the row it already recorded.
  */
 export async function recordApproval(
   db: Db,
   projectId: string,
   request: RecordApprovalRequest,
+  customToolUseId?: string,
 ): Promise<RecordApprovalResult> {
+  const toolUseId = customToolUseId ?? null;
   const conversationId = request.conversationId ?? null;
   if (conversationId !== null) {
     const found = await db.query(`select id from conversations where id = $1`, [conversationId]);
@@ -236,14 +256,15 @@ export async function recordApproval(
   const rows = await db.query(
     `insert into approvals (
        project_id, subject, subject_ref, subject_version, action, actor_source,
-       actor_workspace_id, actor_id, role, conversation_id
+       actor_workspace_id, actor_id, role, conversation_id, custom_tool_use_id
      )
      select p.id, $2::text, $3::text, $4::text, $5::text, $6::text, $7::text, $8::text,
        (select r.role from actor_roles r
         where r.source = $6::text and r.workspace_id = $7::text and r.actor_id = $8::text),
-       $9::uuid
+       $9::uuid, $10::text
      from projects p
      where p.id = $1::uuid
+     on conflict (custom_tool_use_id) do nothing
      returning ${approvalColumns}`,
     [
       projectId,
@@ -255,11 +276,18 @@ export async function recordApproval(
       request.actor.workspaceId,
       request.actor.actorId,
       conversationId,
+      toolUseId,
     ],
   );
-  return rows[0] === undefined
-    ? { kind: "no_project" }
-    : { kind: "recorded", approval: toApproval(rows[0]) };
+  if (rows[0] !== undefined) return { kind: "recorded", approval: toApproval(rows[0]) };
+  if (toolUseId !== null) {
+    const recorded = await db.query(
+      `select ${approvalColumns} from approvals where custom_tool_use_id = $1`,
+      [toolUseId],
+    );
+    if (recorded[0] !== undefined) return { kind: "recorded", approval: toApproval(recorded[0]) };
+  }
+  return { kind: "no_project" };
 }
 
 /** The two roles whose approval a subject needs (decision 137). */
@@ -318,6 +346,93 @@ export async function setConversationProject(
   if (rows[0] === undefined) return { kind: "no_conversation" };
   const r = z.object({ project_id: z.string().nullable() }).parse(rows[0]);
   return { kind: "set", projectId: r.project_id };
+}
+
+/** What a custom tool call needs to know about the conversation it was made in. */
+export interface ToolCallContext {
+  source: MessageSource;
+  workspaceId: string;
+  /** The conversation's project, if it is linked to one. */
+  projectId: string | null;
+}
+
+const toolCallContextRow = z.object({
+  source: messageSourceSchema,
+  workspace_id: z.string(),
+  project_id: z.string().nullable(),
+});
+
+/**
+ * The conversation's source, workspace and project, read fresh for each custom tool call.
+ * Undefined if the conversation does not exist.
+ */
+export async function readToolCallContext(
+  db: Db,
+  conversationId: string,
+): Promise<ToolCallContext | undefined> {
+  const rows = await db.query(
+    `select c.source, c.workspace_id, c.project_id from conversations c where c.id = $1`,
+    [conversationId],
+  );
+  if (rows[0] === undefined) return undefined;
+  const r = toolCallContextRow.parse(rows[0]);
+  return { source: r.source, workspaceId: r.workspace_id, projectId: r.project_id };
+}
+
+/** A user message the agent session has processed: its event id, and when (runtime's clock). */
+export interface ProcessedUserMessage {
+  eventId: string;
+  processedAt: string;
+}
+
+/**
+ * Who sent the message a custom tool call's turn is answering: of the conversation's inbound
+ * messages, the one whose agent event (`agent_event_id`) the session processed last at or
+ * before the call itself. Messages handed over later, even while the call waits, never count.
+ * Undefined if no message matches: the caller does not guess.
+ *
+ * The times are compared in Postgres, as given by the runtime, so no precision is lost.
+ */
+export async function readTurnSender(
+  db: Db,
+  conversationId: string,
+  callProcessedAt: string,
+  messages: readonly ProcessedUserMessage[],
+): Promise<string | undefined> {
+  if (messages.length === 0) return undefined;
+  const rows = await db.query(
+    `select m.actor_id
+     from unnest($2::text[], $3::text[]) as u(event_id, processed_at)
+     join inbound_messages m on m.conversation_id = $1 and m.agent_event_id = u.event_id
+     where u.processed_at::timestamptz <= $4::timestamptz
+     order by u.processed_at::timestamptz desc, m.created_at desc
+     limit 1`,
+    [
+      conversationId,
+      messages.map((m) => m.eventId),
+      messages.map((m) => m.processedAt),
+      callProcessedAt,
+    ],
+  );
+  return z.object({ actor_id: z.string() }).optional().parse(rows[0])?.actor_id;
+}
+
+/**
+ * Whether this person has written in the conversation: at least one inbound message from the
+ * same source, workspace and actor id.
+ */
+export async function hasWrittenInConversation(
+  db: Db,
+  conversationId: string,
+  actor: { source: MessageSource; workspaceId: string; actorId: string },
+): Promise<boolean> {
+  const rows = await db.query(
+    `select 1 from inbound_messages
+     where conversation_id = $1 and source = $2 and workspace_id = $3 and actor_id = $4
+     limit 1`,
+    [conversationId, actor.source, actor.workspaceId, actor.actorId],
+  );
+  return rows.length > 0;
 }
 
 /** What the agent is told about a message besides its text (slice 5A, part D). */

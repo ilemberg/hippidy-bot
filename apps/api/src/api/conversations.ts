@@ -52,8 +52,13 @@ import {
   type SettledStatus,
 } from "../store/conversations.ts";
 import type { Db } from "../store/db.ts";
-import { readSenderAndProject, type SenderAndProject } from "../store/projects.ts";
+import {
+  readSenderAndProject,
+  type ProcessedUserMessage,
+  type SenderAndProject,
+} from "../store/projects.ts";
 import { latestActivity, latestStoredEventTime, storedEventsToActOn } from "../store/record.ts";
+import { answerCustomToolCall, type CustomToolCall } from "./agent-tools.ts";
 import { progressDue, progressText } from "./progress.ts";
 import { keepEvents, keepUsage } from "./record.ts";
 
@@ -406,8 +411,19 @@ async function readAgent(
     return lastEventAt;
   }
   if (state.kind === "idle" && state.reason === "requires_action") {
-    // The turn is not over: a tool call waits for approval, which the loop cannot give.
-    await denyWaitingCalls(deps, sessionId, events, state.blockedOn ?? [], log);
+    // The turn is not over: tool calls wait. Custom tool calls are answered (decision 167);
+    // any other waits for approval, which the loop cannot give, so it is denied (decision 119).
+    const messages = records.flatMap((record) =>
+      record.event?.kind === "user_message" && record.processedAt !== null
+        ? [{ eventId: record.id, processedAt: record.processedAt }]
+        : [],
+    );
+    await answerWaitingCalls(deps, conversation.id, sessionId, {
+      events,
+      messages,
+      blockedOn: state.blockedOn ?? [],
+      log,
+    });
     return lastEventAt;
   }
 
@@ -567,21 +583,69 @@ function latestTime(records: readonly AgentEventRecord[]): Date | undefined {
   return latest === undefined ? undefined : new Date(latest);
 }
 
-/** Denies each blocked tool call not answered yet, so the session carries on (decision 119). */
-async function denyWaitingCalls(
+/**
+ * Answers each blocked tool call not answered yet, so the session carries on. A custom tool
+ * call goes to its handler, which commits its write before the answer is sent (decision 167);
+ * every other call is denied (decision 119). A call counts as answered once the session lists
+ * its answer, read like every other event (from the record and the runtime).
+ */
+async function answerWaitingCalls(
   deps: ConversationDeps,
+  conversationId: string,
   sessionId: string,
-  events: readonly AgentEvent[],
-  blockedOn: readonly string[],
-  log: Logger,
+  session: {
+    events: readonly AgentEvent[];
+    /** The user messages the session has processed, to tell whom a call's turn answers. */
+    messages: readonly ProcessedUserMessage[];
+    blockedOn: readonly string[];
+    log: Logger;
+  },
 ): Promise<void> {
+  const { events, messages, blockedOn, log } = session;
   const answered = new Set(
-    events.flatMap((event) => (event.kind === "tool_confirmation" ? [event.toolUseId] : [])),
+    events.flatMap((event) => {
+      if (event.kind === "tool_confirmation") return [event.toolUseId];
+      if (event.kind === "custom_tool_result") return [event.customToolUseId];
+      return [];
+    }),
   );
+  const customCalls = new Map<string, CustomToolCall>();
+  for (const event of events) {
+    if (event.kind === "custom_tool_use") customCalls.set(event.id, event);
+  }
   const waiting = blockedOn.filter((id) => !answered.has(id));
-  if (waiting.length === 0) return;
-  await deps.runtime.denyToolCalls(sessionId, waiting, DENY_MESSAGE);
-  log.warn("conversation.tool_calls_denied", { sessionId, toolUseIds: waiting });
+  const toDeny = waiting.filter((id) => !customCalls.has(id));
+  if (toDeny.length > 0) {
+    await deps.runtime.denyToolCalls(sessionId, toDeny, DENY_MESSAGE);
+    log.warn("conversation.tool_calls_denied", { sessionId, toolUseIds: toDeny });
+  }
+  // One at a time, in the order the agent made them: a later call may rely on an earlier one
+  // (record_approval after link_project).
+  for (const id of waiting) {
+    const call = customCalls.get(id);
+    if (call === undefined) continue;
+    try {
+      const answer = await answerCustomToolCall(deps.db, conversationId, call, messages);
+      await deps.runtime.answerCustomTool(sessionId, call.id, answer);
+      log.info("conversation.custom_tool_answered", {
+        conversationId,
+        sessionId,
+        customToolUseId: call.id,
+        name: call.name,
+        isError: answer.isError,
+      });
+    } catch (error) {
+      // Left unanswered: the next sync tries again, and the write, keyed on the call's id,
+      // is not made twice.
+      log.error("conversation.custom_tool_failed", {
+        conversationId,
+        sessionId,
+        customToolUseId: call.id,
+        name: call.name,
+        error,
+      });
+    }
+  }
 }
 
 /**
