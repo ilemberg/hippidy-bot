@@ -15,6 +15,15 @@ export interface PullRequestChecks {
   verdict(pullRequestUrl: string): Promise<ChecksVerdict>;
 }
 
+/**
+ * The part of `fetch` the client uses, typed by shape: Vercel's build type-checks the global
+ * `Response` as empty, so reading `ok` or `json()` from it fails there (see CLAUDE.md).
+ */
+export type GitHubFetch = (
+  url: string,
+  init: { headers: Record<string, string>; signal: AbortSignal },
+) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
+
 /** Check run conclusions that mean the work is not done. */
 const FAILING = new Set(["failure", "cancelled", "timed_out", "action_required", "stale"]);
 
@@ -33,9 +42,10 @@ const checkRunsSchema = z.object({
 export function createGitHubChecks(options: {
   repositoryUrl: string;
   token: string;
-  fetch?: typeof fetch;
+  fetch?: GitHubFetch;
 }): PullRequestChecks {
-  const doFetch = options.fetch ?? fetch;
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- needed on Vercel
+  const doFetch = options.fetch ?? (fetch as unknown as GitHubFetch);
   const repo = /^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/.exec(
     options.repositoryUrl,
   );
