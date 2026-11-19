@@ -237,11 +237,76 @@ describe("a change is done when its pull request's CI passes (decision 132)", ()
     expect(slack.statuses().at(-1)).toEqual({ messageIds: ["100.000002"], status: "failed" });
   });
 
+  it("keeps the request and its pull request as a candidate eval case", async () => {
+    runtime.setClock(new Date(Date.now() + 1000)); // events after message 1 was handed over
+    await changeTurn("Done.");
+    await receiveMessage(deps, message(2, { text: "and a question" }), log);
+    // The fake's clock runs a few seconds ahead: put message 2 clearly after its events.
+    await db.query(
+      `update inbound_messages set forwarded_at = now() + interval '1 minute'
+       where text = 'and a question'`,
+    );
+    expect(
+      await db.query(`select request, status, pull_request_url from eval_cases order by sent_at`),
+    ).toEqual([
+      { request: "question 1", status: "answered", pull_request_url: url },
+      { request: "and a question", status: "received", pull_request_url: null },
+    ]);
+  });
+
   it("cannot call a change done without a way to read checks", async () => {
     delete deps.checks;
     await changeTurn("Done.");
     expect(slack.replies()).toContain(changeNotes.not_checked(url));
     expect(slack.statuses()).toEqual([{ messageIds: ["100.000001"], status: "failed" }]);
+  });
+});
+
+describe("progress notes during a long turn (decisions 103, 106)", () => {
+  it("posts the latest note due, once, from the agent's latest words", async () => {
+    await receiveMessage(deps, message(1), log);
+    const sessionId = runtime.onlySessionId();
+    runtime.setClock(new Date());
+    runtime.work(sessionId, "Reading the code.", "Now running the tests.");
+
+    await age(10 * 60);
+    await reconcile(deps, log);
+    expect(slack.delivered).toEqual([]);
+
+    await age(10 * 60); // 20 minutes
+    await reconcile(deps, log);
+    await reconcile(deps, log);
+    expect(slack.replies()).toEqual([
+      "Still working on this (15 minutes so far). Latest: Now running the tests.",
+    ]);
+
+    await age(45 * 60); // 65 minutes
+    await reconcile(deps, log);
+    expect(slack.replies()).toHaveLength(2);
+    expect(slack.replies()[1]).toMatch(/^Still working on this \(1 hour so far\)/);
+    expect(slack.statuses()).toEqual([]);
+  });
+
+  it("names the latest step when the agent has said nothing yet", async () => {
+    await receiveMessage(deps, message(1), log);
+    const sessionId = runtime.onlySessionId();
+    runtime.setClock(new Date());
+    runtime.work(sessionId);
+    runtime.other(sessionId, "agent.tool_use");
+    await age(16 * 60);
+    await reconcile(deps, log);
+    expect(slack.replies()).toEqual(["Still working on this (15 minutes so far)."]);
+  });
+
+  it("posts nothing once the turn has ended", async () => {
+    await receiveMessage(deps, message(1), log);
+    const sessionId = runtime.onlySessionId();
+    runtime.setClock(new Date());
+    runtime.work(sessionId, "Working.");
+    await age(20 * 60);
+    runtime.finish(sessionId, "Done.");
+    await reconcile(deps, log);
+    expect(slack.replies()).toEqual(["Done."]);
   });
 });
 
@@ -607,7 +672,11 @@ describe("reconcile", () => {
 
     await reconcile(deps, log);
     expect(runtime.sessions.get(sessionId)?.interrupted).toBe(0);
-    expect(slack.delivered).toEqual([]);
+    // Only a progress note: the turn's own words wait for it to end (decisions 106, 114).
+    expect(slack.replies()).toEqual([
+      "Still working on this (2 hours so far). Latest: Still running the tests.",
+    ]);
+    expect(slack.statuses()).toEqual([]);
 
     runtime.setClock(new Date(Date.now() - 31 * 60_000));
     runtime.other(sessionId, "agent.tool_use"); // older than the last one: the latest counts

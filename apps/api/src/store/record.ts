@@ -118,6 +118,52 @@ export async function storedEventsToActOn(
   return rows.map((row) => z.object({ payload: z.unknown() }).parse(row).payload);
 }
 
+/** What the agent has been doing, for a progress note (decision 106). */
+export interface LatestActivity {
+  /** The agent's latest own words since the time given, if any. */
+  words: string | undefined;
+  /** Its latest tool call since then: the tool's name and, for a shell, the command. */
+  step: { name: string; command: string | undefined } | undefined;
+}
+
+/**
+ * The session's latest message and tool call processed after `since`, read from the record
+ * alone (no call to the runtime).
+ */
+export async function latestActivity(
+  db: Db,
+  conversationId: string,
+  sessionId: string,
+  since: Date,
+): Promise<LatestActivity> {
+  const words = await db.query(
+    `select text from agent_events
+     where conversation_id = $1 and agent_session_id = $2 and processed_at > $3
+       and kind = 'agent_message' and text is not null
+     order by processed_at desc, seq desc limit 1`,
+    [conversationId, sessionId, since],
+  );
+  const steps = await db.query(
+    `select payload ->> 'name' as name, payload -> 'input' ->> 'command' as command
+     from agent_events
+     where conversation_id = $1 and agent_session_id = $2 and processed_at > $3
+       and type in ('agent.tool_use', 'agent.mcp_tool_use')
+     order by processed_at desc, seq desc limit 1`,
+    [conversationId, sessionId, since],
+  );
+  const step = z
+    .object({ name: z.string().nullable(), command: z.string().nullable() })
+    .optional()
+    .parse(steps[0]);
+  return {
+    words: z.object({ text: z.string() }).optional().parse(words[0])?.text,
+    step:
+      step?.name === undefined || step.name === null
+        ? undefined
+        : { name: step.name, command: step.command ?? undefined },
+  };
+}
+
 /**
  * Notes that the session's events are in the record as of now. Conversations never marked
  * are the ones the backfill still has to visit. Leaves `updated_at` alone: that column orders
