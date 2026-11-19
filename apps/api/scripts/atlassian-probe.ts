@@ -144,6 +144,8 @@ interface Tool {
   properties: string[];
   /** What the schema says about `cloudId`, so the report shows what form it expects. */
   cloudIdHint: string | undefined;
+  /** The whole input schema, printed for the tools the writes call (run 44593366626). */
+  schema: unknown;
 }
 
 async function listTools(): Promise<Tool[]> {
@@ -182,7 +184,7 @@ async function listTools(): Promise<Tool[]> {
           : undefined;
       const cloudIdHint =
         cloudIdSchema === undefined ? undefined : clip(JSON.stringify(cloudIdSchema), 300);
-      tools.push({ name: String(tool.name), required, properties, cloudIdHint });
+      tools.push({ name: String(tool.name), required, properties, cloudIdHint, schema });
     }
     const next = "nextCursor" in record ? record.nextCursor : undefined;
     if (typeof next !== "string" || next === "") break;
@@ -354,6 +356,13 @@ async function main(): Promise<void> {
     return;
   }
 
+  // The create tools' full input schemas: run 44593366626 showed their fields are not the
+  // ones guessed (issueType; parent, contentType and an object body for a page).
+  for (const name of ["createJiraIssue", "createConfluenceContent"]) {
+    const tool = tools.find((candidate) => candidate.name === name);
+    if (tool !== undefined) found(`Schema of ${name}`, clip(JSON.stringify(tool.schema), 1800));
+  }
+
   // 4. Writes, each marked as the probe's.
   const stamp = `Made by the hippidy-bot Atlassian probe, run ${runId}. Safe to delete.`;
   if (projectKey === undefined) {
@@ -362,7 +371,7 @@ async function main(): Promise<void> {
     const issueText = await call("Jira: create an issue", "createJiraIssue", {
       cloudId,
       projectKey,
-      issueTypeName: "Task",
+      issueType: "Task",
       summary: `hippidy-bot probe ${runId}`,
       description: stamp,
     });
@@ -383,11 +392,11 @@ async function main(): Promise<void> {
   } else {
     await call("Confluence: create a page", "createConfluenceContent", {
       cloudId,
-      spaceKey,
-      type: "page",
+      // Best guesses until the printed schema says otherwise.
+      parent: { type: "space", key: spaceKey },
+      contentType: "page",
       title: `hippidy-bot probe ${runId}`,
-      body: stamp,
-      content: stamp,
+      body: { representation: "markdown", value: stamp },
     });
   }
 }
