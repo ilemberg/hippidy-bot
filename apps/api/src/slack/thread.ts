@@ -59,9 +59,13 @@ export function selectContext(
       ? undefined
       : new RegExp(`<@${escapeRegExp(options.botUserId)}(\\|[^>]*)?>`);
 
+  // The boundary is this bot's own last message only: another app posting in the thread
+  // (GitHub, CI) must not hide what people said before it.
+  const isSelf = (message: SlackThreadMessage) =>
+    options.botUserId !== undefined && message.user === options.botUserId;
   let lastBot = -1;
   before.forEach((message, index) => {
-    if (isBot(message)) lastBot = index;
+    if (isSelf(message)) lastBot = index;
   });
   return before
     .slice(lastBot + 1)

@@ -44,7 +44,7 @@ const realSlackActions = (client: webApi.WebClient): SlackActions => ({
     // Needs `channels:history` and `groups:history` (decision 140). Slack returns a thread
     // oldest first, 200 at a time, and the newest messages are the ones that matter, so it
     // reads on through up to five pages (1,000 messages). The handler bounds the time it
-    // waits for all of them; a longer thread misses only messages past the fifth page.
+    // waits for all of them. A longer thread gets no context at all (see below).
     const messages: SlackThreadMessage[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < MAX_REPLY_PAGES; page++) {
@@ -69,10 +69,12 @@ const realSlackActions = (client: webApi.WebClient): SlackActions => ({
         });
       }
       const next = parsed.data.response_metadata?.next_cursor;
-      if (next === undefined || next === null || next === "") break;
+      if (next === undefined || next === null || next === "") return messages;
       cursor = next;
     }
-    return messages;
+    // Still more after the last page: the newest messages, the ones that matter, are the ones
+    // not read, so sending the rest as "since your last reply" would mislead. No context.
+    throw Object.assign(new Error("Thread too long to read"), { code: "thread_too_long" });
   },
 });
 

@@ -202,7 +202,9 @@ export function formatForAgent(
   const lines = context.map((said) => {
     const time = new Date(said.sentAt).toISOString().slice(11, 16);
     // Lines after the first are indented, so a message of several lines stays one item.
-    const words = said.text.replace(/\r?\n/g, "\n  ");
+    // Every kind of line break counts, so no message can start a line of its own and pose as
+    // the lead line or a `From:` line.
+    const words = said.text.replace(/\r\n|[\r\n\u2028\u2029\u0085]/g, "\n  ");
     return `- ${said.actorName ?? said.actorId} (${time} UTC): ${words}`;
   });
   return `${CONTEXT_LEAD}\n${lines.join("\n")}\n\n${message}`;

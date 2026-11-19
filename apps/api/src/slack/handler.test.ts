@@ -254,18 +254,21 @@ describe("reading the thread (decision 140)", () => {
     ]);
   });
 
-  it("treats any bot's message as the boundary, and never sends it", async () => {
+  it("never sends another app's message, and does not let it hide what came before", async () => {
     const { deps, posted } = setup({
       userName,
       threadReplies: () =>
         Promise.resolve([
-          said("1515449100.000001", "U1", "before the bot"),
+          said("1515449100.000001", "U1", "before the other app"),
           { ts: "1515449101.000001", botId: "B2", text: "another bot" },
           said("1515449102.000001", "U1", "after"),
         ]),
     });
     await handleMention(inThread, deps);
-    expect(posted[0]?.message.context?.map((m) => m.text)).toEqual(["after"]);
+    expect(posted[0]?.message.context?.map((m) => m.text)).toEqual([
+      "before the other app",
+      "after",
+    ]);
   });
 
   it("sends no context when nothing was said since the bot's latest message", async () => {
