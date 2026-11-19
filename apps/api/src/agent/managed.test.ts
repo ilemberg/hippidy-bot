@@ -96,6 +96,50 @@ describe("toAgentEventRecord", () => {
 });
 
 describe("toAgentEvent", () => {
+  it("reads a pull request's link from a GitHub tool's result, as the experiment saw it", () => {
+    const result: BetaManagedAgentsSessionEvent = {
+      id: "sevt_r",
+      type: "agent.mcp_tool_result",
+      mcp_tool_use_id: "sevt_u",
+      processed_at: "2026-11-18T23:40:42.667056Z",
+      is_error: false,
+      content: [
+        {
+          type: "text",
+          text: '{"html_url":"https://github.com/ilemberg/hippidy-bot/pull/22","id":"5386006589"}',
+        },
+      ],
+    };
+    expect(toAgentEvent(result)).toEqual({
+      kind: "pull_request",
+      id: "sevt_r",
+      url: "https://github.com/ilemberg/hippidy-bot/pull/22",
+    });
+    expect(toAgentEvent({ ...result, is_error: true })).toBeUndefined();
+    expect(
+      toAgentEvent({ ...result, content: [{ type: "text", text: '{"check_runs":[]}' }] }),
+    ).toBeUndefined();
+  });
+
+  it("reads a git push from a shell command, and nothing else", () => {
+    const bash = (command: string): BetaManagedAgentsSessionEvent => ({
+      id: "sevt_b",
+      type: "agent.tool_use",
+      name: "bash",
+      input: { command },
+      processed_at: "2026-11-18T23:40:32Z",
+    });
+    expect(toAgentEvent(bash("cd /workspace/hippidy-bot && git push -u origin x"))).toEqual({
+      kind: "pushed",
+      id: "sevt_b",
+    });
+    expect(toAgentEvent(bash("git -C /workspace/hippidy-bot push"))).toMatchObject({
+      kind: "pushed",
+    });
+    expect(toAgentEvent(bash("git status && echo push"))).toBeUndefined();
+    expect(toAgentEvent(bash("git commit -m 'push the button'"))).toBeUndefined();
+  });
+
   it("reads which tool calls a session is blocked on", () => {
     const idle: BetaManagedAgentsSessionEvent = {
       id: "sevt_9",

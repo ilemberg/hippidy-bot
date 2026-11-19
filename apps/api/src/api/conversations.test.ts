@@ -1,10 +1,12 @@
 import type { InboundMessage } from "@hippidy/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FakeAgentRuntime } from "../agent/fake.ts";
+import type { ChecksVerdict } from "../github/checks.ts";
 import { getConversation, MAX_DELIVERY_ATTEMPTS } from "../store/conversations.ts";
 import { createTestDb } from "../store/testing.ts";
 import { memoryLogger } from "../testing.ts";
 import {
+  changeNotes,
   formatForAgent,
   mergeEvents,
   MAX_FORWARD_ATTEMPTS,
@@ -144,6 +146,102 @@ describe("receiveMessage", () => {
     await expect(receiveMessage(deps, message(1), log)).rejects.toThrow("anthropic down");
     await receiveMessage(deps, message(1), log);
     expect(runtime.sessions.size).toBe(1);
+  });
+});
+
+describe("a change is done when its pull request's CI passes (decision 132)", () => {
+  const url = "https://github.com/ilemberg/hippidy-bot/pull/30";
+  let verdict: ChecksVerdict;
+  let asked: string[];
+
+  beforeEach(() => {
+    verdict = { kind: "passed" };
+    asked = [];
+    deps.checks = {
+      verdict: (pullRequestUrl) => {
+        asked.push(pullRequestUrl);
+        return Promise.resolve(verdict);
+      },
+    };
+  });
+
+  async function changeTurn(...texts: string[]) {
+    await receiveMessage(deps, message(1), log);
+    const sessionId = runtime.onlySessionId();
+    runtime.work(sessionId);
+    runtime.pushed(sessionId);
+    runtime.pullRequest(sessionId, url);
+    runtime.finish(sessionId, ...texts);
+    await sync(sessionId);
+    return sessionId;
+  }
+
+  it("shows ✅ when every check passed", async () => {
+    await changeTurn(`Done: ${url}`);
+    expect(asked).toEqual([url]);
+    expect(slack.replies()).toEqual([`Done: ${url}`]);
+    expect(slack.statuses()).toEqual([{ messageIds: ["100.000001"], status: "answered" }]);
+  });
+
+  it("shows ❌ and says which checks failed", async () => {
+    verdict = { kind: "failed", names: ["Lint, typecheck, test"] };
+    await changeTurn("I gave up.");
+    expect(slack.replies()).toEqual([
+      "I gave up.",
+      changeNotes.failed(url, ["Lint, typecheck, test"]),
+    ]);
+    expect(slack.statuses()).toEqual([{ messageIds: ["100.000001"], status: "failed" }]);
+  });
+
+  it("shows ❌ while CI is still running, and when it cannot be read", async () => {
+    verdict = { kind: "pending" };
+    await changeTurn("Waiting on CI.");
+    expect(slack.replies()).toContain(changeNotes.pending(url));
+    expect(slack.statuses()).toEqual([{ messageIds: ["100.000001"], status: "failed" }]);
+  });
+
+  it("shows ❌ when the agent pushed but opened no pull request", async () => {
+    await receiveMessage(deps, message(1), log);
+    const sessionId = runtime.onlySessionId();
+    runtime.work(sessionId);
+    runtime.pushed(sessionId);
+    runtime.finish(sessionId, "Pushed.");
+    await sync(sessionId);
+    expect(asked).toEqual([]);
+    expect(slack.replies()).toEqual(["Pushed.", notes.no_pull_request]);
+    expect(slack.statuses()).toEqual([{ messageIds: ["100.000001"], status: "failed" }]);
+  });
+
+  it("does not ask GitHub about a turn that touched no pull request, nor twice", async () => {
+    const sessionId = await changeTurn("Done.");
+    await receiveMessage(deps, message(2), log);
+    runtime.reply(sessionId, "Just an answer.");
+    await sync(sessionId);
+    await sync(sessionId);
+    expect(asked).toEqual([url]);
+    expect(slack.statuses()).toEqual([
+      { messageIds: ["100.000001"], status: "answered" },
+      { messageIds: ["100.000002"], status: "answered" },
+    ]);
+  });
+
+  it("checks the thread's pull request when a follow-up pushes to it (decision 109)", async () => {
+    const sessionId = await changeTurn("Done.");
+    await receiveMessage(deps, message(2), log);
+    verdict = { kind: "failed", names: ["ci"] };
+    runtime.work(sessionId);
+    runtime.pushed(sessionId);
+    runtime.finish(sessionId, "Renamed it too.");
+    await sync(sessionId);
+    expect(asked).toEqual([url, url]);
+    expect(slack.statuses().at(-1)).toEqual({ messageIds: ["100.000002"], status: "failed" });
+  });
+
+  it("cannot call a change done without a way to read checks", async () => {
+    delete deps.checks;
+    await changeTurn("Done.");
+    expect(slack.replies()).toContain(changeNotes.not_checked(url));
+    expect(slack.statuses()).toEqual([{ messageIds: ["100.000001"], status: "failed" }]);
   });
 });
 

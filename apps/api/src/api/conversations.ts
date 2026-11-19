@@ -13,6 +13,7 @@ import {
   type AgentEventRecord,
   type AgentRuntime,
 } from "../agent/runtime.ts";
+import type { PullRequestChecks } from "../github/checks.ts";
 import type { Logger } from "../log.ts";
 import {
   attachSession,
@@ -59,6 +60,11 @@ export interface ConversationDeps {
   deliverers: Partial<Record<MessageSource, Deliverer>>;
   /** Waits between checks for a session another request is starting. Replaced in tests. */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * Reads a pull request's CI checks, for ✅ on a change (decision 132). Without it, a turn
+   * that pushed or opened a pull request cannot be called done.
+   */
+  checks?: PullRequestChecks;
 }
 
 /** How long a message may wait for the agent before reconcile looks at it. */
@@ -98,8 +104,20 @@ export const notes = {
   undeliverable:
     "I couldn't pass your message on to the agent, even after several tries. Please try again later.",
   stopped: "Stopped. Mention me again when you want to carry on.",
+  no_pull_request:
+    "I pushed a branch but didn't open a pull request, so this isn't done. Reply here if you want me to carry on.",
   nothing_to_stop: "There's nothing running in this thread to stop.",
 } as const;
+
+/** Notes for a change whose pull request is not done (decision 132). */
+export const changeNotes = {
+  failed: (url: string, names: readonly string[]) =>
+    `CI failed on ${url} (${names.join(", ")}), so this isn't done yet. Reply here if you want me to fix it.`,
+  pending: (url: string) =>
+    `CI was still running on ${url} when I stopped, so I can't call this done yet. Check it there.`,
+  not_checked: (url: string) =>
+    `I couldn't check CI on ${url}, so I can't call this done. Check it there.`,
+};
 
 export interface ReceiveResult {
   id: string;
@@ -335,8 +353,10 @@ async function readAgent(
     return lastEventAt;
   }
 
-  const status: SettledStatus = ending === "end_turn" ? "answered" : "failed";
-  const note = ending === "end_turn" ? undefined : notes[ending];
+  const { status, note } =
+    ending === "end_turn"
+      ? await judgeTurn(deps, conversation.id, events, stateIndex, log)
+      : { status: "failed" as const, note: notes[ending] };
   await settleAndQueue(
     deps,
     conversation,
@@ -408,6 +428,48 @@ export function mergeEvents(
   return [...latest.values()].sort(
     (a, b) => time(a) - time(b) || (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0),
   );
+}
+
+/**
+ * Whether a turn that ended normally did what it was asked (decision 132). A turn that pushed
+ * or opened a pull request is done only when that pull request's CI checks have all passed;
+ * any other turn is done when it ends. GitHub is asked only while messages wait for a status.
+ */
+async function judgeTurn(
+  deps: ConversationDeps,
+  conversationId: string,
+  events: readonly AgentEvent[],
+  endIndex: number,
+  log: Logger,
+): Promise<{ status: SettledStatus; note: string | undefined }> {
+  const done: { status: SettledStatus; note: string | undefined } = {
+    status: "answered",
+    note: undefined,
+  };
+  const before = events.slice(0, endIndex);
+  const turn = before.slice(before.findLastIndex(endsTurn) + 1);
+  if (!turn.some((event) => event.kind === "pushed" || event.kind === "pull_request")) return done;
+  if ((await pendingMessageCount(deps.db, conversationId)) === 0) return done;
+
+  const pullRequest = before.findLast((event) => event.kind === "pull_request");
+  if (pullRequest?.kind !== "pull_request") {
+    return { status: "failed", note: notes.no_pull_request };
+  }
+  const verdict =
+    deps.checks === undefined
+      ? { kind: "not_checked" as const, reason: "no GitHub token" }
+      : await deps.checks.verdict(pullRequest.url);
+  log.info("conversation.checks_read", { conversationId, url: pullRequest.url, verdict });
+  switch (verdict.kind) {
+    case "passed":
+      return done;
+    case "failed":
+      return { status: "failed", note: changeNotes.failed(pullRequest.url, verdict.names) };
+    case "pending":
+      return { status: "failed", note: changeNotes.pending(pullRequest.url) };
+    case "not_checked":
+      return { status: "failed", note: changeNotes.not_checked(pullRequest.url) };
+  }
 }
 
 /** Whether an event ends a turn. Waiting for a tool call's approval does not (decision 119). */
