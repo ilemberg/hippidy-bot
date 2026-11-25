@@ -1,6 +1,6 @@
 # Slice 2.6: the wiki
 
-Status: **started 2026-11-25 (decisions 201 and 202).** The wave is in `wave-2.md`; the
+Status: **built 2026-11-25, not merged (decisions 201 and 202).** The wave is in `wave-2.md`; the
 direction in `team-layer.md`, "Its records". G11 is answered (198); who may reject, edit and
 supersede is answered by 201.
 
