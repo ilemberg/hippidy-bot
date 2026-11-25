@@ -35,6 +35,19 @@ export const outboundDeliverySchema = z.discriminatedUnion("kind", [
     needsStart: z.boolean(),
   }),
   z.strictObject({
+    /**
+     * A decision recorded in the thread (slice 2.2). With `needsConfirm` it is a proposal, and
+     * the source offers a way for a person to confirm it, which calls
+     * `POST /v1/decisions/:decisionId/confirm`.
+     */
+    kind: z.literal("decision"),
+    target: deliveryTargetSchema,
+    decisionId: z.guid(),
+    /** Markdown. Each source converts it to its own format. */
+    text: z.string().min(1),
+    needsConfirm: z.boolean(),
+  }),
+  z.strictObject({
     kind: z.literal("status"),
     target: deliveryTargetSchema,
     /** The settled messages, by their id in the source system. */

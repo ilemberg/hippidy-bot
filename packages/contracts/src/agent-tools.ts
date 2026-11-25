@@ -10,7 +10,13 @@ const noNull = (value: string) => !value.includes("\u0000");
 const noNullMessage = { message: "Must not contain a null character" };
 
 /** The names of the custom tools the API answers. */
-export const customToolNameSchema = z.enum(["link_project", "record_approval", "start_change"]);
+export const customToolNameSchema = z.enum([
+  "link_project",
+  "record_approval",
+  "start_change",
+  "record_decision",
+  "recall_decisions",
+]);
 export type CustomToolName = z.infer<typeof customToolNameSchema>;
 
 /**
@@ -103,3 +109,36 @@ export const startChangeOutputSchema = z.strictObject({
   status: z.enum(["started", "waiting_for_start"]),
 });
 export type StartChangeOutput = z.infer<typeof startChangeOutputSchema>;
+
+/**
+ * Input of `record_decision` (slice 2.2, decision 192): what was decided in the thread, by whom.
+ * The API decides whether it is active or proposed; `askedToRecord` is the agent's word that
+ * the person asked for it to be recorded, one of the conditions for active.
+ */
+export const recordDecisionInputSchema = z.strictObject({
+  statement: z.string().trim().min(1).max(500).refine(noNull, noNullMessage),
+  reason: z.string().trim().min(1).max(2000).refine(noNull, noNullMessage).optional(),
+  area: z.string().trim().min(1).max(100).refine(noNull, noNullMessage).optional(),
+  decidedBy: z.strictObject({
+    actorId: z.string().trim().min(1).max(255).refine(noNull, noNullMessage),
+  }),
+  askedToRecord: z.boolean(),
+  /** The number of an active decision this one replaces. */
+  supersedes: z.number().int().positive().max(1_000_000).optional(),
+});
+export type RecordDecisionInput = z.infer<typeof recordDecisionInputSchema>;
+
+/** Result of `record_decision`: its number, and whether it is active or waits for Confirm. */
+export const recordDecisionOutputSchema = z.strictObject({
+  number: z.number().int().positive(),
+  status: z.enum(["active", "proposed"]),
+});
+export type RecordDecisionOutput = z.infer<typeof recordDecisionOutputSchema>;
+
+/** Input of `recall_decisions`: words to search the active decisions for, and an area. */
+export const recallDecisionsInputSchema = z.strictObject({
+  query: z.string().trim().min(1).max(200).refine(noNull, noNullMessage),
+  area: z.string().trim().min(1).max(100).refine(noNull, noNullMessage).optional(),
+  limit: z.number().int().min(1).max(20).optional(),
+});
+export type RecallDecisionsInput = z.infer<typeof recallDecisionsInputSchema>;

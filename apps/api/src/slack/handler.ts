@@ -1,4 +1,4 @@
-import type { ContextMessage, StartBriefResult } from "@hippidy/contracts";
+import type { ConfirmDecisionResult, ContextMessage, StartBriefResult } from "@hippidy/contracts";
 import type { Logger } from "../log.ts";
 import type { ApiClient } from "./api-client.ts";
 import { z } from "zod";
@@ -49,6 +49,8 @@ export const RECEIVED_REACTION = "eyes";
 export const STOP_REACTION = "octagonal_sign";
 /** The `action_id` of the Start button under a brief (slice 2.1, G17). */
 export const START_CHANGE_ACTION = "start_change";
+/** The Confirm button under a proposed decision (slice 2.2, decision 192). */
+export const CONFIRM_DECISION_ACTION = "confirm_decision";
 
 /** A message that is only "stop" (after the bot's mention), never "don't stop". */
 export function isStopCommand(text: string): boolean {
@@ -374,6 +376,73 @@ export async function handleStartBriefAction(
     }
     log.info("slack.brief_start", { briefId: briefId.data, result: start.result.status });
     return start.result.status;
+  } catch (error) {
+    log.error("slack.api_call_failed", { error });
+    return "api_rejected";
+  }
+}
+
+export type ConfirmDecisionOutcome =
+  ConfirmDecisionResult["status"] | "ignored" | "invalid_action" | "api_rejected";
+
+/**
+ * Handles a press of the Confirm button under a proposed decision (slice 2.2, decision 192):
+ * asks the API to confirm it, as the person who pressed it. The API says in the thread who
+ * confirmed it. Any other action is ignored. Never throws; every outcome is logged and returned.
+ */
+export async function handleConfirmDecisionAction(
+  body: unknown,
+  deps: { api: ApiClient; slack: Pick<SlackActions, "userName">; log: Logger },
+): Promise<ConfirmDecisionOutcome> {
+  const parsed = blockActionsSchema.safeParse(body);
+  if (!parsed.success) {
+    deps.log.warn("slack.decision_confirm.invalid", {
+      issues: parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`),
+    });
+    return "invalid_action";
+  }
+  const payload = parsed.data;
+  const [action] = payload.actions;
+  if (action?.action_id !== CONFIRM_DECISION_ACTION) return "ignored";
+  const correlationId = action.action_ts ?? payload.trigger_id;
+  const log = deps.log.child({ correlationId, source: "slack" });
+  const decisionId = briefIdSchema.safeParse(action.value);
+  if (!decisionId.success) {
+    log.warn("slack.decision_confirm.invalid", { issues: ["actions.0.value: not a decision id"] });
+    return "invalid_action";
+  }
+  const displayName = await deps.slack
+    .userName(payload.user.id)
+    .catch((error: unknown): undefined => {
+      log.warn("slack.user_lookup_failed", { error });
+      return undefined;
+    });
+  try {
+    const confirmed = await deps.api.confirmDecision(
+      decisionId.data,
+      {
+        source: "slack",
+        workspaceId: payload.team.id,
+        actor:
+          displayName === undefined
+            ? { id: payload.user.id }
+            : { id: payload.user.id, displayName },
+      },
+      correlationId,
+    );
+    if (confirmed.kind === "rejected") {
+      log.error("slack.decision_confirm_rejected", {
+        decisionId: decisionId.data,
+        status: confirmed.status,
+        error: confirmed.error,
+      });
+      return "api_rejected";
+    }
+    log.info("slack.decision_confirm", {
+      decisionId: decisionId.data,
+      result: confirmed.result.status,
+    });
+    return confirmed.result.status;
   } catch (error) {
     log.error("slack.api_call_failed", { error });
     return "api_rejected";

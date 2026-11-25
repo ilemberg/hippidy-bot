@@ -380,8 +380,8 @@ export async function recordInbound(
   const inserted = await db.query(
     `insert into inbound_messages
        (conversation_id, source, source_event_id, workspace_id, channel_id, message_id,
-        actor_id, text, sent_at, actor_name)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        actor_id, text, sent_at, actor_name, carried_context)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      on conflict do nothing
      returning id`,
     [
@@ -395,6 +395,8 @@ export async function recordInbound(
       message.text,
       message.sentAt,
       message.actor.displayName ?? null,
+      // Other people's words came with it (decision 164): a decision in its turn is proposed.
+      (message.context?.length ?? 0) > 0,
     ],
   );
   if (inserted[0] !== undefined) {

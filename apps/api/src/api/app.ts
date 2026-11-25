@@ -7,7 +7,10 @@ import {
   listSessionsQuerySchema,
   type SessionList,
   MAX_INBOUND_MESSAGE_BYTES,
+  confirmDecisionRequestSchema,
+  listDecisionsQuerySchema,
   startBriefRequestSchema,
+  type DecisionList,
   stopRequestSchema,
   type AcceptedMessage,
   type AgentEventList,
@@ -23,6 +26,7 @@ import type { ApiConfig } from "../config.ts";
 import type { Logger } from "../log.ts";
 import { findChangeBySession } from "../store/changes.ts";
 import { listSessions } from "../store/sessions.ts";
+import { searchDecisions } from "../store/decisions.ts";
 import { findConversationBySession } from "../store/conversations.ts";
 import {
   listConversations,
@@ -32,6 +36,7 @@ import {
 } from "../store/reading.ts";
 import { requireServiceOrPerson, requireServiceToken } from "./auth.ts";
 import { startBriefByPerson, syncChange } from "./changes.ts";
+import { confirmDecisionByPerson } from "./decisions.ts";
 import {
   reconcile,
   receiveMessage,
@@ -186,6 +191,38 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
     },
   );
 
+  // A person confirms a proposed decision (slice 2.2, decision 192), from the source it was
+  // posted in. The decision must belong to a thread in their source and workspace.
+  api.post(
+    "/v1/decisions/:decisionId/confirm",
+    requireServiceToken(deps.config.serviceToken),
+    limitBody,
+    async (c) => {
+      const decisionId = conversationIdSchema.safeParse(c.req.param("decisionId"));
+      if (!decisionId.success) return errorResponse(c, 404, "not_found", "No such decision");
+      let body: unknown;
+      try {
+        body = await c.req.json();
+      } catch {
+        return errorResponse(c, 400, "invalid_request", "Request body must be JSON");
+      }
+      const parsed = confirmDecisionRequestSchema.safeParse(body);
+      if (!parsed.success) {
+        return errorResponse(c, 400, "invalid_request", "Request body is invalid");
+      }
+      if (deps.conversations === undefined) {
+        return errorResponse(c, 503, "not_configured", "Conversations are not configured");
+      }
+      const result = await confirmDecisionByPerson(
+        deps.conversations,
+        decisionId.data,
+        parsed.data,
+        c.var.log,
+      );
+      return c.json(result, 202);
+    },
+  );
+
   // Who the API takes the caller to be: a service, or a person signed in to the web app
   // (decisions 193 and 194). The web app reads it to show who is signed in.
   const people = requireServiceOrPerson(deps.config.serviceToken, deps.config.personAuth);
@@ -310,6 +347,25 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
   // database the status check uses, which is there even when the agent is not configured.
   // They write as well as read, so they stay on the service token.
   addProjectRoutes(api, { db: deps.status.db, auth: serviceOnly, limitBody });
+
+  // The decisions on record (slice 2.2): read from the database alone, newest or best matching
+  // first. The web app's wiki (slice 2.6) builds on this.
+  api.get("/v1/decisions", readers, async (c) => {
+    const query = listDecisionsQuerySchema.safeParse(c.req.query());
+    if (!query.success) return invalidQuery(c, query.error);
+    const db = deps.conversations?.db ?? deps.status.db;
+    if (db === undefined) {
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    }
+    const list: DecisionList = {
+      decisions: await searchDecisions(db, {
+        query: query.data.q,
+        statuses: query.data.status === undefined ? undefined : [query.data.status],
+        limit: query.data.limit,
+      }),
+    };
+    return c.json(list);
+  });
 
   // Anthropic calls this when a session changes state (decision 13). The body is thin: it
   // names the session, and the current state is fetched from Anthropic.

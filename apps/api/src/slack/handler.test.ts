@@ -6,6 +6,7 @@ import fixture from "./fixtures/app-mention.json" with { type: "json" };
 import {
   handleMention,
   handleReaction,
+  handleConfirmDecisionAction,
   handleStartBriefAction,
   isStopCommand,
   type MentionDelivery,
@@ -31,6 +32,7 @@ function setup(
   const posted: { message: InboundMessage; correlationId: string }[] = [];
   const stops: StopRequest[] = [];
   const starts: { briefId: string; request: StartBriefRequest; correlationId: string }[] = [];
+  const confirms: { decisionId: string; request: unknown; correlationId: string }[] = [];
   const reactions: { channel: string; timestamp: string; name: string }[] = [];
   const api: ApiClient = {
     postMessage: async (message, correlationId) => {
@@ -40,6 +42,10 @@ function setup(
     stop: (request) => {
       stops.push(request);
       return Promise.resolve({ kind: "done", result: { status: "stopped" } });
+    },
+    confirmDecision: (decisionId, request, correlationId) => {
+      confirms.push({ decisionId, request, correlationId });
+      return Promise.resolve({ kind: "done", result: { status: "confirmed" } });
     },
     startBrief: async (briefId, request, correlationId) => {
       starts.push({ briefId, request, correlationId });
@@ -66,6 +72,7 @@ function setup(
     posted,
     stops,
     starts,
+    confirms,
     reactions,
     lines,
     threadReads,
@@ -558,5 +565,45 @@ describe("handleStartBriefAction", () => {
     expect(await handleStartBriefAction(press({ value: "../stop" }), deps)).toBe("invalid_action");
     expect(starts).toEqual([]);
     expect(lines.filter((line) => line.msg === "slack.brief_start.invalid")).toHaveLength(3);
+  });
+});
+
+describe("handleConfirmDecisionAction (slice 2.2)", () => {
+  const decisionId = "7a1c2a9e-4b7d-4c3a-9e2f-1a2b3c4d5e6f";
+
+  function press(actionId = "confirm_decision", value = decisionId) {
+    return {
+      type: "block_actions",
+      token: "legacy-verification-token",
+      trigger_id: "1234.5678.abcd",
+      team: { id: "T1" },
+      user: { id: "U3" },
+      actions: [{ type: "button", action_id: actionId, value, action_ts: "1700000001.000001" }],
+    };
+  }
+
+  it("confirms the decision as the person who pressed Confirm, with their name", async () => {
+    const { deps, confirms, lines } = setup({ userName: () => Promise.resolve("Grace") });
+    expect(await handleConfirmDecisionAction(press(), deps)).toBe("confirmed");
+    expect(confirms).toEqual([
+      {
+        decisionId,
+        request: { source: "slack", workspaceId: "T1", actor: { id: "U3", displayName: "Grace" } },
+        correlationId: "1700000001.000001",
+      },
+    ]);
+    expect(JSON.stringify(lines)).not.toContain("legacy-verification-token");
+  });
+
+  it("ignores other buttons, and refuses a value that is not a decision id", async () => {
+    const { deps, confirms } = setup();
+    expect(await handleConfirmDecisionAction(press("start_change"), deps)).toBe("ignored");
+    expect(await handleConfirmDecisionAction(press("confirm_decision", "nope"), deps)).toBe(
+      "invalid_action",
+    );
+    expect(await handleConfirmDecisionAction({ type: "view_submission" }, deps)).toBe(
+      "invalid_action",
+    );
+    expect(confirms).toEqual([]);
   });
 });

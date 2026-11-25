@@ -10,7 +10,9 @@ import { readSlackConfig } from "./config.ts";
 import {
   handleMention,
   handleReaction,
+  handleConfirmDecisionAction,
   handleStartBriefAction,
+  CONFIRM_DECISION_ACTION,
   START_CHANGE_ACTION,
   type SlackActions,
 } from "./handler.ts";
@@ -168,6 +170,15 @@ export function createSlackEventsHandler(deps: SlackRouteDeps): SlackEventsHandl
     app.action(START_CHANGE_ACTION, async ({ ack, body, client }) => {
       await ack();
       await handleStartBriefAction(body, {
+        api: deps.api,
+        slack: slackActions(client),
+        log: deps.log,
+      });
+    });
+    // The Confirm button under a proposed decision (slice 2.2, decision 192).
+    app.action(CONFIRM_DECISION_ACTION, async ({ ack, body, client }) => {
+      await ack();
+      await handleConfirmDecisionAction(body, {
         api: deps.api,
         slack: slackActions(client),
         log: deps.log,

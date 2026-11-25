@@ -1,6 +1,7 @@
 import {
   conversationDetailSchema,
   conversationListSchema,
+  decisionListSchema,
   errorResponseSchema,
   meResponseSchema,
   sessionListSchema,
@@ -169,6 +170,15 @@ describe("a person reading the record", () => {
     expect(lines).toContainEqual(
       expect.objectContaining({ msg: "conversations.listed", actorId: "U0123456789" }),
     );
+  });
+
+  it("lists decisions", async () => {
+    const { app } = setup();
+    const res = await app.request("/v1/decisions?limit=1", {
+      headers: bearer(await signPersonToken()),
+    });
+    expect(res.status).toBe(200);
+    expect(decisionListSchema.parse(await res.json()).decisions).toHaveLength(1);
   });
 });
 

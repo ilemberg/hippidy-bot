@@ -32,6 +32,7 @@ import {
 } from "./record.ts";
 import { createBrief, unsentBriefs, workerReportsSince } from "./changes.ts";
 import { listSessions } from "./sessions.ts";
+import { searchDecisions } from "./decisions.ts";
 import { applyMigration, applyMigrations } from "./testing.ts";
 
 // The production client (postgres.js) over a real Postgres connection, served by PGlite.
@@ -615,6 +616,16 @@ describe("the sessions list through postgres.js (slice 2.4)", () => {
     expect(thread?.latestActivity?.text).toBe("before ab \ufffd after");
     expect(worker?.cost).toEqual({ spentMinor: 123, budgetMinor: 500, currency: "USD" });
     expect(worker?.startedAt).toMatch(/^\d{4}-\d\d-\d\dT.*Z$/);
+  });
+});
+
+describe("decisions through postgres.js (slice 2.2)", () => {
+  it("returns numbers as numbers and times as ISO strings, and searches by words", async () => {
+    const found = await searchDecisions(db, { query: "a person merges, https://x.y/z", limit: 3 });
+    expect(found.length).toBeGreaterThan(0);
+    expect(typeof found[0]?.number).toBe("number");
+    expect(found[0]?.decidedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(await searchDecisions(db, { query: "the and of", limit: 3 })).toEqual([]);
   });
 });
 

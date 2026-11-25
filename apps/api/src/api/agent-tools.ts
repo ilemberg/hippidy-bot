@@ -1,13 +1,19 @@
 import {
   customToolNameSchema,
   linkProjectInputSchema,
+  recallDecisionsInputSchema,
   recordApprovalInputSchema,
+  recordDecisionInputSchema,
   startChangeInputSchema,
+  type Decision,
   type LinkProjectInput,
   type LinkProjectOutput,
   type Project,
   type RecordApprovalInput,
   type RecordApprovalOutput,
+  type RecallDecisionsInput,
+  type RecordDecisionInput,
+  type RecordDecisionOutput,
   type StartChangeInput,
   type StartChangeOutput,
 } from "@hippidy/contracts";
@@ -16,6 +22,13 @@ import type { AgentEvent } from "../agent/runtime.ts";
 import { actorNameInConversation, createBrief } from "../store/changes.ts";
 import { enqueueDelivery, getConversation } from "../store/conversations.ts";
 import type { Db } from "../store/db.ts";
+import {
+  findDecisionByNumber,
+  readTurnMessage,
+  readTurnSenders,
+  recordDecision,
+  searchDecisions,
+} from "../store/decisions.ts";
 import {
   createProject,
   getProject,
@@ -59,6 +72,7 @@ export const toolErrors = {
   notInThread: "only people who have written in this thread can be recorded as approving",
   noProject: (id: string) => `there is no project with id ${id}`,
   noChange: (id: string) => `this thread has no change with id ${id}`,
+  noActiveDecision: (n: number) => `there is no active decision ${String(n)} to supersede`,
   changeStopped:
     "that change was stopped; leave out changeId to start a new change if it is still wanted",
   noRequester:
@@ -100,7 +114,171 @@ export async function answerCustomToolCall(
       if (!input.success) return invalid(name.data, input.error);
       return startChange(db, conversationId, context, call, messages, events, input.data);
     }
+    case "record_decision": {
+      const input = recordDecisionInputSchema.safeParse(call.input);
+      if (!input.success) return invalid(name.data, input.error);
+      return recordDecisionFor(db, conversationId, context, call, messages, events, input.data);
+    }
+    case "recall_decisions": {
+      const input = recallDecisionsInputSchema.safeParse(call.input);
+      if (!input.success) return invalid(name.data, input.error);
+      return recallDecisions(db, input.data);
+    }
   }
+}
+
+/** Why a recorded decision is only proposed, for the thread; undefined when it is active. */
+export function proposedBecause(conditions: {
+  deciderIsAsker: boolean;
+  askedToRecord: boolean;
+  untrustedRead: string | undefined;
+  othersInTurn?: boolean;
+}): string | undefined {
+  if (conditions.untrustedRead !== undefined) {
+    return `I ${conditions.untrustedRead} first, so a person needs to confirm it`;
+  }
+  if (conditions.othersInTurn === true) {
+    return "other people's words came with the message, so a person needs to confirm it";
+  }
+  if (!conditions.deciderIsAsker)
+    return "it was not recorded at the request of the person who decided it";
+  if (!conditions.askedToRecord) return "nobody asked for it to be recorded";
+  return undefined;
+}
+
+/** A recorded decision as people read it in the thread. */
+export function decisionForThread(
+  decision: Decision,
+  because: string | undefined,
+  replaced?: { number: number; statement: string },
+): string {
+  const who = decision.decidedBy.name ?? decision.decidedBy.actorId ?? "someone";
+  const reason = decision.reason === null ? "" : ` Why: ${decision.reason}`;
+  // What it replaces is quoted, so whoever confirms a proposal sees which decision it retires.
+  const quoted =
+    replaced === undefined
+      ? ""
+      : `: "${replaced.statement.length > 300 ? `${replaced.statement.slice(0, 299)}…` : replaced.statement}"`;
+  const replaces =
+    decision.supersedes === null
+      ? ""
+      : ` It replaces decision ${String(decision.supersedes)}${quoted}.`;
+  return because === undefined
+    ? `**Recorded as decision ${String(decision.number)}:** ${decision.statement}\n\n_Decided by ${who}.${reason}${replaces}_`
+    : `**Proposed decision ${String(decision.number)}:** ${decision.statement}\n\n_Decided by ${who}.${reason}${replaces} It is only proposed because ${because}: press Confirm if the team has decided this._`;
+}
+
+/**
+ * Records a decision made in the thread (slice 2.2, decision 192). The API decides its status:
+ * active only when the person who decided it sent the message the turn is answering, the agent
+ * says they asked for it to be recorded, and the session read nothing untrusted first (the
+ * start rule, 181 and 189). Otherwise it is proposed, and posted with Confirm.
+ */
+async function recordDecisionFor(
+  db: Db,
+  conversationId: string,
+  context: ToolCallContext,
+  call: CustomToolCall,
+  messages: readonly ProcessedUserMessage[],
+  events: readonly AgentEvent[],
+  input: RecordDecisionInput,
+): Promise<CustomToolAnswer> {
+  const decider = {
+    source: context.source,
+    workspaceId: context.workspaceId,
+    actorId: input.decidedBy.actorId,
+  };
+  if (!(await hasWrittenInConversation(db, conversationId, decider))) {
+    return error(toolErrors.notInThread);
+  }
+  const turn =
+    call.processedAt === null
+      ? undefined
+      : await readTurnMessage(db, conversationId, call.processedAt, messages);
+  // Every message of the call's own turn must be the decider's, and none may have come with
+  // other people's words from the thread: anyone else's text could have steered the call.
+  const senders = await readTurnSenders(db, conversationId, turnMessages(events, call.id));
+  const deciderAlone =
+    senders.actorIds.length > 0 &&
+    senders.actorIds.every((actorId) => actorId === input.decidedBy.actorId);
+  const because = proposedBecause({
+    deciderIsAsker: deciderAlone && turn?.actorId === input.decidedBy.actorId,
+    askedToRecord: input.askedToRecord,
+    untrustedRead: startReason(events, call.id),
+    othersInTurn: senders.carriedContext,
+  });
+  const replaced =
+    input.supersedes === undefined ? undefined : await findDecisionByNumber(db, input.supersedes);
+  const result = await recordDecision(db, {
+    customToolUseId: call.id,
+    conversationId,
+    messageId: turn?.actorId === input.decidedBy.actorId ? turn.messageId : null,
+    statement: input.statement,
+    reason: input.reason,
+    area: input.area,
+    decidedBy: {
+      ...decider,
+      name: await actorNameInConversation(db, conversationId, input.decidedBy.actorId),
+    },
+    status: because === undefined ? "active" : "proposed",
+    supersedes: input.supersedes,
+  });
+  if (result.kind === "no_superseded") {
+    return error(toolErrors.noActiveDecision(input.supersedes ?? 0));
+  }
+  const { decision } = result;
+  const proposed = decision.status === "proposed";
+  // Queued under the decision's id, so answering the call again posts it once.
+  const conversation = await getConversation(db, conversationId);
+  await enqueueDelivery(db, conversationId, `decision:${decision.id}`, "note", {
+    kind: "decision",
+    target: { ...conversation.key },
+    decisionId: decision.id,
+    text: decisionForThread(
+      decision,
+      proposed ? (because ?? "it is a proposal") : undefined,
+      replaced === undefined
+        ? undefined
+        : { number: replaced.number, statement: replaced.statement },
+    ),
+    needsConfirm: proposed,
+  });
+  const output: RecordDecisionOutput = {
+    number: decision.number,
+    status: proposed ? "proposed" : "active",
+  };
+  return { text: JSON.stringify(output), isError: false };
+}
+
+/** Searches the active decisions for the agent (slice 2.2). */
+async function recallDecisions(db: Db, input: RecallDecisionsInput): Promise<CustomToolAnswer> {
+  const found = await searchDecisions(db, {
+    query: input.query,
+    area: input.area,
+    limit: input.limit ?? 10,
+  });
+  return {
+    text: JSON.stringify({ decisions: found.map(decisionForAgent) }),
+    isError: false,
+  };
+}
+
+/** A decision as the agent reads it: what, why, who, when and where, to cite. */
+export function decisionForAgent(decision: Decision) {
+  return {
+    number: decision.number,
+    statement: decision.statement,
+    ...(decision.reason === null ? {} : { reason: decision.reason }),
+    ...(decision.area === null ? {} : { area: decision.area }),
+    decidedBy: decision.decidedBy.name ?? decision.decidedBy.actorId,
+    decidedOn: decision.decidedAt.slice(0, 10),
+    where:
+      decision.origin === "import"
+        ? `the planning log, entry ${decision.originRef ?? "?"}`
+        : decision.messageId === null
+          ? "a thread"
+          : `a thread, message ${decision.messageId}`,
+  };
 }
 
 /**

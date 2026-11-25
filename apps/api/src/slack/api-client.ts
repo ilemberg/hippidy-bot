@@ -5,6 +5,9 @@ import {
   type AcceptedMessage,
   type ErrorResponse,
   type InboundMessage,
+  confirmDecisionResultSchema,
+  type ConfirmDecisionRequest,
+  type ConfirmDecisionResult,
   startBriefResultSchema,
   type StartBriefRequest,
   type StartBriefResult,
@@ -26,6 +29,10 @@ export type StartBriefCallResult =
   | { kind: "done"; result: StartBriefResult }
   | { kind: "rejected"; status: number; error: ErrorResponse["error"] | undefined };
 
+export type ConfirmDecisionCallResult =
+  | { kind: "done"; result: ConfirmDecisionResult }
+  | { kind: "rejected"; status: number; error: ErrorResponse["error"] | undefined };
+
 export interface ApiClient {
   postMessage(message: InboundMessage, correlationId: string): Promise<PostMessageResult>;
   stop(request: StopRequest, correlationId: string): Promise<StopCallResult>;
@@ -35,6 +42,12 @@ export interface ApiClient {
     request: StartBriefRequest,
     correlationId: string,
   ): Promise<StartBriefCallResult>;
+  /** A person pressed Confirm under a proposed decision (slice 2.2). */
+  confirmDecision(
+    decisionId: string,
+    request: ConfirmDecisionRequest,
+    correlationId: string,
+  ): Promise<ConfirmDecisionCallResult>;
 }
 
 /** The parts of an HTTP response the client reads. */
@@ -91,6 +104,17 @@ export function createApiClient(options: {
       const { status, body } = await post("/v1/stop", request, correlationId);
       if (status === 202) {
         const result = stopResultSchema.safeParse(body);
+        if (result.success) return { kind: "done", result: result.data };
+      }
+      const error = errorResponseSchema.safeParse(body);
+      return { kind: "rejected", status, error: error.data?.error };
+    },
+
+    async confirmDecision(decisionId, request, correlationId) {
+      const path = `/v1/decisions/${encodeURIComponent(decisionId)}/confirm`;
+      const { status, body } = await post(path, request, correlationId);
+      if (status === 202) {
+        const result = confirmDecisionResultSchema.safeParse(body);
         if (result.success) return { kind: "done", result: result.data };
       }
       const error = errorResponseSchema.safeParse(body);
