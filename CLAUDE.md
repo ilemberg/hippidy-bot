@@ -52,7 +52,8 @@ all pass. CI runs these, then `pnpm build && pnpm smoke`.
   logs and is retried. `src/store/reading.ts` reads it back for the `GET /v1/conversations`
   routes, and `src/store/sessions.ts` for `GET /v1/sessions`; neither calls the agent runtime.
 - `supabase/migrations` holds the schema. Add a new timestamped file for every change; never
-  edit one that has been merged. CI applies them on merge to `main`, at the same time as Vercel
+  edit one that has been merged. Stamp it with the current UTC time: `supabase db push`
+  refuses a file dated before the newest one production has applied. CI applies them on merge to `main`, at the same time as Vercel
   deploys, so a migration must work with both the old and the new code (add first, remove
   later). Every table has row level
   security on and no policies: only the API's direct connection can read it.
