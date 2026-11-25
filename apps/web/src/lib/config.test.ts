@@ -6,6 +6,7 @@ const env: Env = {
   SLACK_CLIENT_ID: "1234.5678",
   SLACK_CLIENT_SECRET: "c".repeat(32),
   SLACK_WORKSPACE_ID: "T0123456789",
+  SLACK_BOT_TOKEN: "xoxb-test-bot-token",
   WEB_API_SECRET: "a".repeat(48),
   WEB_SESSION_SECRET: "b".repeat(48),
   API_BASE_URL: "https://hippidy-bot.vercel.app",
@@ -16,7 +17,12 @@ describe("readWebConfig", () => {
   it("reads a complete configuration", () => {
     const { log } = memoryLogger();
     expect(readWebConfig(env, log)).toEqual({
-      slack: { clientId: "1234.5678", clientSecret: "c".repeat(32), workspaceId: "T0123456789" },
+      slack: {
+        clientId: "1234.5678",
+        clientSecret: "c".repeat(32),
+        workspaceId: "T0123456789",
+        botToken: "xoxb-test-bot-token",
+      },
       apiSecret: "a".repeat(48),
       sessionSecret: "b".repeat(48),
       apiBaseUrl: "https://hippidy-bot.vercel.app",
@@ -37,6 +43,9 @@ describe("readWebConfig", () => {
     ["a missing client secret", { ...env, SLACK_CLIENT_SECRET: undefined }],
     ["a short API secret", { ...env, WEB_API_SECRET: "short" }],
     ["a workspace that is not a team id", { ...env, SLACK_WORKSPACE_ID: "acme" }],
+    ["an Enterprise Grid id, never a token's team", { ...env, SLACK_WORKSPACE_ID: "E0123456789" }],
+    ["no bot token", { ...env, SLACK_BOT_TOKEN: undefined }],
+    ["a user token for the bot's", { ...env, SLACK_BOT_TOKEN: "xoxp-1-2" }],
     ["the same secret twice", { ...env, WEB_SESSION_SECRET: env.WEB_API_SECRET }],
   ])("leaves sign-in off for %s, without logging a value", (_case, given: Env) => {
     const { log, lines } = memoryLogger();

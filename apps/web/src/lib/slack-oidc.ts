@@ -150,3 +150,62 @@ export async function verifyIdToken(
     },
   };
 }
+
+/** Slack's Web API method that says who a user is, read with the bot token. */
+export const SLACK_USERS_INFO_URL = "https://slack.com/api/users.info";
+
+const usersInfoSchema = z.object({
+  ok: z.boolean(),
+  error: z.string().optional(),
+  user: z
+    .object({
+      deleted: z.boolean().optional(),
+      is_bot: z.boolean().optional(),
+      is_restricted: z.boolean().optional(),
+      is_ultra_restricted: z.boolean().optional(),
+    })
+    .optional(),
+});
+
+export type MemberCheck =
+  | { kind: "member" }
+  | { kind: "not_member"; reason: "guest" | "deleted" | "bot" }
+  | { kind: "unknown"; detail: string };
+
+/**
+ * Whether a person who signed in is a full member of the workspace (decision 196): not a
+ * single- or multi-channel guest, not deactivated, not a bot. Guests get the same team id in
+ * their id token, and the web app shows every conversation the bot has had. Asked of Slack with
+ * the bot token; anything but a clear answer is `unknown`, and sign-in fails closed.
+ */
+export async function checkMember(options: {
+  fetch: Fetch;
+  botToken: string;
+  userId: string;
+}): Promise<MemberCheck> {
+  let response: Response;
+  try {
+    response = await options.fetch(
+      `${SLACK_USERS_INFO_URL}?user=${encodeURIComponent(options.userId)}`,
+      { method: "GET", headers: { authorization: `Bearer ${options.botToken}` } },
+    );
+  } catch {
+    return { kind: "unknown", detail: "unreachable" };
+  }
+  const parsed = usersInfoSchema.safeParse(await response.json().catch(() => undefined));
+  if (!parsed.success) return { kind: "unknown", detail: "invalid_response" };
+  const { ok, error, user } = parsed.data;
+  if (!ok || user === undefined) {
+    // Slack's error codes are plain words; anything else is not logged as it came.
+    return {
+      kind: "unknown",
+      detail: error !== undefined && /^\w{1,64}$/.test(error) ? error : "not_ok",
+    };
+  }
+  if (user.deleted === true) return { kind: "not_member", reason: "deleted" };
+  if (user.is_bot === true) return { kind: "not_member", reason: "bot" };
+  if (user.is_restricted === true || user.is_ultra_restricted === true) {
+    return { kind: "not_member", reason: "guest" };
+  }
+  return { kind: "member" };
+}

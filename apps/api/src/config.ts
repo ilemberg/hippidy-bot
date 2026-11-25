@@ -25,7 +25,8 @@ export interface PersonAuthConfig {
 }
 
 /** A Slack team id (`T...`), or an Enterprise Grid organization's (`E...`). */
-const workspaceIdSchema = z.string().regex(/^[TE][A-Z0-9]{2,30}$/);
+// A workspace's team id (`T…`), as the person token's `team` claim carries it.
+const workspaceIdSchema = z.string().regex(/^T[A-Z0-9]{2,30}$/);
 
 const tokenSchema = z
   .string()

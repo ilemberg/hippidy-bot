@@ -78,6 +78,7 @@ sign in", and gets no session.
 4. **Variables, Production only.** In the API's project: `WEB_API_SECRET` and
    `SLACK_WORKSPACE_ID` (the team id, `T...`). In the web project: `SLACK_CLIENT_ID` and
    `SLACK_CLIENT_SECRET` (the Slack app's Basic Information page), `SLACK_WORKSPACE_ID`,
+   `SLACK_BOT_TOKEN` (the same bot token as the API's, to refuse guests; decision 196),
    `WEB_API_SECRET` (the same value), `WEB_SESSION_SECRET`, `API_BASE_URL`
    (`https://hippidy-bot.vercel.app`) and `WEB_BASE_URL` (`https://<domain>`). Redeploy both.
 

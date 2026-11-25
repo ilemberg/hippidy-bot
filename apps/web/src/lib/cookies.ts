@@ -1,5 +1,8 @@
-/** The session: who is signed in. Sent with every request to this app. */
-export const SESSION_COOKIE = "hippidy_session";
+/**
+ * The session: who is signed in. Sent with every request to this app. The `__Host-` prefix
+ * makes the browser refuse it unless it is Secure, for this host only, with `Path=/`.
+ */
+export const SESSION_COOKIE = "__Host-hippidy_session";
 /** `state` and `nonce` while a person is away at Slack. Sent only to the callback. */
 export const SIGN_IN_COOKIE = "hippidy_sign_in";
 export const SIGN_IN_COOKIE_PATH = "/auth/slack/callback";

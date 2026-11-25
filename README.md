@@ -597,6 +597,7 @@ localhost and Safari does not. `pnpm build:web` builds it the way Vercel does.
 | `SLACK_WORKSPACE_ID`  | API and web | The workspace's team id (`T...`). Only its members can sign in, and the API refuses any other |
 | `SLACK_CLIENT_ID`     | web         | The Slack app's Client ID (Basic Information, App Credentials)                                |
 | `SLACK_CLIENT_SECRET` | web         | The Slack app's Client Secret, same page                                                      |
+| `SLACK_BOT_TOKEN`     | web         | The bot token the API has (`xoxb-...`): asks Slack whether a person is a guest (decision 196) |
 | `WEB_SESSION_SECRET`  | web         | Signs the session cookie. At least 32 characters, and not the same as `WEB_API_SECRET`        |
 | `API_BASE_URL`        | web         | The API's address, `https://hippidy-bot.vercel.app`                                           |
 | `WEB_BASE_URL`        | web         | The web app's own address, `https://<its domain>`, with no path                               |

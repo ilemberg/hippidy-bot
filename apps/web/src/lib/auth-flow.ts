@@ -14,6 +14,7 @@ import {
   authorizeUrl,
   callbackUrl,
   exchangeCode,
+  checkMember,
   TokenExchangeError,
   verifyIdToken,
   type Fetch,
@@ -155,6 +156,17 @@ export async function finishSignIn(request: Request, deps: AuthDeps): Promise<Re
     );
   }
 
+  // A guest gets the workspace's team id too; only full members may sign in (decision 196).
+  const member = await checkMember({
+    fetch: deps.fetch,
+    botToken: config.slack.botToken,
+    userId: check.person.actorId,
+  });
+  if (member.kind === "not_member") return fail("not_in_workspace", member.reason);
+  if (member.kind === "unknown") {
+    return fail("unavailable", "member_check_failed", { detail: member.detail });
+  }
+
   const session = await signSession(check.person, config.sessionSecret, now);
   log.info("signin.succeeded", {
     actorId: check.person.actorId,
@@ -166,8 +178,21 @@ export async function finishSignIn(request: Request, deps: AuthDeps): Promise<Re
   ]);
 }
 
-/** `POST /auth/signout`: ends the session in this browser. */
+/**
+ * `POST /auth/signout`: ends the session in this browser. Only from this app's own pages: a
+ * form on another site would otherwise sign people out (the browser's `Origin`, or
+ * `Sec-Fetch-Site`, says where the form was).
+ */
 export function signOut(request: Request, deps: Pick<AuthDeps, "config" | "log">): Response {
+  const origin = request.headers.get("origin");
+  const site = request.headers.get("sec-fetch-site");
+  const sameOrigin =
+    site === "same-origin" ||
+    (origin !== null && origin === deps.config?.webBaseUrl);
+  if (!sameOrigin) {
+    deps.log.warn("signin.signout_refused", { reason: "cross_origin" });
+    return new Response("Sign-out must come from this app.", { status: 403 });
+  }
   deps.log.info("signin.signed_out", { correlationId: randomUUID() });
   return redirect(home(request, deps.config), [deleteCookie(SESSION_COOKIE, "/")], 303);
 }

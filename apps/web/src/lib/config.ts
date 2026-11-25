@@ -10,6 +10,8 @@ export interface WebConfig {
     clientSecret: string;
     /** The one workspace whose members may sign in (Slack team id). */
     workspaceId: string;
+    /** The bot's token, to ask Slack whether a person is a full member, not a guest. */
+    botToken: string;
   };
   /** Signs the person tokens the API accepts. Shared with the API only. */
   apiSecret: string;
@@ -43,7 +45,9 @@ const origin = z
 const webConfigSchema = z.object({
   SLACK_CLIENT_ID: z.string().regex(/^\d+\.\d+$/, "must be a Slack client id, like 123.456"),
   SLACK_CLIENT_SECRET: z.string().regex(/^\S{16,}$/, "must be at least 16 characters"),
-  SLACK_WORKSPACE_ID: z.string().regex(/^[TE][A-Z0-9]{2,30}$/, "must be a Slack team id"),
+  // A workspace's team id (`T…`): the id token's team claim is never an Enterprise Grid id.
+  SLACK_WORKSPACE_ID: z.string().regex(/^T[A-Z0-9]{2,30}$/, "must be a Slack team id (T…)"),
+  SLACK_BOT_TOKEN: z.string().regex(/^xoxb-\S+$/, "must be a Slack bot token (xoxb-…)"),
   WEB_API_SECRET: secret,
   WEB_SESSION_SECRET: secret,
   API_BASE_URL: origin,
@@ -59,6 +63,7 @@ export function readWebConfig(env: Env, log: Logger): WebConfig | undefined {
     SLACK_CLIENT_ID: env.SLACK_CLIENT_ID,
     SLACK_CLIENT_SECRET: env.SLACK_CLIENT_SECRET,
     SLACK_WORKSPACE_ID: env.SLACK_WORKSPACE_ID,
+    SLACK_BOT_TOKEN: env.SLACK_BOT_TOKEN,
     WEB_API_SECRET: env.WEB_API_SECRET,
     WEB_SESSION_SECRET: env.WEB_SESSION_SECRET,
     API_BASE_URL: env.API_BASE_URL,
@@ -85,6 +90,7 @@ export function readWebConfig(env: Env, log: Logger): WebConfig | undefined {
       clientId: data.SLACK_CLIENT_ID,
       clientSecret: data.SLACK_CLIENT_SECRET,
       workspaceId: data.SLACK_WORKSPACE_ID,
+      botToken: data.SLACK_BOT_TOKEN,
     },
     apiSecret: data.WEB_API_SECRET,
     sessionSecret: data.WEB_SESSION_SECRET,

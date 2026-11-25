@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { finishSignIn, signOut, startSignIn, type AuthDeps } from "./auth-flow.ts";
 import { readCookie, SESSION_COOKIE, SIGN_IN_COOKIE } from "./cookies.ts";
 import { memoryLogger, type LogFields } from "./log.ts";
-import { SLACK_TOKEN_URL, type Fetch } from "./slack-oidc.ts";
+import { SLACK_TOKEN_URL, SLACK_USERS_INFO_URL, type Fetch } from "./slack-oidc.ts";
 import { config, slackIdToken, slackKeys, type IdTokenOptions, type SlackKeys } from "./testing.ts";
 import { readSession, signSignInState } from "./tokens.ts";
 
@@ -21,11 +21,15 @@ const web = (path: string, cookie?: string) =>
     cookie === undefined ? {} : { headers: { cookie } },
   );
 
-/** A fake of Slack's token endpoint that answers with `idToken`, and records what it got. */
-function slackTokenEndpoint(idToken: () => Promise<string>) {
+/**
+ * A fake of Slack: its token endpoint answers with `idToken`, and `users.info` with `user`
+ * (a full member unless a test says otherwise). Records what it got.
+ */
+function slackTokenEndpoint(idToken: () => Promise<string>, user: unknown = {}) {
   const calls: { url: string; body: URLSearchParams }[] = [];
   const fetch: Fetch = async (url, init) => {
     calls.push({ url, body: new URLSearchParams(typeof init.body === "string" ? init.body : "") });
+    if (url.startsWith(SLACK_USERS_INFO_URL)) return Response.json({ ok: true, user });
     return Response.json({ ok: true, access_token: "xoxp-unused", id_token: await idToken() });
   };
   return { fetch, calls };
@@ -59,12 +63,13 @@ async function callback(
     token?: (nonce: string) => Promise<string>;
     state?: (state: string) => string;
     cookie?: (cookie: string) => string | undefined;
+    user?: unknown;
   } = {},
 ) {
   const started = await begin();
   const token =
     options.token ?? ((nonce: string) => slackIdToken(slack, { nonce } satisfies IdTokenOptions));
-  const endpoint = slackTokenEndpoint(() => token(started.nonce));
+  const endpoint = slackTokenEndpoint(() => token(started.nonce), options.user ?? {});
   const d = deps({ fetch: endpoint.fetch });
   const state = options.state?.(started.state) ?? started.state;
   const cookie = options.cookie === undefined ? started.cookie : options.cookie(started.cookie);
@@ -132,10 +137,13 @@ describe("GET /auth/slack/callback", () => {
     expect(res.headers.get("location")).toBe(`${config.webBaseUrl}/`);
     const session = sessionCookieOf(res) ?? "";
     expect(session).toMatch(
-      /^hippidy_session=[\w.-]+; Path=\/; Max-Age=28800; HttpOnly; Secure; SameSite=Lax$/,
+      /^__Host-hippidy_session=[\w.-]+; Path=\/; Max-Age=28800; HttpOnly; Secure; SameSite=Lax$/,
     );
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe(SLACK_TOKEN_URL);
+    // The code exchange, then whether the person is a full member (decision 196).
+    expect(calls.map((call) => call.url)).toEqual([
+      SLACK_TOKEN_URL,
+      `${SLACK_USERS_INFO_URL}?user=U0123456789`,
+    ]);
     expect(Object.fromEntries(calls[0]?.body ?? [])).toEqual({
       client_id: config.slack.clientId,
       client_secret: config.slack.clientSecret,
@@ -270,12 +278,69 @@ describe("GET /auth/slack/callback", () => {
 });
 
 describe("POST /auth/signout", () => {
-  it("deletes the session cookie and goes home", () => {
-    const res = signOut(web("/auth/signout"), deps());
-    expect(res.status).toBe(303);
-    expect(res.headers.get("location")).toBe(`${config.webBaseUrl}/`);
-    expect(res.headers.getSetCookie()).toEqual([
-      "hippidy_session=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax",
-    ]);
+  const from = (headers: Record<string, string>) =>
+    new Request(new URL("/auth/signout", config.webBaseUrl), { method: "POST", headers });
+
+  it("deletes the session cookie and goes home, from this app's own page", () => {
+    for (const headers of [{ origin: config.webBaseUrl }, { "sec-fetch-site": "same-origin" }]) {
+      const res = signOut(from(headers), deps());
+      expect(res.status).toBe(303);
+      expect(res.headers.get("location")).toBe(`${config.webBaseUrl}/`);
+      expect(res.headers.getSetCookie()).toEqual([
+        "__Host-hippidy_session=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax",
+      ]);
+    }
+  });
+
+  it("refuses a form on another site, and a request that says nothing of where it came from", () => {
+    for (const headers of [
+      { origin: "https://evil.example", "sec-fetch-site": "cross-site" },
+      {},
+    ]) {
+      const res = signOut(from(headers), deps());
+      expect(res.status).toBe(403);
+      expect(res.headers.getSetCookie()).toEqual([]);
+    }
+  });
+});
+
+describe("only full members of the workspace sign in (decision 196)", () => {
+  it("refuses a guest, a deactivated account and a bot", async () => {
+    for (const [user, reason] of [
+      [{ is_restricted: true }, "guest"],
+      [{ is_ultra_restricted: true }, "guest"],
+      [{ deleted: true }, "deleted"],
+      [{ is_bot: true }, "bot"],
+    ] as const) {
+      const { res, lines } = await callback({ user });
+      expect(res.headers.get("location")).toBe(`${config.webBaseUrl}/?signin=not_in_workspace`);
+      expect(sessionCookieOf(res)).toBeUndefined();
+      expect(lines).toContainEqual(expect.objectContaining({ msg: "signin.rejected", reason }));
+    }
+  });
+
+  it("asks Slack with the bot token, and fails closed when it cannot tell", async () => {
+    const { calls } = await callback();
+    expect(calls.map((call) => call.url)).toContainEqual(
+      `${SLACK_USERS_INFO_URL}?user=U0123456789`,
+    );
+    const started = await begin();
+    const failing: Fetch = async (url) =>
+      url.startsWith(SLACK_USERS_INFO_URL)
+        ? Response.json({ ok: false, error: "missing_scope" })
+        : Response.json({
+            ok: true,
+            id_token: await slackIdToken(slack, { nonce: started.nonce }),
+          });
+    const d = deps({ fetch: failing });
+    const res = await finishSignIn(
+      web(`/auth/slack/callback?code=c&state=${started.state}`, started.cookie),
+      d,
+    );
+    expect(res.headers.get("location")).toBe(`${config.webBaseUrl}/?signin=unavailable`);
+    expect(d.lines).toContainEqual(
+      expect.objectContaining({ reason: "member_check_failed", detail: "missing_scope" }),
+    );
+    expect(JSON.stringify(d.lines)).not.toContain("xoxb-test-bot-token");
   });
 });

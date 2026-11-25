@@ -13,7 +13,12 @@ import { SLACK_TEAM_CLAIM } from "./slack-oidc.ts";
 // the network.
 
 export const config: WebConfig = {
-  slack: { clientId: "1234.5678", clientSecret: "s".repeat(32), workspaceId: "T0123456789" },
+  slack: {
+    clientId: "1234.5678",
+    clientSecret: "s".repeat(32),
+    workspaceId: "T0123456789",
+    botToken: "xoxb-test-bot-token",
+  },
   apiSecret: "a".repeat(48),
   sessionSecret: "b".repeat(48),
   apiBaseUrl: "https://api.example.test",
