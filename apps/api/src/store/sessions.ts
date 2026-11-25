@@ -75,8 +75,7 @@ export async function listSessions(db: Db, limit: number): Promise<SessionActivi
   const rows = await db.query(
     `with threads as (
        select 'thread'::text as kind, c.id as conversation_id, null::uuid as change_id,
-              (select m.text from inbound_messages m where m.conversation_id = c.id
-               order by m.sent_at, m.created_at limit 1) as title,
+              first.text as title,
               coalesce(c.agent_kind, 'engineer') as agent,
               case c.status when 'waiting' then 'working' when 'failed' then 'failed'
                             when 'stopped' then 'stopped' else 'idle' end as state,
@@ -90,7 +89,7 @@ export async function listSessions(db: Db, limit: number): Promise<SessionActivi
        from conversations c
        left join projects p on p.id = c.project_id
        left join lateral (
-         select m.actor_id, m.actor_name from inbound_messages m
+         select m.text, m.actor_id, m.actor_name from inbound_messages m
          where m.conversation_id = c.id order by m.sent_at, m.created_at limit 1
        ) first on true
        left join lateral (
@@ -107,7 +106,12 @@ export async function listSessions(db: Db, limit: number): Promise<SessionActivi
                order by b.seq desc limit 1),
               'worker'::text,
               case when ch.status = 'stopped' then 'stopped'
-                   when ch.status = 'waiting_for_start' then 'waiting_for_start'
+                   -- The first brief, or a follow-up the start rule held (181).
+                   when ch.status = 'waiting_for_start' or exists (
+                     select 1 from change_briefs b
+                     where b.change_id = ch.id and b.start_needed and b.started_at is null
+                       and b.gave_up_at is null
+                   ) then 'waiting_for_start'
                    when ch.session_state <> 'active' then 'failed'
                    when ch.waiting_since is not null then 'working'
                    else 'idle' end,

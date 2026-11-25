@@ -127,6 +127,38 @@ describe("listSessions", () => {
     expect((await listSessions(db, 10)).find((s) => s.kind === "worker")?.state).toBe("stopped");
   });
 
+  it("shows a follow-up brief the start rule held as waiting for Start (from the review)", async () => {
+    await receiveMessage(deps, message("310.1", "change it"), log);
+    const teammate = runtime.onlySessionId();
+    runtime.work(teammate);
+    runtime.callCustomTools(teammate, [
+      { name: "start_change", input: { title: "First", what: "x", why: "y", doneWhen: "z" } },
+    ]);
+    await syncConversation(deps, await conversation("310.1"), log);
+    const [row] = await db.query(`select id from changes`);
+    const changeId = String(row?.id);
+    // The worker has finished the first brief.
+    await db.query(`update changes set waiting_since = null`);
+    expect((await listSessions(db, 10)).find((s) => s.kind === "worker")?.state).toBe("idle");
+
+    runtime.finish(teammate, "Started.");
+    await syncConversation(deps, await conversation("310.1"), log);
+    await receiveMessage(deps, { ...message("310.1", "also SCRUM-12"), sourceEventId: "Ev2" }, log);
+    runtime.work(teammate);
+    runtime.mcpToolUse(teammate, "atlassian", "getJiraIssue");
+    runtime.callCustomTools(teammate, [
+      {
+        name: "start_change",
+        input: { title: "Second", what: "x", why: "y", doneWhen: "z", changeId },
+      },
+    ]);
+    await syncConversation(deps, await conversation("310.1"), log);
+    expect((await listSessions(db, 10)).find((s) => s.kind === "worker")).toMatchObject({
+      title: "Second",
+      state: "waiting_for_start",
+    });
+  });
+
   it("leaves out a thread with no session yet, shortens long text, and keeps to the limit", async () => {
     await conversation("400.1");
     expect(await listSessions(db, 10)).toEqual([]);
