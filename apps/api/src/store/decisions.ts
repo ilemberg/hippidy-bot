@@ -19,7 +19,8 @@ const columns = `
   d.conversation_id, coalesce(d.channel_id, c.channel_id) as channel_id,
   coalesce(d.thread_id, c.thread_id) as thread_id, d.message_id,
   s.number::float8 as supersedes,
-  d.confirmed_by_actor_id, d.confirmed_by_name, d.confirmed_at`;
+  d.confirmed_by_actor_id, d.confirmed_by_name, d.confirmed_at,
+  d.rejected_by_actor_id, d.rejected_by_name, d.rejected_at`;
 const from = `decisions d left join decisions s on s.id = d.supersedes_id
   left join conversations c on c.id = d.conversation_id`;
 
@@ -43,6 +44,9 @@ const row = z.object({
   confirmed_by_actor_id: z.string().nullable(),
   confirmed_by_name: z.string().nullable(),
   confirmed_at: z.date().nullable(),
+  rejected_by_actor_id: z.string().nullable(),
+  rejected_by_name: z.string().nullable(),
+  rejected_at: z.date().nullable(),
 });
 
 function toDecision(r: Row): Decision {
@@ -68,6 +72,11 @@ function toDecision(r: Row): Decision {
         ? null
         : { actorId: d.confirmed_by_actor_id, name: d.confirmed_by_name },
     confirmedAt: d.confirmed_at === null ? null : d.confirmed_at.toISOString(),
+    rejectedBy:
+      d.rejected_by_actor_id === null
+        ? null
+        : { actorId: d.rejected_by_actor_id, name: d.rejected_by_name },
+    rejectedAt: d.rejected_at === null ? null : d.rejected_at.toISOString(),
   };
 }
 

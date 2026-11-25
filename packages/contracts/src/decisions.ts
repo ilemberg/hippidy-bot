@@ -35,6 +35,9 @@ export const decisionSchema = z.strictObject({
   supersedes: z.number().int().positive().nullable(),
   confirmedBy: z.strictObject({ actorId: z.string(), name: z.string().nullable() }).nullable(),
   confirmedAt: z.iso.datetime({ offset: true }).nullable(),
+  /** Who rejected a proposal, and when (slice 2.6). */
+  rejectedBy: z.strictObject({ actorId: z.string(), name: z.string().nullable() }).nullable(),
+  rejectedAt: z.iso.datetime({ offset: true }).nullable(),
 });
 export type Decision = z.infer<typeof decisionSchema>;
 
@@ -58,11 +61,69 @@ export const confirmDecisionRequestSchema = z.strictObject({
 });
 export type ConfirmDecisionRequest = z.infer<typeof confirmDecisionRequestSchema>;
 
+/** Why a person may not act on a proposal (slice 2.6, decisions 201 and 202). */
+export const notAllowedReasonSchema = z.enum([
+  /** They did not write in the thread it came from. */
+  "not_in_thread",
+  /** It was imported from the decision log, which is its source. */
+  "read_only",
+]);
+export type NotAllowedReason = z.infer<typeof notAllowedReasonSchema>;
+
 /**
- * What a confirmation did. `confirmed`: the proposal is active now. `not_proposed`: it was
- * already active, superseded or rejected. `not_found`: no such decision in that workspace.
+ * What confirming, rejecting or editing a proposal did. `confirmed`: it is active now.
+ * `rejected`: it is rejected now. `edited`: its wording changed; it is still proposed.
+ * `not_proposed`: it was already active, superseded or rejected. `not_found`: no such decision
+ * in that workspace. `not_allowed`: the person may not act on it, and `reason` says why.
  */
-export const confirmDecisionResultSchema = z.strictObject({
-  status: z.enum(["confirmed", "not_proposed", "not_found"]),
+export const decisionActionResultSchema = z.strictObject({
+  status: z.enum(["confirmed", "rejected", "edited", "not_proposed", "not_found", "not_allowed"]),
+  reason: notAllowedReasonSchema.optional(),
 });
-export type ConfirmDecisionResult = z.infer<typeof confirmDecisionResultSchema>;
+export type DecisionActionResult = z.infer<typeof decisionActionResultSchema>;
+
+/** What `POST /v1/decisions/:decisionId/confirm` answers. */
+export const confirmDecisionResultSchema = decisionActionResultSchema;
+export type ConfirmDecisionResult = DecisionActionResult;
+
+/** Body of `PATCH /v1/decisions/:decisionId` from a person: a proposal's new wording. */
+export const editDecisionRequestSchema = z
+  .strictObject({
+    statement: z.string().trim().min(1).max(500).optional(),
+    reason: z.string().trim().max(2000).nullable().optional(),
+    area: z.string().trim().max(100).nullable().optional(),
+  })
+  .refine(
+    (edit) => edit.statement !== undefined || edit.reason !== undefined || edit.area !== undefined,
+    { message: "Change the statement, the reason or the area" },
+  );
+export type EditDecisionRequest = z.infer<typeof editDecisionRequestSchema>;
+
+const wordingSchema = z.strictObject({
+  statement: z.string(),
+  reason: z.string().nullable(),
+  area: z.string().nullable(),
+});
+
+/** One change to a decision after it was recorded. */
+export const decisionEventSchema = z.strictObject({
+  kind: z.enum(["edited", "confirmed", "rejected", "superseded"]),
+  actor: z.strictObject({ actorId: z.string(), name: z.string().nullable() }),
+  at: z.iso.datetime({ offset: true }),
+  before: wordingSchema.nullable(),
+  after: wordingSchema.nullable(),
+});
+export type DecisionEvent = z.infer<typeof decisionEventSchema>;
+
+/** Response of `GET /v1/decisions/:number`: a decision, its history, and what the caller may do. */
+export const decisionDetailSchema = z.strictObject({
+  decision: decisionSchema,
+  /** Oldest first. Its recording is the decision itself (who decided, when). */
+  history: z.array(decisionEventSchema),
+  /** For a signed-in person: whether they may act on it now, and why not. */
+  youMay: z.strictObject({
+    act: z.boolean(),
+    reason: notAllowedReasonSchema.nullable(),
+  }),
+});
+export type DecisionDetail = z.infer<typeof decisionDetailSchema>;
