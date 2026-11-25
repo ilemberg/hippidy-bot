@@ -24,6 +24,7 @@ import type { AgentEvent } from "../agent/runtime.ts";
 import { actorNameInConversation, createBrief } from "../store/changes.ts";
 import { enqueueDelivery, getConversation } from "../store/conversations.ts";
 import type { Db } from "../store/db.ts";
+import type { Logger } from "../log.ts";
 import {
   findDecisionByNumber,
   readTurnMessage,
@@ -95,7 +96,7 @@ export async function answerCustomToolCall(
   call: CustomToolCall,
   messages: readonly ProcessedUserMessage[],
   events: readonly AgentEvent[] = [],
-  routing: { fallback?: Fallback | undefined } = {},
+  routing: Routing = {},
 ): Promise<CustomToolAnswer> {
   const name = customToolNameSchema.safeParse(call.name);
   if (!name.success) return error(toolErrors.unknownTool(call.name));
@@ -137,6 +138,12 @@ export async function answerCustomToolCall(
       return recallDecisions(db, input.data);
     }
   }
+}
+
+/** What routing by area needs from the loop (slice 3.1). */
+export interface Routing {
+  fallback?: Fallback | undefined;
+  log?: Logger | undefined;
 }
 
 /** Why a recorded decision is only proposed, for the thread; undefined when it is active. */
@@ -194,7 +201,7 @@ async function recordDecisionFor(
   messages: readonly ProcessedUserMessage[],
   events: readonly AgentEvent[],
   input: RecordDecisionInput,
-  routing: { fallback?: Fallback | undefined },
+  routing: Routing,
 ): Promise<CustomToolAnswer> {
   const decider = {
     source: context.source,
@@ -243,7 +250,12 @@ async function recordDecisionFor(
   const proposed = decision.status === "proposed";
   // In an area that exists, the post names its owner (slice 3.1), who may confirm a proposal.
   const area =
-    decision.area === null ? undefined : await findAreaByName(db, context, decision.area);
+    decision.area === null
+      ? undefined
+      : await findAreaByName(db, context, decision.area).catch((failure: unknown): undefined => {
+          routing.log?.error("areas.decision_failed", { conversationId, error: failure });
+          return undefined;
+        });
   const owner = area === undefined ? undefined : ownerLines([area], routing.fallback);
   // Queued under the decision's id, so answering the call again posts it once.
   const conversation = await getConversation(db, conversationId);
@@ -256,7 +268,8 @@ async function recordDecisionFor(
     kind: "decision",
     target: { ...conversation.key },
     decisionId: decision.id,
-    text: owner === undefined || owner.text === "" ? text : `${text}\n\n${owner.text}`,
+    // The owner first: an unclosed code block in the statement cannot swallow it.
+    text: owner === undefined || owner.text === "" ? text : `${owner.text}\n\n${text}`,
     needsConfirm: proposed,
     ...(owner === undefined || owner.mentions.length === 0 ? {} : { mentions: owner.mentions }),
   });
@@ -365,7 +378,7 @@ async function startChange(
   messages: readonly ProcessedUserMessage[],
   events: readonly AgentEvent[],
   input: StartChangeInput,
-  routing: { fallback?: Fallback | undefined },
+  routing: Routing,
 ): Promise<CustomToolAnswer> {
   const callAt = call.processedAt === null ? Number.NaN : Date.parse(call.processedAt);
   const requesterId = Number.isNaN(callAt)
@@ -403,8 +416,34 @@ async function startChange(
     needsStart: reason !== undefined,
   });
   // The areas the brief touches, named once per change with their owners (slice 3.1). Queued
-  // after the brief, so they read under it.
+  // after the brief, so they read under it. Optional: a failure is reported, never blocks.
+  await nameBriefAreas(db, conversationId, context, input, result, routing).catch(
+    (failure: unknown) => {
+      routing.log?.error("areas.brief_failed", { conversationId, error: failure });
+    },
+  );
+  const output: StartChangeOutput = {
+    changeId: result.changeId,
+    briefId: result.briefId,
+    status: result.started ? "started" : "waiting_for_start",
+  };
+  return { text: JSON.stringify(output), isError: false };
+}
+
+/**
+ * Names the areas a brief touches, with their owners, once per change (slice 3.1): those the
+ * teammate named and those its words and paths match.
+ */
+async function nameBriefAreas(
+  db: Db,
+  conversationId: string,
+  context: ToolCallContext,
+  input: StartChangeInput,
+  result: { changeId: string; briefId: string },
+  routing: Routing,
+): Promise<void> {
   const areas = await listAreas(db, context);
+  if (areas.length === 0) return;
   const named = new Set((input.areas ?? []).map((name) => name.trim().toLowerCase()));
   const touched = [
     ...new Map(
@@ -427,13 +466,8 @@ async function startChange(
       key: `areas:${result.changeId}:brief:${result.briefId}`,
       fallback: routing.fallback,
     },
+    routing.log,
   );
-  const output: StartChangeOutput = {
-    changeId: result.changeId,
-    briefId: result.briefId,
-    status: result.started ? "started" : "waiting_for_start",
-  };
-  return { text: JSON.stringify(output), isError: false };
 }
 
 /**

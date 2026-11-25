@@ -13,6 +13,8 @@ create table public.areas (
   -- One owner, or none: none means the fallback (rule 10 of `wave-3.md`).
   owner_actor_id text,
   owner_name text,
+  -- Since when the owner owns it: they may act only on proposals made after (from the review).
+  owner_since timestamptz,
   -- Glob patterns over the repository, like CODEOWNERS, and words that mark it in text.
   paths text[] not null default '{}' check (cardinality(paths) <= 50),
   words text[] not null default '{}' check (cardinality(words) <= 30),

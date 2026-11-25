@@ -799,6 +799,7 @@ async function answerWaitingCalls(
     try {
       const answer = await answerCustomToolCall(deps.db, conversationId, call, messages, events, {
         fallback: deps.fallback,
+        log,
       });
       await deps.runtime.answerCustomTool(sessionId, call.id, answer);
       log.info("conversation.custom_tool_answered", {

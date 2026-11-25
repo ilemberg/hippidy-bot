@@ -213,6 +213,7 @@ const placeRow = z.object({
   wording_version: z.number().int().positive(),
   decided_by_actor_id: z.string().nullable(),
   decided_by_name: z.string().nullable(),
+  created_at: z.date(),
 });
 type Place = z.infer<typeof placeRow>;
 
@@ -223,7 +224,7 @@ async function readPlace(db: Db, decisionId: string, lock: boolean): Promise<Pla
             coalesce(v.source, d.decided_by_source) as source,
             coalesce(v.workspace_id, d.decided_by_workspace_id) as workspace_id,
             d.statement, d.reason, d.area, d.wording_version, d.decided_by_actor_id,
-            d.decided_by_name
+            d.decided_by_name, d.created_at
      from decisions d left join conversations v on v.id = d.conversation_id
      where d.id = $1 ${lock ? "for update of d" : ""}`,
     [decisionId],
@@ -246,12 +247,15 @@ async function permission(
   if (place.source !== person.source || place.workspace_id !== person.workspaceId) {
     return undefined;
   }
-  // The owner of its area may act on it too (G11 from slice 3.1, decision 206).
+  // The owner of its area may act on it too (G11 from slice 3.1, decision 206), on what was
+  // proposed after they became owner: anyone may change an owner, so making oneself owner of an
+  // area does not open the proposals already waiting in it (decision 207).
   if (place.area !== null) {
     const owns = await db.query(
       `select 1 from areas
-       where source = $1 and workspace_id = $2 and name = lower($3) and owner_actor_id = $4`,
-      [person.source, person.workspaceId, place.area, person.actorId],
+       where source = $1 and workspace_id = $2 and name = lower($3) and owner_actor_id = $4
+         and owner_since <= $5`,
+      [person.source, person.workspaceId, place.area, person.actorId, place.created_at],
     );
     if (owns.length > 0) return { kind: "may" };
   }

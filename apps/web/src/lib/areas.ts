@@ -104,7 +104,7 @@ export function areaNoticeText(notice: AreaNotice): string {
     case "name_taken":
       return "Not saved: another area already has that name.";
     case "invalid":
-      return "Not saved: a name is at most 60 lowercase letters, digits, spaces and . _ / -, starting with a letter or digit; a description at most 300 characters; at most 50 paths, relative to the repository and without ..; at most 30 words, each 2 to 60 characters.";
+      return "Not saved: a name is at most 60 lowercase letters, digits, spaces and . _ -, starting with a letter or digit; a description at most 300 characters; at most 50 paths, relative to the repository, without .. and with only * ** ? as wildcards; at most 30 words, each 3 to 60 characters.";
     case "unchanged":
       return "Nothing was changed.";
     case "changed":

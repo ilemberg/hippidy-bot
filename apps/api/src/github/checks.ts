@@ -97,7 +97,14 @@ export function createGitHubChecks(options: {
         const batch = filesSchema.parse(
           await get(`/repos/${path}/pulls/${number}/files?per_page=100&page=${String(page)}`),
         );
-        files.push(...batch.map((file) => file.filename));
+        // A renamed file counts where it was too: moving it out of an area touches that area.
+        files.push(
+          ...batch.flatMap((file) =>
+            file.previous_filename === undefined
+              ? [file.filename]
+              : [file.filename, file.previous_filename],
+          ),
+        );
         if (batch.length < 100) break;
       }
       return files;
@@ -105,7 +112,9 @@ export function createGitHubChecks(options: {
   };
 }
 
-const filesSchema = z.array(z.object({ filename: z.string() }));
+const filesSchema = z.array(
+  z.object({ filename: z.string(), previous_filename: z.string().optional() }),
+);
 
 /** One verdict from a commit's check runs. None yet means CI has not started: pending. */
 export function verdictOf(

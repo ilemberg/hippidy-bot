@@ -1,10 +1,10 @@
-import { matchesGlob } from "node:path";
 import { mentionToken, type Area } from "@hippidy/contracts";
+import { globMatches } from "./glob.ts";
 import type { Logger } from "../log.ts";
 import { listAreas, nameAreasForChange, type Place } from "../store/areas.ts";
 import type { Db } from "../store/db.ts";
-import { getConversation } from "../store/conversations.ts";
-import { flushSoon, queue, targetOf, type ConversationDeps } from "./conversations.ts";
+import { enqueueDelivery, getConversation } from "../store/conversations.ts";
+import { flushSoon, targetOf, type ConversationDeps } from "./conversations.ts";
 
 // Routing by area (slice 3.1, decisions 205 and 206): which areas a text or a set of changed
 // files touches, and the line that names their owners in the thread. No model runs for it.
@@ -25,20 +25,23 @@ function hasPhrase(text: string, phrase: string): boolean {
   return new RegExp(`(^|[^\\p{L}\\p{N}_])${words}($|[^\\p{L}\\p{N}_])`, "iu").test(text);
 }
 
-/** Path-like words in a text (`apps/api/src/store/x.ts`), to match against areas' paths. */
+/**
+ * Path-like words in a text (`apps/api/src/store/x.ts`), to match against areas' paths. Split
+ * on spaces first, so a long text is read in one pass.
+ */
 export function pathsIn(text: string): string[] {
-  return [...text.matchAll(/[\w.-]+(?:\/[\w.*-]+)+/g)].map((m) => m[0].replace(/^\.\//, ""));
+  return text
+    .split(/[\s,;:()[\]{}<>"'`]+/)
+    .map((word) => word.replace(/^\.\//, "").replace(/[.]+$/, ""))
+    .filter((word) => /^[\w.*-]+(?:\/[\w.*-]+)+$/.test(word));
 }
+
+/** A name or word shorter than this is not looked for in text: it would match nearly anything. */
+export const MIN_MATCH_CHARACTERS = 3;
 
 /** Whether a repository path falls under one of an area's globs. */
 function pathMatches(area: Area, file: string): boolean {
-  return area.paths.some((pattern) => {
-    try {
-      return matchesGlob(file, pattern) || matchesGlob(file, `${pattern.replace(/\/$/, "")}/**`);
-    } catch {
-      return false;
-    }
-  });
+  return area.paths.some((pattern) => globMatches(file, pattern));
 }
 
 /** The areas a text names: by name, a word of theirs, or a path under theirs. */
@@ -46,8 +49,8 @@ export function areasInText(areas: readonly Area[], text: string): Area[] {
   const paths = pathsIn(text);
   return areas.filter(
     (area) =>
-      hasPhrase(text, area.name) ||
-      area.words.some((word) => hasPhrase(text, word)) ||
+      (area.name.length >= MIN_MATCH_CHARACTERS && hasPhrase(text, area.name)) ||
+      area.words.some((word) => word.length >= MIN_MATCH_CHARACTERS && hasPhrase(text, word)) ||
       paths.some((path) => pathMatches(area, path)),
   );
 }
@@ -77,6 +80,28 @@ export function ownerLines(
   return { text: lines.join("\n"), mentions: [...mentions] };
 }
 
+/** The most people one delivery mentions (the contract's limit). */
+export const MAX_MENTIONS = 10;
+
+/** Areas split into groups whose owners (or the fallback) are at most ten people each. */
+export function groupsByOwners(areas: readonly Area[], fallback: Fallback | undefined): Area[][] {
+  const groups: Area[][] = [];
+  let group: Area[] = [];
+  let people = new Set<string>();
+  for (const area of areas) {
+    const who = area.owner?.actorId ?? fallback?.actorId;
+    if (who !== undefined && !people.has(who) && people.size === MAX_MENTIONS) {
+      groups.push(group);
+      group = [];
+      people = new Set();
+    }
+    group.push(area);
+    if (who !== undefined) people.add(who);
+  }
+  if (group.length > 0) groups.push(group);
+  return groups;
+}
+
 /**
  * Names, once per change, the areas it touches that were not named for it before: a reply in
  * its thread that mentions their owners. Answers how many were named.
@@ -93,22 +118,30 @@ export async function nameChangeAreas(
   },
   log?: Logger,
 ): Promise<number> {
-  const fresh = await nameAreasForChange(
-    deps.db,
-    input.changeId,
-    input.areas.map((area) => area.id),
-    input.via,
-  );
-  if (fresh.length === 0) return 0;
-  const named = input.areas.filter((area) => fresh.includes(area.id));
-  const { text, mentions } = ownerLines(named, input.fallback);
-  const conversation = await getConversation(deps.db, input.conversationId);
-  await queue(deps as ConversationDeps, conversation, input.key, "note", {
-    kind: "reply",
-    target: targetOf(conversation),
-    text,
-    mentions,
+  // Named and queued together, so a line is never lost between the two (from the review).
+  const named = await deps.db.transaction(async (tx) => {
+    const fresh = await nameAreasForChange(
+      tx,
+      input.changeId,
+      input.areas.map((area) => area.id),
+      input.via,
+    );
+    const areas = input.areas.filter((area) => fresh.includes(area.id));
+    if (areas.length === 0) return areas;
+    const conversation = await getConversation(tx, input.conversationId);
+    // A delivery mentions at most ten people: more owners are named in more replies.
+    for (const [index, group] of groupsByOwners(areas, input.fallback).entries()) {
+      const { text, mentions } = ownerLines(group, input.fallback);
+      await enqueueDelivery(tx, conversation.id, `${input.key}:${String(index)}`, "note", {
+        kind: "reply",
+        target: targetOf(conversation),
+        text,
+        mentions,
+      });
+    }
+    return areas;
   });
+  if (named.length === 0) return 0;
   log?.info("areas.named", { changeId: input.changeId, via: input.via, areas: named.length });
   return named.length;
 }
@@ -135,7 +168,9 @@ export async function namePullRequestAreas(
     const url = String(row.pull_request_url);
     const place = { source: row.source, workspaceId: String(row.workspace_id) } as Place;
     const areas = await listAreas(deps.db, place);
-    const files = areas.length === 0 ? [] : await deps.checks.changedFiles(url);
+    // With no areas yet, the pull request is read once there are some.
+    if (areas.length === 0) return;
+    const files = await deps.checks.changedFiles(url);
     // Marked first: a failure below is logged, and the next pull request is read afresh.
     await deps.db.query(`update changes set areas_checked_url = $2 where id = $1`, [changeId, url]);
     if (files === undefined || files.length === 0) return;

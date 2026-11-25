@@ -222,8 +222,9 @@ export async function createArea(
     const ownerNameNow = ownerId === null ? null : await ownerName(tx, actor, ownerId);
     const rows = await tx.query(
       `insert into areas (source, workspace_id, name, description, owner_actor_id, owner_name,
-         paths, words, created_by_actor_id, created_by_name)
-       values ($1, $2, $3, $4, $5, $6, $7::text[], $8::text[], $9, $10)
+         owner_since, paths, words, created_by_actor_id, created_by_name)
+       values ($1, $2, $3, $4, $5, $6, case when $5::text is null then null else now() end,
+         $7::text[], $8::text[], $9, $10)
        on conflict (source, workspace_id, name) do nothing
        returning ${areaColumns}`,
       [
@@ -251,6 +252,25 @@ export async function createArea(
  * one overwrites a change they did not see. A change that changes nothing records nothing.
  */
 export async function editArea(
+  db: Db,
+  actor: AreaActor,
+  areaId: string,
+  request: EditAreaRequest,
+): Promise<AreaWrite> {
+  return editAreaOnce(db, actor, areaId, request).catch((failure: unknown): AreaWrite => {
+    // Two renames to one name at once: the second meets the unique name, not the check above.
+    if (uniqueViolation(failure)) return { status: "name_taken" };
+    throw failure;
+  });
+}
+
+function uniqueViolation(failure: unknown): boolean {
+  return (
+    typeof failure === "object" && failure !== null && "code" in failure && failure.code === "23505"
+  );
+}
+
+async function editAreaOnce(
   db: Db,
   actor: AreaActor,
   areaId: string,
@@ -301,6 +321,9 @@ export async function editArea(
     const updated = await tx.query(
       `update areas
        set name = $2, description = $3, owner_actor_id = $4, owner_name = $5,
+           owner_since = case when $4::text is null then null
+                              when owner_actor_id is distinct from $4 then now()
+                              else owner_since end,
            paths = $6::text[], words = $7::text[], version = version + 1, updated_at = now()
        where id = $1
        returning ${areaColumns}`,
@@ -317,9 +340,14 @@ export async function editArea(
     // Decisions carry the area as a label: a renamed area keeps its decisions (slice 3.1).
     if (after.name !== current.name) {
       await tx.query(
-        `update decisions set area = $3, updated_at = now()
-         where lower(area) = $2 and coalesce(decided_by_workspace_id, $1) = $1`,
-        [actor.workspaceId, current.name, after.name],
+        `update decisions d set area = $4, updated_at = now()
+         from (select d2.id from decisions d2
+               left join conversations v on v.id = d2.conversation_id
+               where lower(d2.area) = $3
+                 and coalesce(v.source, d2.decided_by_source) = $1
+                 and coalesce(v.workspace_id, d2.decided_by_workspace_id) = $2) mine
+         where d.id = mine.id`,
+        [actor.source, actor.workspaceId, current.name, after.name],
       );
     }
     await recordEvent(tx, areaId, "edited", actor, before, after);

@@ -640,7 +640,8 @@ export async function unsentDeliveries(db: Db, conversationId: string): Promise<
      order by seq`,
     [conversationId],
   );
-  return rows.map((row) => {
+  const queued: QueuedDelivery[] = [];
+  for (const row of rows) {
     const r = z
       .object({
         id: z.string(),
@@ -650,13 +651,20 @@ export async function unsentDeliveries(db: Db, conversationId: string): Promise<
       })
       .parse(row);
     const payload = typeof r.payload === "string" ? (JSON.parse(r.payload) as unknown) : r.payload;
-    return {
-      id: r.id,
-      key: r.agent_event_id,
-      attempts: r.attempts,
-      payload: outboundDeliverySchema.parse(payload),
-    };
-  });
+    const parsed = outboundDeliverySchema.safeParse(payload);
+    if (!parsed.success) {
+      // One row that cannot be sent must not hold up every later post in the thread: it is
+      // set aside, with why (from the review of slice 3.1).
+      await db.query(
+        `update deliveries set status = 'abandoned', last_error = $2, updated_at = now()
+         where id = $1`,
+        [r.id, `invalid payload: ${parsed.error.issues[0]?.message ?? "unknown"}`.slice(0, 500)],
+      );
+      continue;
+    }
+    queued.push({ id: r.id, key: r.agent_event_id, attempts: r.attempts, payload: parsed.data });
+  }
+  return queued;
 }
 
 export async function markDeliverySent(db: Db, deliveryId: string): Promise<void> {

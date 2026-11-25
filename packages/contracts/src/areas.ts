@@ -24,10 +24,15 @@ export const areaPathSchema = z
   .max(200)
   .refine((path) => !path.startsWith("/") && !path.split("/").includes(".."), {
     message: "a path relative to the repository, without ..",
+  })
+  // Only `*`, `**` and `?` are read; braces, brackets and extglobs are refused, so no pattern can
+  // make matching slow (from the review of slice 3.1).
+  .refine((path) => /^[A-Za-z0-9._\-/*? ]+$/.test(path), {
+    message: "letters, digits, . _ - / and the wildcards * ** ? only",
   });
 
 /** A word or short phrase that marks an area in text. */
-export const areaWordSchema = z.string().trim().toLowerCase().min(2).max(60);
+export const areaWordSchema = z.string().trim().toLowerCase().min(3).max(60);
 
 /** One area, as the API returns it. */
 export const areaSchema = z.strictObject({

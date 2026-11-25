@@ -299,6 +299,37 @@ describe("routing in the thread", () => {
     ).toBe("confirmed");
   });
 
+  it("lets an owner act only on proposals made after they became owner", async () => {
+    await area("search", null);
+    await receiveMessage(deps, message(1, "we'll use full-text search"), log);
+    await teammateCalls("record_decision", {
+      statement: "Search uses Postgres full-text search.",
+      area: "search",
+      decidedBy: { actorId: "U1" },
+      askedToRecord: false,
+    });
+    const [row] = await db.query(`select id from decisions where origin = 'thread'`);
+    const [areaRow] = await db.query(`select id from areas`);
+    // Anyone may make themselves owner, but that does not open what was already waiting.
+    await editArea(db, actor("U7"), String(areaRow?.id), { version: 1, ownerActorId: "U7" });
+    const result = await actOnProposal(db, String(row?.id), actor("U7"), { kind: "confirm" });
+    expect(result).toMatchObject({ status: "not_allowed", reason: "not_in_thread" });
+  });
+
+  it("names at most ten owners in one post, and the rest in the next", async () => {
+    const words: string[] = [];
+    for (let i = 0; i < 12; i++) {
+      const word = `topic${String(i).padStart(2, "0")}`;
+      words.push(word);
+      await area(word, `UOWN${String(i)}`);
+    }
+    await receiveMessage(deps, message(1, "change several things"), log);
+    await teammateCalls("start_change", { ...brief, what: `Change ${words.join(", ")}.` });
+    const lines = replies().filter((r) => r.text.startsWith("This touches"));
+    expect(lines.map((l) => l.mentions?.length)).toEqual([10, 2]);
+    expect(lines.flatMap((l) => l.text.split("\n"))).toHaveLength(12);
+  });
+
   it("tells the teammate which areas a message may touch, with their owners", async () => {
     await area("search", null, { words: ["full-text"] });
     await receiveMessage(deps, message(1, "how does full-text ranking work?"), log);

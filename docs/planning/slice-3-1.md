@@ -1,6 +1,6 @@
 # Slice 3.1: areas, owners and routing
 
-Status: **built 2026-11-25, not merged (decisions 205 and 206).** The wave is in `wave-3.md`.
+Status: **built 2026-11-25, not merged (decisions 205 to 207).** The wave is in `wave-3.md`.
 
 **Demo:** in the web app, someone creates the area `search`, owned by Ada, with the code path
 `apps/api/src/store/decisions.ts` and the word "full-text". In a thread, Grace asks the bot to
@@ -26,7 +26,7 @@ and Ada may confirm it although she never wrote in that thread.
 - **Owner:** one person (source, workspace, id, name), or none; none means the fallback
   (`FALLBACK_OWNER`, rule 10 of `wave-3.md`).
 - **Paths:** up to 50 glob patterns over the repository, like a CODEOWNERS file
-  (`apps/api/src/store/**`). Matched with Node's `path.matchesGlob`.
+  (`apps/api/src/store/**`). Matched by the API's own glob reader: `*`, `**` and `?` only (207).
 - **Words:** up to 30 words or short phrases that mark it in text ("full-text", "recall"),
   matched case-insensitively as whole words. The name itself always counts as one.
 - **Description:** a sentence, optional.
