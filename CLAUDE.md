@@ -50,7 +50,7 @@ all pass. CI runs these, then `pnpm build && pnpm smoke`.
   session's events in `agent_events` and its usage on `conversations`, so a conversation can be
   rebuilt from the database alone. Keeping the record never fails the conversation loop: it
   logs and is retried. `src/store/reading.ts` reads it back for the `GET /v1/conversations`
-  routes, which never call the agent runtime.
+  routes, and `src/store/sessions.ts` for `GET /v1/sessions`; neither calls the agent runtime.
 - `supabase/migrations` holds the schema. Add a new timestamped file for every change; never
   edit one that has been merged. CI applies them on merge to `main`, at the same time as Vercel
   deploys, so a migration must work with both the old and the new code (add first, remove

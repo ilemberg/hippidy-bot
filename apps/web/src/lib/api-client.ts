@@ -1,4 +1,5 @@
-import { CORRELATION_ID_HEADER, meResponseSchema, type MeResponse } from "@hippidy/contracts";
+import { CORRELATION_ID_HEADER, sessionListSchema, type SessionActivity } from "@hippidy/contracts";
+import type { z } from "zod";
 import type { Logger } from "./log.ts";
 import type { Fetch } from "./slack-oidc.ts";
 import { mintApiToken, type Person } from "./tokens.ts";
@@ -15,24 +16,30 @@ export interface ApiClientDeps {
   now?: () => Date;
 }
 
-export type MeResult = { kind: "ok"; me: MeResponse } | { kind: "failed"; reason: string };
+/** What a read from the API gave: its parsed body, or why there is none. */
+export type ApiResult<T> = { kind: "ok"; value: T } | { kind: "failed"; reason: string };
 
-/** `GET /v1/me` as the person: who the API takes them to be. */
-export async function fetchMe(person: Person, deps: ApiClientDeps): Promise<MeResult> {
+/** A `GET` from the API as the person, its body checked against the contract. */
+export async function apiGet<T>(
+  person: Person,
+  route: string,
+  schema: z.ZodType<T>,
+  deps: ApiClientDeps,
+): Promise<ApiResult<T>> {
   const token = await mintApiToken(person, deps.apiSecret, deps.now?.() ?? new Date());
   let res: Response;
   try {
-    res = await deps.fetch(new URL("/v1/me", deps.apiBaseUrl).toString(), {
+    res = await deps.fetch(new URL(route, deps.apiBaseUrl).toString(), {
       headers: { authorization: `Bearer ${token}`, [CORRELATION_ID_HEADER]: deps.correlationId },
       cache: "no-store",
       signal: AbortSignal.timeout(10_000),
     });
   } catch (error) {
-    deps.log.error("api.request_failed", { route: "/v1/me", error });
+    deps.log.error("api.request_failed", { route, error });
     return { kind: "failed", reason: "unreachable" };
   }
   if (!res.ok) {
-    deps.log.warn("api.refused", { route: "/v1/me", status: res.status });
+    deps.log.warn("api.refused", { route, status: res.status });
     return { kind: "failed", reason: `status_${res.status}` };
   }
   let body: unknown;
@@ -41,10 +48,20 @@ export async function fetchMe(person: Person, deps: ApiClientDeps): Promise<MeRe
   } catch {
     body = undefined;
   }
-  const parsed = meResponseSchema.safeParse(body);
+  const parsed = schema.safeParse(body);
   if (!parsed.success) {
-    deps.log.error("api.unexpected_response", { route: "/v1/me" });
+    deps.log.error("api.unexpected_response", { route });
     return { kind: "failed", reason: "unexpected_response" };
   }
-  return { kind: "ok", me: parsed.data };
+  return { kind: "ok", value: parsed.data };
+}
+
+/** `GET /v1/sessions` as the person: the latest agents at work (slice 2.4). */
+export async function fetchSessions(
+  person: Person,
+  limit: number,
+  deps: ApiClientDeps,
+): Promise<ApiResult<SessionActivity[]>> {
+  const result = await apiGet(person, `/v1/sessions?limit=${limit}`, sessionListSchema, deps);
+  return result.kind === "ok" ? { kind: "ok", value: result.value.sessions } : result;
 }

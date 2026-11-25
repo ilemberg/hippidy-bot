@@ -48,25 +48,26 @@ Vercel does and checks it starts (`pnpm build && pnpm smoke`).
 
 ## API
 
-| Route                              | Auth                | What it does                                                                                                                                  |
-| ---------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /health`                      | none                | Returns `{"status":"ok"}`. Works with no configuration at all                                                                                 |
-| `GET /status`                      | none                | Health of each part: `database` (answers `select 1`), `agent`, `slack`, `github`. 200 when all are `ok`, else 503 with `degraded`             |
-| `GET /v1/me`                       | token or person     | Who the API takes the caller to be: `{"kind":"service"}`, or a person with `workspaceId`, `actorId` and `name`                                |
-| `POST /v1/messages`                | service token       | Accepts one inbound message, hands it to the thread's agent session, returns 202                                                              |
-| `POST /v1/webhooks/agent`          | Anthropic signature | Anthropic says a session went idle or ended; the API posts any new replies                                                                    |
-| `POST /v1/reconcile`               | reconcile token     | The safety net: delivers replies whose webhook was lost, retries failed posts. Called every minute                                            |
-| `GET /v1/conversations`            | token or person     | Conversations, newest first. `limit` (1 to 100, default 20); `before` takes the `next` of the page before                                     |
-| `GET /v1/conversations/:id`        | token or person     | One conversation: its state, usage and cost, and the transcript, oldest first                                                                 |
-| `GET /v1/conversations/:id/events` | token or person     | Every event the agent session reported, raw, in the order stored. `limit` (1 to 200, default 50); `after` takes the `next` of the page before |
-| `POST /v1/projects`                | service token       | Creates a project in `plan`, returns 201                                                                                                      |
-| `GET /v1/projects`                 | service token       | Every project, newest first                                                                                                                   |
-| `GET /v1/projects/:id`             | service token       | One project, its approvals and whether the plan is approved                                                                                   |
-| `PATCH /v1/projects/:id`           | service token       | Moves the project's stage, in any direction                                                                                                   |
-| `POST /v1/projects/:id/approvals`  | service token       | Records an approval or withdrawal, with the actor's current role; returns 201 and whether the subject is approved. Never moves the stage      |
-| `PUT /v1/roles`                    | service token       | Sets a person's roles in a workspace: a main role and any others (`extraRoles`)                                                               |
-| `GET /v1/roles`                    | service token       | The map from people to roles                                                                                                                  |
-| `POST /slack/events`               | Slack signature     | Slack's Events API. On `app_mention`: sends the message through `/v1/messages`, then reacts 👀. Answers 503 until Slack is configured         |
+| Route                              | Auth                | What it does                                                                                                                                                                             |
+| ---------------------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /health`                      | none                | Returns `{"status":"ok"}`. Works with no configuration at all                                                                                                                            |
+| `GET /status`                      | none                | Health of each part: `database` (answers `select 1`), `agent`, `slack`, `github`. 200 when all are `ok`, else 503 with `degraded`                                                        |
+| `GET /v1/me`                       | token or person     | Who the API takes the caller to be: `{"kind":"service"}`, or a person with `workspaceId`, `actorId` and `name`                                                                           |
+| `POST /v1/messages`                | service token       | Accepts one inbound message, hands it to the thread's agent session, returns 202                                                                                                         |
+| `POST /v1/webhooks/agent`          | Anthropic signature | Anthropic says a session went idle or ended; the API posts any new replies                                                                                                               |
+| `POST /v1/reconcile`               | reconcile token     | The safety net: delivers replies whose webhook was lost, retries failed posts. Called every minute                                                                                       |
+| `GET /v1/conversations`            | token or person     | Conversations, newest first. `limit` (1 to 100, default 20); `before` takes the `next` of the page before                                                                                |
+| `GET /v1/conversations/:id`        | token or person     | One conversation: its state, usage and cost, and the transcript, oldest first                                                                                                            |
+| `GET /v1/conversations/:id/events` | token or person     | Every event the agent session reported, raw, in the order stored. `limit` (1 to 200, default 50); `after` takes the `next` of the page before                                            |
+| `GET /v1/sessions`                 | token or person     | The latest agent sessions, working ones first: each thread's own session and each change's coding worker, with state, who asked, latest activity and cost. `limit` (1 to 50, default 10) |
+| `POST /v1/projects`                | service token       | Creates a project in `plan`, returns 201                                                                                                                                                 |
+| `GET /v1/projects`                 | service token       | Every project, newest first                                                                                                                                                              |
+| `GET /v1/projects/:id`             | service token       | One project, its approvals and whether the plan is approved                                                                                                                              |
+| `PATCH /v1/projects/:id`           | service token       | Moves the project's stage, in any direction                                                                                                                                              |
+| `POST /v1/projects/:id/approvals`  | service token       | Records an approval or withdrawal, with the actor's current role; returns 201 and whether the subject is approved. Never moves the stage                                                 |
+| `PUT /v1/roles`                    | service token       | Sets a person's roles in a workspace: a main role and any others (`extraRoles`)                                                                                                          |
+| `GET /v1/roles`                    | service token       | The map from people to roles                                                                                                                                                             |
+| `POST /slack/events`               | Slack signature     | Slack's Events API. On `app_mention`: sends the message through `/v1/messages`, then reacts 👀. Answers 503 until Slack is configured                                                    |
 
 The request and response shapes are in `packages/contracts`. Every error from the API has the
 body `{"error":{"code":"...","message":"..."}}`. The one exception is `/slack/events`: errors there

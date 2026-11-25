@@ -7,4 +7,5 @@ export * from "./errors.ts";
 export * from "./me.ts";
 export * from "./messages.ts";
 export * from "./projects.ts";
+export * from "./sessions.ts";
 export * from "./status.ts";
