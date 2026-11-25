@@ -1,6 +1,6 @@
 import type { DeliveryTarget } from "@hippidy/contracts";
 import { describe, expect, it } from "vitest";
-import { createSlackDeliverer, type SlackPoster } from "./deliver.ts";
+import { createSlackDeliverer, withMentions, type SlackPoster } from "./deliver.ts";
 
 const target: DeliveryTarget = {
   source: "slack",
@@ -201,5 +201,14 @@ describe("createSlackDeliverer", () => {
     await expect(deliverer.deliver({ kind: "reply", target, text: "hi" }, "c")).rejects.toThrow(
       "not configured",
     );
+  });
+});
+
+describe("withMentions (slice 3.1)", () => {
+  it("turns only the listed ids into mentions", () => {
+    expect(withMentions("Owner of search: {@U1}. Not {@U2}.", ["U1"])).toBe(
+      "Owner of search: <@U1>. Not {@U2}.",
+    );
+    expect(withMentions("{@U1}", undefined)).toBe("{@U1}");
   });
 });

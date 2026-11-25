@@ -1,3 +1,4 @@
+import { areasBearingOn, type AreaLine, type Fallback } from "./areas.ts";
 import type {
   ContextMessage,
   Deliverer,
@@ -82,6 +83,8 @@ export interface ConversationDeps {
   checks?: PullRequestChecks;
   /** The agent every new thread gets: the teammate unless a test says otherwise (181). */
   newThreadAgent?: AgentKind;
+  /** Who decides for anything with no owner (slice 3.1, `FALLBACK_OWNER`). */
+  fallback?: Fallback | undefined;
 }
 
 /** How long a message may wait for the agent before reconcile looks at it. */
@@ -180,6 +183,7 @@ export async function receiveMessage(
     const about = await senderAndProject(deps, conversation.id, message.actor.id, log);
     const reports = await reportsSinceLastReply(deps, conversation.id, log);
     const decisions = await decisionsBearingOn(deps, conversation.id, message.text, log);
+    const areas = await areasForMessage(deps, conversation, message.text, log);
     const agentEventId = await deps.runtime.sendMessage(
       sessionId,
       formatForAgent(
@@ -190,6 +194,7 @@ export async function receiveMessage(
         about,
         reports,
         decisions,
+        areas,
       ),
     );
     await markForwarded(deps.db, recorded.id, agentEventId);
@@ -211,6 +216,8 @@ export async function receiveMessage(
 export const CONTEXT_LEAD = "Said in the thread since your last reply:";
 /** The line that introduces the decisions on record that may bear on a message (slice 2.2). */
 export const DECISIONS_LEAD = "Decisions on record that may bear on this:";
+/** The line that names the areas a message may touch, with their owners (slice 3.1). */
+export const AREAS_LEAD = "Areas this may touch:";
 /** The most decisions put before one message. */
 export const DECISIONS_PER_MESSAGE = 5;
 
@@ -256,6 +263,7 @@ export function formatForAgent(
   about: Partial<SenderAndProject> = {},
   reports: readonly WorkerReport[] = [],
   decisions: readonly DecisionLine[] = [],
+  areas: readonly AreaLine[] = [],
 ): string {
   const body = text.trim() === "" ? "(no text, just a mention)" : text;
   // The display name is chosen by the sender, so it is kept to one line, and the role goes on
@@ -279,6 +287,13 @@ export function formatForAgent(
   // line or a `From:` line.
   const indented = (words: string) => words.replace(/\r\n|[\r\n\u2028\u2029\u0085]/g, "\n  ");
   const parts: string[] = [];
+  if (areas.length > 0) {
+    const named = areas.map(
+      (area) =>
+        `${oneLine(area.name)} (${area.owner === null ? "no owner" : `owner ${oneLine(area.owner)}`})`,
+    );
+    parts.push(`${AREAS_LEAD} ${named.join(", ")}.`);
+  }
   if (decisions.length > 0) {
     const lines = decisions.map((d) => {
       const where = d.origin === "import" ? `, planning log entry ${d.originRef ?? "?"}` : "";
@@ -308,6 +323,22 @@ export function formatForAgent(
  * search, no model. Only for the teammate's threads. Optional: if they cannot be read, it is
  * logged and the message goes without them.
  */
+/** The areas a teammate's message names; none on any failure, which is logged. */
+async function areasForMessage(
+  deps: ConversationDeps,
+  conversation: Conversation,
+  text: string,
+  log: Logger,
+): Promise<AreaLine[]> {
+  try {
+    if ((await readAgentKind(deps.db, conversation.id)) !== "teammate") return [];
+    return await areasBearingOn(deps.db, conversation.key, text);
+  } catch (error) {
+    log.warn("conversation.areas_failed", { conversationId: conversation.id, error });
+    return [];
+  }
+}
+
 async function decisionsBearingOn(
   deps: ConversationDeps,
   conversationId: string,
@@ -766,7 +797,10 @@ async function answerWaitingCalls(
     const call = customCalls.get(id);
     if (call === undefined) continue;
     try {
-      const answer = await answerCustomToolCall(deps.db, conversationId, call, messages, events);
+      const answer = await answerCustomToolCall(deps.db, conversationId, call, messages, events, {
+        fallback: deps.fallback,
+        log,
+      });
       await deps.runtime.answerCustomTool(sessionId, call.id, answer);
       log.info("conversation.custom_tool_answered", {
         conversationId,

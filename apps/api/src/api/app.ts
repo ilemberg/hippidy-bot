@@ -15,6 +15,12 @@ import {
   confirmDecisionRequestSchema,
   listDecisionsQuerySchema,
   editDecisionRequestSchema,
+  createAreaRequestSchema,
+  editAreaRequestSchema,
+  type AreaActionResult,
+  type AreaDetail,
+  type AreaList,
+  type PeopleList,
   personDecisionActionSchema,
   startBriefRequestSchema,
   type DecisionList,
@@ -50,6 +56,16 @@ import {
 import { requireServiceOrPerson, requireServiceToken } from "./auth.ts";
 import { startBriefByPerson, syncChange } from "./changes.ts";
 import { runCapture, type CaptureDeps } from "./capture.ts";
+import { namePullRequestAreas } from "./areas.ts";
+import {
+  areaHistory,
+  createArea,
+  editArea,
+  findAreaByName,
+  listAreas,
+  listPeople,
+  type AreaActor,
+} from "../store/areas.ts";
 import {
   confirmDecisionByPerson,
   decisionDetail,
@@ -522,6 +538,107 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
 
   // The decisions on record (slice 2.2): read from the database alone, newest or best matching
   // first. The web app's wiki (slice 2.6) builds on this.
+  // Areas and their owners (slice 3.1, decisions 205 and 206). Anyone signed in may create or
+  // change one, as themselves, on the version they saw; the service token only reads.
+  const placeOf = (caller: ApiEnv["Variables"]["caller"]) =>
+    caller.kind === "person"
+      ? { source: "slack" as const, workspaceId: caller.workspaceId }
+      : deps.config.personAuth === undefined
+        ? undefined
+        : { source: "slack" as const, workspaceId: deps.config.personAuth.workspaceId };
+
+  api.get("/v1/areas", readers, async (c) => {
+    const db = deps.conversations?.db ?? deps.status.db;
+    const place = placeOf(c.var.caller);
+    if (db === undefined || place === undefined) {
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    }
+    const fallback = deps.conversations?.fallback;
+    const people = fallback === undefined ? [] : await listPeople(db, place);
+    const body: AreaList = {
+      areas: await listAreas(db, place),
+      fallbackOwner:
+        fallback === undefined
+          ? null
+          : {
+              actorId: fallback.actorId,
+              name: people.find((p) => p.actorId === fallback.actorId)?.name ?? null,
+            },
+    };
+    return c.json(body);
+  });
+
+  api.get("/v1/areas/:name", readers, async (c) => {
+    const db = deps.conversations?.db ?? deps.status.db;
+    const place = placeOf(c.var.caller);
+    if (db === undefined || place === undefined) {
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    }
+    // Hono has decoded the segment already.
+    const area = await findAreaByName(db, place, c.req.param("name"));
+    if (area === undefined) return errorResponse(c, 404, "not_found", "No such area");
+    const body: AreaDetail = { area, history: await areaHistory(db, area.id) };
+    return c.json(body);
+  });
+
+  api.get("/v1/people", readers, async (c) => {
+    const db = deps.conversations?.db ?? deps.status.db;
+    const place = placeOf(c.var.caller);
+    if (db === undefined || place === undefined) {
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    }
+    const body: PeopleList = { people: await listPeople(db, place) };
+    return c.json(body);
+  });
+
+  const areaWriter = (c: Context<ApiEnv>): AreaActor | undefined => {
+    const caller = c.var.caller;
+    return caller.kind === "person"
+      ? {
+          source: "slack",
+          workspaceId: caller.workspaceId,
+          actorId: caller.actorId,
+          name: caller.name,
+        }
+      : undefined;
+  };
+
+  api.post("/v1/areas", people, limitBody, async (c) => {
+    const actor = areaWriter(c);
+    if (actor === undefined) {
+      return errorResponse(c, 400, "invalid_request", "Only a signed-in person changes areas");
+    }
+    const parsed = createAreaRequestSchema.safeParse((await jsonBody(c))?.body);
+    if (!parsed.success) return errorResponse(c, 400, "invalid_request", "Request body is invalid");
+    const db = deps.conversations?.db ?? deps.status.db;
+    if (db === undefined) {
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    }
+    const result = await createArea(db, actor, parsed.data);
+    c.var.log.info("area.create", { name: parsed.data.name, status: result.status });
+    const body: AreaActionResult = result.area === undefined ? { status: result.status } : result;
+    return c.json(body, result.status === "created" ? 201 : 200);
+  });
+
+  api.patch("/v1/areas/:areaId", people, limitBody, async (c) => {
+    const actor = areaWriter(c);
+    if (actor === undefined) {
+      return errorResponse(c, 400, "invalid_request", "Only a signed-in person changes areas");
+    }
+    const areaId = conversationIdSchema.safeParse(c.req.param("areaId"));
+    if (!areaId.success) return errorResponse(c, 404, "not_found", "No such area");
+    const parsed = editAreaRequestSchema.safeParse((await jsonBody(c))?.body);
+    if (!parsed.success) return errorResponse(c, 400, "invalid_request", "Request body is invalid");
+    const db = deps.conversations?.db ?? deps.status.db;
+    if (db === undefined) {
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    }
+    const result = await editArea(db, actor, areaId.data, parsed.data);
+    c.var.log.info("area.edit", { areaId: areaId.data, status: result.status });
+    const body: AreaActionResult = result.area === undefined ? { status: result.status } : result;
+    return c.json(body);
+  });
+
   // One decision by its number, its history, and what the signed-in person may do (2.6).
   api.get("/v1/decisions/:number", readers, async (c) => {
     const number = z.coerce
@@ -594,6 +711,8 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
         // A coding worker's session (decision 184).
         await syncChange(deps.conversations, change, log);
         log.info("webhook.synced", { changeId: change.id });
+        // After the lease: the areas its pull request's files touch (slice 3.1).
+        await namePullRequestAreas(deps.conversations, change.id, log);
       } else if (conversation === undefined) {
         log.warn("webhook.unknown_session", { sessionId: event.resourceId });
       } else {

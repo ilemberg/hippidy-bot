@@ -335,6 +335,22 @@ describe("deliveries", () => {
     expect((await unsentDeliveries(db, conversation.id)).map((d) => d.key)).toEqual(["sevt_2"]);
   });
 
+  it("sets aside a queued delivery that can no longer be read, so later ones still go", async () => {
+    const conversation = await findOrCreateConversation(db, key);
+    await enqueueDelivery(db, conversation.id, "sevt_1", "reply", reply("one"));
+    await enqueueDelivery(db, conversation.id, "sevt_2", "reply", reply("two"));
+    await db.query(
+      `update deliveries set payload = '{"kind":"nonsense"}'::jsonb where agent_event_id = $1`,
+      ["sevt_1"],
+    );
+    expect((await unsentDeliveries(db, conversation.id)).map((d) => d.key)).toEqual(["sevt_2"]);
+    const [row] = await db.query(
+      `select status, last_error from deliveries where agent_event_id = 'sevt_1'`,
+    );
+    expect(row?.status).toBe("abandoned");
+    expect(String(row?.last_error)).toMatch(/^invalid payload/);
+  });
+
   it("keeps a failed delivery for retry, and abandons it after the attempt limit", async () => {
     const conversation = await findOrCreateConversation(db, key);
     await enqueueDelivery(db, conversation.id, "sevt_1", "reply", reply("one"));
@@ -412,7 +428,10 @@ describe("schema", () => {
     "actor_roles",
     "agent_events",
     "approvals",
+    "area_events",
+    "areas",
     "capture_runs",
+    "change_areas",
     "change_briefs",
     "changes",
     "conversations",

@@ -35,6 +35,7 @@ import { listSessions } from "./sessions.ts";
 import { FakeExtractor } from "../agent/extractor.ts";
 import { runCapture } from "../api/capture.ts";
 import { captureSpentSince } from "./capture.ts";
+import { areaHistory, createArea, editArea, nameAreasForChange } from "./areas.ts";
 import { actOnProposal, decisionHistory } from "./decisions.ts";
 import { recordObservation, setListening } from "./listening.ts";
 import { searchDecisions } from "./decisions.ts";
@@ -767,5 +768,48 @@ describe("decision history through postgres.js (slice 2.6)", () => {
         after: { statement: 'New  "quoted".', reason: null, area: "x" },
       },
     ]);
+  });
+});
+
+describe("areas through postgres.js (slice 3.1)", () => {
+  it("keeps paths and words as arrays, history as JSON, and names a change's areas once", async () => {
+    const who = { source: "slack" as const, workspaceId: "Tareas", actorId: "U1", name: null };
+    const made = await createArea(db, who, {
+      name: "search",
+      paths: ["apps/api/**", 'odd "quoted" \u0000 path'],
+      words: ["Full-Text"],
+    });
+    expect(made).toMatchObject({
+      status: "created",
+      area: { paths: ["apps/api/**", 'odd "quoted"  path'], words: ["full-text"], version: 1 },
+    });
+    const id = made.area?.id ?? "";
+    const edited = await editArea(db, who, id, { version: 1, words: ["recall"] });
+    expect(edited).toMatchObject({ status: "edited", area: { words: ["recall"], version: 2 } });
+    expect(
+      await db.query(`select jsonb_typeof(after) as type from area_events where area_id = $1`, [
+        id,
+      ]),
+    ).toEqual([{ type: "object" }, { type: "object" }]);
+    expect((await areaHistory(db, id)).at(-1)?.before?.words).toEqual(["full-text"]);
+
+    const conversation = await findOrCreateConversation(db, {
+      source: "slack",
+      workspaceId: "Tareas",
+      channelId: "C",
+      threadId: "areas.1",
+    });
+    const created = await createBrief(db, {
+      conversationId: conversation.id,
+      customToolUseId: "sevt_area_pg",
+      changeId: undefined,
+      requestedBy: { source: "slack", workspaceId: "Tareas", actorId: "U1", name: null },
+      brief: { title: "T", what: "W", why: "Y", doneWhen: "D", links: [] },
+      startReason: undefined,
+      turnEventIds: [],
+    });
+    const changeId = created.kind === "created" ? created.changeId : "";
+    expect(await nameAreasForChange(db, changeId, [id], "brief")).toEqual([id]);
+    expect(await nameAreasForChange(db, changeId, [id], "pull_request")).toEqual([]);
   });
 });

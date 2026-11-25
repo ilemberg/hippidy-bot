@@ -1,5 +1,6 @@
 import type { Decision, DecisionDetail } from "@hippidy/contracts";
 import { cookies } from "next/headers";
+import { areaHref } from "../../../lib/areas.ts";
 import { SESSION_COOKIE } from "../../../lib/cookies.ts";
 import {
   historyItems,
@@ -115,7 +116,13 @@ function Detail({
         <dt>Reason</dt>
         <dd>{decision.reason ?? <span className="muted">None given</span>}</dd>
         <dt>Area</dt>
-        <dd>{decision.area ?? <span className="muted">No area</span>}</dd>
+        <dd>
+          {decision.area === null ? (
+            <span className="muted">No area</span>
+          ) : (
+            <a href={areaHref(decision.area.toLowerCase())}>{decision.area}</a>
+          )}
+        </dd>
         <dt>Decided</dt>
         <dd>
           By {nameOf(decision.decidedBy)},{" "}

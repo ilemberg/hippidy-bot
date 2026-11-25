@@ -420,6 +420,7 @@ describe("the teammate's start_change", () => {
       "why",
       "doneWhen",
       "links",
+      "areas",
     ]);
     expect(tool?.description).toContain("4,000 characters");
     expect(tool?.description).toContain("waiting_for_start");

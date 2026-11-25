@@ -453,8 +453,8 @@ export function notAllowedText(reason: NotAllowedReason | null, decision: Decisi
   switch (reason) {
     case "not_in_thread":
       return decision.origin === "thread"
-        ? "Only people who wrote in the thread it came from can confirm or change it. Mentioning @hippidy in that thread counts."
-        : "Only people who wrote in the thread it came from can confirm or change it.";
+        ? "Only people who wrote in the thread it came from, or the owner of its area, can confirm or change it. Mentioning @hippidy in that thread counts."
+        : "Only people who wrote in the thread it came from, or the owner of its area, can confirm or change it.";
     case "read_only":
       return "Imported from the decision log; change it there.";
     case null:

@@ -13,6 +13,11 @@ export type ChecksVerdict =
 /** Reads a pull request's CI checks. GitHub for now; a fake in tests. */
 export interface PullRequestChecks {
   verdict(pullRequestUrl: string): Promise<ChecksVerdict>;
+  /**
+   * The paths a pull request changes (slice 3.1), at most 300; undefined when it is not one of
+   * the agent's repository's pull requests.
+   */
+  changedFiles?(pullRequestUrl: string): Promise<string[] | undefined>;
 }
 
 /**
@@ -81,8 +86,35 @@ export function createGitHubChecks(options: {
       );
       return verdictOf(runs.check_runs);
     },
+
+    async changedFiles(pullRequestUrl) {
+      const [, path, number] =
+        /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)\/?$/.exec(pullRequestUrl) ?? [];
+      if (path === undefined || number === undefined) return undefined;
+      if (ownerAndName === "" || path.toLowerCase() !== ownerAndName) return undefined;
+      const files: string[] = [];
+      for (let page = 1; page <= 3; page++) {
+        const batch = filesSchema.parse(
+          await get(`/repos/${path}/pulls/${number}/files?per_page=100&page=${String(page)}`),
+        );
+        // A renamed file counts where it was too: moving it out of an area touches that area.
+        files.push(
+          ...batch.flatMap((file) =>
+            file.previous_filename === undefined
+              ? [file.filename]
+              : [file.filename, file.previous_filename],
+          ),
+        );
+        if (batch.length < 100) break;
+      }
+      return files;
+    },
   };
 }
+
+const filesSchema = z.array(
+  z.object({ filename: z.string(), previous_filename: z.string().optional() }),
+);
 
 /** One verdict from a commit's check runs. None yet means CI has not started: pending. */
 export function verdictOf(
