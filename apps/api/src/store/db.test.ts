@@ -32,6 +32,10 @@ import {
 } from "./record.ts";
 import { createBrief, unsentBriefs, workerReportsSince } from "./changes.ts";
 import { listSessions } from "./sessions.ts";
+import { FakeExtractor } from "../agent/extractor.ts";
+import { runCapture } from "../api/capture.ts";
+import { captureSpentSince } from "./capture.ts";
+import { recordObservation, setListening } from "./listening.ts";
 import { searchDecisions } from "./decisions.ts";
 import { applyMigration, applyMigrations } from "./testing.ts";
 
@@ -679,5 +683,55 @@ describe("the migration that repairs delivery payloads", () => {
     } finally {
       await old.close();
     }
+  });
+});
+
+describe("listening and capture through postgres.js (slice 2.5)", () => {
+  it("keeps messages, claims a quiet thread, and writes proposals with their writers and cost", async () => {
+    const channel = { source: "slack" as const, workspaceId: "T", channelId: "Clisten" };
+    await setListening(db, { ...channel, listening: true, actor: { id: "U1" } });
+    const now = new Date();
+    for (const [messageId, actor] of [
+      ["7.1", "U1"],
+      ["7.2", "U2"],
+    ] as const) {
+      expect(
+        await recordObservation(db, {
+          kind: "posted",
+          ...channel,
+          messageId,
+          threadId: "7.1",
+          actor: { id: actor },
+          text: `said ${messageId}`,
+          sentAt: new Date(now.getTime() - 45 * 60_000).toISOString(),
+        }),
+      ).toBe("kept");
+    }
+    const extractor = new FakeExtractor();
+    extractor.answer({
+      kind: "ok",
+      usage: { inputTokens: 3000, outputTokens: 200 },
+      decisions: [
+        {
+          statement: "Use X.",
+          reason: "Because.",
+          area: "infra",
+          decidedBy: "U2",
+          messageId: "7.2",
+        },
+      ],
+    });
+    const result = await runCapture(
+      { db, extractor, dailyBudgetCents: 100, now: () => now },
+      memoryLogger().log,
+    );
+    expect(result).toMatchObject({ read: 1, proposed: 1 });
+    expect(
+      await db.query(
+        `select confirmable_by, number::float8 > 0 as numbered from decisions
+         where origin = 'capture' and channel_id = 'Clisten'`,
+      ),
+    ).toEqual([{ confirmable_by: ["U1", "U2"], numbered: true }]);
+    expect(await captureSpentSince(db, new Date(now.getTime() - 60_000))).toBe(400);
   });
 });

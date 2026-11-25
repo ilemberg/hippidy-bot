@@ -78,3 +78,24 @@ function readPersonAuth(env: Env, log: Logger): PersonAuthConfig | undefined {
   }
   return secret === undefined || workspaceId === undefined ? undefined : { secret, workspaceId };
 }
+
+/** What capture may spend in a UTC day unless `CAPTURE_DAILY_BUDGET_CENTS` says otherwise. */
+export const DEFAULT_CAPTURE_DAILY_BUDGET_CENTS = 100;
+
+/**
+ * Capture's daily budget in cents (slice 2.5, decision 199): $1 when unset. A bad value is
+ * logged and gives 0, so capture fails closed and reads nothing.
+ */
+export function readCaptureBudgetCents(env: Env, log: Logger): number {
+  const raw = env.CAPTURE_DAILY_BUDGET_CENTS;
+  if (raw === undefined || raw === "") return DEFAULT_CAPTURE_DAILY_BUDGET_CENTS;
+  const parsed = z.coerce.number().int().min(0).max(100_000).safeParse(raw.trim());
+  if (!parsed.success) {
+    log.error("config.capture_budget_invalid", {
+      variable: "CAPTURE_DAILY_BUDGET_CENTS",
+      reason: "must be a whole number of cents, from 0 to 100000",
+    });
+    return 0;
+  }
+  return parsed.data;
+}

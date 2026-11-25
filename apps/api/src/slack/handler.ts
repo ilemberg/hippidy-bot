@@ -2,6 +2,7 @@ import type { ConfirmDecisionResult, ContextMessage, StartBriefResult } from "@h
 import type { Logger } from "../log.ts";
 import type { ApiClient } from "./api-client.ts";
 import { z } from "zod";
+import { handleListenCommand, listenCommand, type ListenOutcome } from "./listening.ts";
 import {
   appMentionEnvelopeSchema,
   botUserIdOf,
@@ -22,6 +23,8 @@ export interface SlackActions {
   userName(userId: string): Promise<string | undefined>;
   /** One page of a thread's messages, oldest first (`conversations.replies`). */
   threadReplies(channel: string, threadTs: string): Promise<SlackThreadMessage[]>;
+  /** Posts a message in a channel, or in a thread with `threadTs` (`chat.postMessage`). */
+  postMessage(input: { channel: string; text: string; threadTs?: string }): Promise<void>;
 }
 
 export interface MentionDeps {
@@ -30,6 +33,8 @@ export interface MentionDeps {
   log: Logger;
   /** How long reading the thread may take; `THREAD_READ_TIMEOUT_MS` unless a test says. */
   threadReadTimeoutMs?: number;
+  /** The web app, for the link in the listening note (slice 2.5). */
+  webBaseUrl?: string | undefined;
 }
 
 export interface MentionDelivery {
@@ -42,7 +47,13 @@ export interface MentionDelivery {
 }
 
 export type MentionOutcome =
-  "reacted" | "stopped" | "dropped_retry" | "invalid_event" | "api_rejected" | "reaction_failed";
+  | "reacted"
+  | "stopped"
+  | "dropped_retry"
+  | "invalid_event"
+  | "api_rejected"
+  | "reaction_failed"
+  | ListenOutcome;
 
 export const RECEIVED_REACTION = "eyes";
 /** The reaction that stops the agent in a thread (decision 60). */
@@ -96,6 +107,18 @@ export async function handleMention(
   const envelope = parsed.data;
   const correlationId = envelope.event_id;
   const message = toInboundMessage(envelope);
+
+  // "listen" or "stop listening" (slice 2.5) switches listening in the channel; it is not a
+  // message for the teammate.
+  const listen = listenCommand(message.text);
+  if (listen !== undefined) {
+    return handleListenCommand(envelope, listen, {
+      api: deps.api,
+      slack: deps.slack,
+      log,
+      webBaseUrl: deps.webBaseUrl,
+    });
+  }
 
   if (isStopCommand(message.text)) {
     try {

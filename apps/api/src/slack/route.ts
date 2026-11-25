@@ -1,4 +1,5 @@
 import type { ErrorResponse } from "@hippidy/contracts";
+import { handleChannelMessage } from "./listening.ts";
 import { App, type webApi } from "@slack/bolt";
 import { createHandler, VercelReceiver } from "@vercel/slack-bolt";
 import { z } from "zod";
@@ -47,6 +48,15 @@ const realSlackActions = (client: webApi.WebClient): SlackActions => ({
       .find((candidate) => candidate !== undefined && candidate !== "");
     names.set(userId, { name, until: Date.now() + NAME_TTL_MS });
     return name;
+  },
+  async postMessage(input) {
+    await client.chat.postMessage({
+      channel: input.channel,
+      text: input.text,
+      ...(input.threadTs === undefined ? {} : { thread_ts: input.threadTs }),
+      // A note about listening links one page; no preview of it.
+      unfurl_links: false,
+    });
   },
   async threadReplies(channel, threadTs) {
     // Needs `channels:history` and `groups:history` (decision 140). Slack returns a thread
@@ -158,7 +168,24 @@ export function createSlackEventsHandler(deps: SlackRouteDeps): SlackEventsHandl
     app.event("app_mention", async ({ body, context, client }) => {
       await handleMention(
         { body, retryNum: context.retryNum ?? 0, retryReason: context.retryReason ?? "" },
-        { api: deps.api, slack: slackActions(client), log: deps.log },
+        {
+          api: deps.api,
+          slack: slackActions(client),
+          log: deps.log,
+          webBaseUrl: config.webBaseUrl,
+        },
+      );
+    });
+    // Messages in channels the bot is in (slice 2.5). The API keeps only those of channels
+    // listened to; nothing is ever posted in reply (176). Bolt drops the bot's own messages.
+    app.event("message", async ({ body, context, client }) => {
+      await handleChannelMessage(
+        { body, retryNum: context.retryNum ?? 0, retryReason: context.retryReason ?? "" },
+        {
+          api: deps.api,
+          userName: (userId) => slackActions(client).userName(userId),
+          log: deps.log,
+        },
       );
     });
     app.event("reaction_added", async ({ body }) => {

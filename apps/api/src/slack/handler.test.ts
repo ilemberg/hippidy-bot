@@ -34,7 +34,28 @@ function setup(
   const starts: { briefId: string; request: StartBriefRequest; correlationId: string }[] = [];
   const confirms: { decisionId: string; request: unknown; correlationId: string }[] = [];
   const reactions: { channel: string; timestamp: string; name: string }[] = [];
+  const listening: unknown[] = [];
+  const notes: { channel: string; text: string; threadTs?: string }[] = [];
   const api: ApiClient = {
+    setListening: (request) => {
+      listening.push(request);
+      return Promise.resolve({
+        kind: "done",
+        result: {
+          changed: true,
+          channel: {
+            source: "slack",
+            workspaceId: request.workspaceId,
+            channelId: request.channelId,
+            listening: request.listening,
+            startedAt: "2026-11-25T00:00:00.000Z",
+            changedAt: "2026-11-25T00:00:00.000Z",
+            changedBy: { actorId: request.actor.id, name: null },
+          },
+        },
+      });
+    },
+    observe: () => Promise.resolve({ kind: "done", result: { result: "kept" } }),
     postMessage: async (message, correlationId) => {
       posted.push({ message, correlationId });
       return (options.api ?? (() => Promise.resolve(accepted)))();
@@ -65,10 +86,16 @@ function setup(
       threadReads.push({ channel, threadTs });
       return (options.threadReplies ?? (() => Promise.resolve([])))(channel, threadTs);
     },
+    postMessage: (input) => {
+      notes.push(input);
+      return Promise.resolve();
+    },
   };
   const { log, lines } = memoryLogger();
   return {
-    deps: { api, slack, log, threadReadTimeoutMs: 50 },
+    deps: { api, slack, log, threadReadTimeoutMs: 50, webBaseUrl: undefined as string | undefined },
+    listening,
+    notes,
     posted,
     stops,
     starts,
@@ -605,5 +632,57 @@ describe("handleConfirmDecisionAction (slice 2.2)", () => {
       "invalid_action",
     );
     expect(confirms).toEqual([]);
+  });
+});
+
+// Slice 2.5: "listen" and "stop listening" switch listening in the channel (decision 199).
+describe("listen commands", () => {
+  it("switches listening on, posts the note in the channel, reacts ✅, and asks the teammate nothing", async () => {
+    const { deps, listening, notes, posted, reactions } = setup();
+    deps.webBaseUrl = "https://web.example.test";
+    expect(await handleMention(mentionSaying("<@U0LAN0Z89> listen"), deps)).toBe("listening_set");
+    expect(listening).toEqual([
+      {
+        source: "slack",
+        workspaceId: "T061EG9R6",
+        channelId: "C0LAN2Q65",
+        listening: true,
+        actor: { id: "U061F7AUR" },
+      },
+    ]);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]?.channel).toBe("C0LAN2Q65");
+    expect(notes[0]?.threadTs).toBeUndefined();
+    expect(notes[0]?.text).toContain("switched listening on");
+    expect(notes[0]?.text).toContain("<https://web.example.test/listening|listening>");
+    expect(reactions).toEqual([
+      { channel: "C0LAN2Q65", timestamp: "1515449522.000016", name: "white_check_mark" },
+    ]);
+    expect(posted).toEqual([]);
+  });
+
+  it('switches it off with "stop listening", and leaves "stop" alone', async () => {
+    const { deps, listening, notes, stops } = setup();
+    await handleMention(mentionSaying("<@U0LAN0Z89> Stop listening here."), deps);
+    expect(listening).toMatchObject([{ listening: false }]);
+    expect(notes[0]?.text).toContain("switched listening off");
+    expect(await handleMention(mentionSaying("<@U0LAN0Z89> stop"), deps)).toBe("stopped");
+    expect(stops).toHaveLength(1);
+  });
+
+  it("sends a question that mentions listening to the teammate", async () => {
+    const { deps, listening, posted } = setup();
+    await handleMention(mentionSaying("<@U0LAN0Z89> can you listen to this channel?"), deps);
+    expect(listening).toEqual([]);
+    expect(posted).toHaveLength(1);
+  });
+
+  it("refuses to listen in a direct message", async () => {
+    const { deps, listening, notes } = setup();
+    const dm = mentionSaying("<@U0LAN0Z89> listen");
+    dm.body = { ...fixture, event: { ...fixture.event, channel: "D0123", text: "listen" } };
+    expect(await handleMention(dm, deps)).toBe("not_a_channel");
+    expect(listening).toEqual([]);
+    expect(notes).toEqual([{ channel: "D0123", text: "I only listen in channels." }]);
   });
 });

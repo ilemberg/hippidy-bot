@@ -1,6 +1,6 @@
 # Slice 2.5: listening and capture
 
-Status: **started 2026-11-25 (decisions 198 and 199).** The wave is in `wave-2.md`; the
+Status: **built 2026-11-25, not merged (decisions 198 and 199).** The wave is in `wave-2.md`; the
 direction in `team-layer.md` and decision 176. G8 to G11 are answered (198).
 
 **Demo:** someone writes "@hippidy listen" in a channel. The bot posts that it now listens

@@ -1,4 +1,12 @@
-import { CORRELATION_ID_HEADER, sessionListSchema, type SessionActivity } from "@hippidy/contracts";
+import {
+  CORRELATION_ID_HEADER,
+  decisionListSchema,
+  listeningListSchema,
+  sessionListSchema,
+  type Decision,
+  type ListeningList,
+  type SessionActivity,
+} from "@hippidy/contracts";
 import type { z } from "zod";
 import type { Logger } from "./log.ts";
 import type { Fetch } from "./slack-oidc.ts";
@@ -64,4 +72,26 @@ export async function fetchSessions(
 ): Promise<ApiResult<SessionActivity[]>> {
   const result = await apiGet(person, `/v1/sessions?limit=${limit}`, sessionListSchema, deps);
   return result.kind === "ok" ? { kind: "ok", value: result.value.sessions } : result;
+}
+
+/** `GET /v1/listening` as the person: where the bot listens (slice 2.5, G9). */
+export function fetchListening(
+  person: Person,
+  deps: ApiClientDeps,
+): Promise<ApiResult<ListeningList>> {
+  return apiGet(person, "/v1/listening", listeningListSchema, deps);
+}
+
+/** `GET /v1/decisions` for the proposals made from listening, newest first. */
+export async function fetchCapturedProposals(
+  person: Person,
+  deps: ApiClientDeps,
+): Promise<ApiResult<Decision[]>> {
+  const result = await apiGet(
+    person,
+    "/v1/decisions?status=proposed&origin=capture&limit=50",
+    decisionListSchema,
+    deps,
+  );
+  return result.kind === "ok" ? { kind: "ok", value: result.value.decisions } : result;
 }

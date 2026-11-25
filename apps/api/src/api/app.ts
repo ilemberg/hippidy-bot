@@ -5,6 +5,11 @@ import {
   listAgentEventsQuerySchema,
   listConversationsQuerySchema,
   listSessionsQuerySchema,
+  observationSchema,
+  setListeningRequestSchema,
+  OBSERVED_MESSAGE_RETENTION_DAYS,
+  type ListeningList,
+  type ObservationResult,
   type SessionList,
   MAX_INBOUND_MESSAGE_BYTES,
   confirmDecisionRequestSchema,
@@ -26,6 +31,7 @@ import type { ApiConfig } from "../config.ts";
 import type { Logger } from "../log.ts";
 import { findChangeBySession } from "../store/changes.ts";
 import { listSessions } from "../store/sessions.ts";
+import { listListening, recordObservation, setListening } from "../store/listening.ts";
 import { searchDecisions } from "../store/decisions.ts";
 import { findConversationBySession } from "../store/conversations.ts";
 import {
@@ -36,6 +42,7 @@ import {
 } from "../store/reading.ts";
 import { requireServiceOrPerson, requireServiceToken } from "./auth.ts";
 import { startBriefByPerson, syncChange } from "./changes.ts";
+import { runCapture, type CaptureDeps } from "./capture.ts";
 import { confirmDecisionByPerson } from "./decisions.ts";
 import {
   reconcile,
@@ -61,6 +68,8 @@ export interface ApiDeps {
   verifyAgentWebhook: VerifyAgentWebhook | undefined;
   /** What `GET /status` checks. */
   status: StatusDeps;
+  /** Capture from listened channels (slice 2.5). Undefined until storage and the agent are. */
+  capture?: CaptureDeps | undefined;
 }
 
 /** Webhook types after which the session may have something new to deliver. */
@@ -156,6 +165,58 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
     }
     return c.json(await stopConversation(deps.conversations, parsed.data, c.var.log), 202);
   });
+
+  // Listening in a channel switched on or off (slice 2.5, decision 199). The source says who.
+  api.put("/v1/listening", requireServiceToken(deps.config.serviceToken), limitBody, async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return errorResponse(c, 400, "invalid_request", "Request body must be JSON");
+    }
+    const parsed = setListeningRequestSchema.safeParse(body);
+    if (!parsed.success) return errorResponse(c, 400, "invalid_request", "Request body is invalid");
+    const db = deps.conversations?.db ?? deps.status.db;
+    if (db === undefined) {
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    }
+    const result = await setListening(db, parsed.data);
+    c.var.log.info("listening.set", {
+      channelId: parsed.data.channelId,
+      listening: parsed.data.listening,
+      changed: result.changed,
+      actorId: parsed.data.actor.id,
+    });
+    return c.json(result);
+  });
+
+  // A message posted, edited or deleted in a channel. Kept only if the channel is listened to.
+  api.post(
+    "/v1/observations",
+    requireServiceToken(deps.config.serviceToken),
+    limitBody,
+    async (c) => {
+      let body: unknown;
+      try {
+        body = await c.req.json();
+      } catch {
+        return errorResponse(c, 400, "invalid_request", "Request body must be JSON");
+      }
+      const parsed = observationSchema.safeParse(body);
+      if (!parsed.success) {
+        return errorResponse(c, 400, "invalid_request", "Request body is invalid");
+      }
+      const db = deps.conversations?.db ?? deps.status.db;
+      if (db === undefined) {
+        return errorResponse(c, 503, "not_configured", "Storage is not configured");
+      }
+      const result: ObservationResult = { result: await recordObservation(db, parsed.data) };
+      if (result.result !== "not_listening") {
+        c.var.log.info("observation.recorded", { kind: parsed.data.kind, result: result.result });
+      }
+      return c.json(result);
+    },
+  );
 
   // A person starts a brief the start rule held back (slice 2.1, decision 181). The source
   // says who pressed Start; the brief must belong to a thread in their source and workspace.
@@ -259,6 +320,19 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
 
   // The agents at work (slice 2.4): every thread's session and every change's worker, the ones
   // working first. From the database alone, like the routes below.
+  // Where the bot listens (slice 2.5, G9): for the web app's page about listening.
+  api.get("/v1/listening", readers, async (c) => {
+    const db = deps.conversations?.db ?? deps.status.db;
+    if (db === undefined) {
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    }
+    const body: ListeningList = {
+      channels: await listListening(db),
+      retentionDays: OBSERVED_MESSAGE_RETENTION_DAYS,
+    };
+    return c.json(body);
+  });
+
   api.get("/v1/sessions", readers, async (c) => {
     const query = listSessionsQuerySchema.safeParse(c.req.query());
     if (!query.success) return invalidQuery(c, query.error);
@@ -361,6 +435,7 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
       decisions: await searchDecisions(db, {
         query: query.data.q,
         statuses: query.data.status === undefined ? undefined : [query.data.status],
+        origin: query.data.origin,
         limit: query.data.limit,
       }),
     };
@@ -415,7 +490,21 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
     if (result.checked > 0 || backfilled > 0) {
       c.var.log.info("reconcile.done", { ...result, backfilled });
     }
-    return c.json({ ...result, backfilled });
+    // Last, capture from listened channels (slice 2.5): after every conversation has been
+    // let go, and never failing reconcile.
+    let captured = 0;
+    if (deps.capture !== undefined) {
+      try {
+        const capture = await runCapture(deps.capture, c.var.log.child({ area: "capture" }));
+        captured = capture.read;
+        if (capture.read > 0 || capture.failed > 0 || capture.expiredMessages > 0) {
+          c.var.log.info("capture.done", { ...capture });
+        }
+      } catch (error) {
+        c.var.log.error("capture.failed", { error });
+      }
+    }
+    return c.json({ ...result, backfilled, captured });
   });
 
   return api;

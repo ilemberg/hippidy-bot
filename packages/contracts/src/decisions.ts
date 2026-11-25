@@ -24,6 +24,12 @@ export const decisionSchema = z.strictObject({
   /** For an import, the entry's number in the log. */
   originRef: z.string().nullable(),
   conversationId: z.guid().nullable(),
+  /**
+   * Where it was decided: the channel and thread (of its conversation, or of a listened channel
+   * for a decision proposed from listening, slice 2.5) and the message.
+   */
+  channelId: z.string().nullable(),
+  threadId: z.string().nullable(),
   messageId: z.string().nullable(),
   /** The number of the decision this one replaces. */
   supersedes: z.number().int().positive().nullable(),
@@ -36,6 +42,7 @@ export type Decision = z.infer<typeof decisionSchema>;
 export const listDecisionsQuerySchema = z.strictObject({
   q: z.string().trim().min(1).max(200).optional(),
   status: decisionStatusSchema.optional(),
+  origin: z.enum(["thread", "import", "capture"]).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });
 export type ListDecisionsQuery = z.infer<typeof listDecisionsQuerySchema>;

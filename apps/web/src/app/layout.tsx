@@ -22,6 +22,10 @@ const styles = `
   pre { overflow-x: auto; padding: 0.75rem; border-radius: 6px; background: rgba(127,127,127,0.12); }
   a { color: var(--accent); }
   h2 { font-size: 1.15rem; margin: 0; }
+  h3 { font-size: 1rem; margin: 1.5rem 0 0.25rem; }
+  .home { color: inherit; text-decoration: none; }
+  .about p { margin: 0.5rem 0; }
+  code { font-size: 0.9em; padding: 0 0.25rem; border-radius: 4px; background: rgba(127,127,127,0.15); }
   .bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
   .sessions { list-style: none; padding: 0; margin: 1rem 0; }
   .session { padding: 0.75rem 0; border-top: 1px solid rgba(127,127,127,0.25); }

@@ -16,9 +16,12 @@ import type { Db, Row } from "./db.ts";
 const columns = `
   d.id, d.number::float8 as number, d.statement, d.reason, d.area, d.status,
   d.decided_by_actor_id, d.decided_by_name, d.decided_at, d.origin, d.origin_ref,
-  d.conversation_id, d.message_id, s.number::float8 as supersedes,
+  d.conversation_id, coalesce(d.channel_id, c.channel_id) as channel_id,
+  coalesce(d.thread_id, c.thread_id) as thread_id, d.message_id,
+  s.number::float8 as supersedes,
   d.confirmed_by_actor_id, d.confirmed_by_name, d.confirmed_at`;
-const from = `decisions d left join decisions s on s.id = d.supersedes_id`;
+const from = `decisions d left join decisions s on s.id = d.supersedes_id
+  left join conversations c on c.id = d.conversation_id`;
 
 const row = z.object({
   id: z.string(),
@@ -33,6 +36,8 @@ const row = z.object({
   origin: z.enum(["thread", "import", "capture"]),
   origin_ref: z.string().nullable(),
   conversation_id: z.string().nullable(),
+  channel_id: z.string().nullable(),
+  thread_id: z.string().nullable(),
   message_id: z.string().nullable(),
   supersedes: z.number().int().positive().nullable(),
   confirmed_by_actor_id: z.string().nullable(),
@@ -54,6 +59,8 @@ function toDecision(r: Row): Decision {
     origin: d.origin,
     originRef: d.origin_ref,
     conversationId: d.conversation_id,
+    channelId: d.channel_id,
+    threadId: d.thread_id,
     messageId: d.message_id,
     supersedes: d.supersedes,
     confirmedBy:
@@ -219,6 +226,7 @@ export async function searchDecisions(
     query?: string | undefined;
     area?: string | undefined;
     statuses?: readonly DecisionStatus[] | undefined;
+    origin?: Decision["origin"] | undefined;
     limit: number;
     /**
      * How many of the query's words a decision must share to be returned: 1 for a search, 2 for
@@ -252,6 +260,7 @@ export async function searchDecisions(
      where d.status = any($2::text[])
        and not q.nothing
        and ($3::text is null or lower(d.area) = lower($3::text))
+       and ($6::text is null or d.origin = $6::text)
        and (q.query is null or (
          d.search @@ q.query
          and (select count(*) from unnest(q.words) x where d.search @@ to_tsquery('simple', x))
@@ -262,7 +271,14 @@ export async function searchDecisions(
      order by case when q.query is null then 0 else ts_rank(d.search, q.query, 1) end desc,
               d.decided_at desc, d.number desc
      limit $4`,
-    [query, statuses, options.area ?? null, options.limit, options.minShared ?? 1],
+    [
+      query,
+      statuses,
+      options.area ?? null,
+      options.limit,
+      options.minShared ?? 1,
+      options.origin ?? null,
+    ],
   );
   return rows.map(toDecision);
 }

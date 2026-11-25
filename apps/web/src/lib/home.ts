@@ -30,6 +30,19 @@ export interface HomeDeps {
   now?: () => Date;
 }
 
+/** The person the session cookie names, if it is valid for this workspace and still fresh. */
+export function signedInPerson(
+  sessionCookie: string | undefined,
+  config: WebConfig,
+  now: Date,
+): Promise<Person | undefined> {
+  return readSession(sessionCookie, {
+    secret: config.sessionSecret,
+    workspaceId: config.slack.workspaceId,
+    now,
+  });
+}
+
 const isNotice = (value: string | undefined): value is SignInNotice =>
   signInNotices.some((notice) => notice === value);
 
@@ -41,11 +54,7 @@ export async function loadHome(
   const config = deps.config;
   if (config === undefined) return { kind: "unconfigured" };
   const now = deps.now?.() ?? new Date();
-  const person = await readSession(input.sessionCookie, {
-    secret: config.sessionSecret,
-    workspaceId: config.slack.workspaceId,
-    now,
-  });
+  const person = await signedInPerson(input.sessionCookie, config, now);
   if (person === undefined) {
     return { kind: "signed_out", notice: isNotice(input.signin) ? input.signin : undefined };
   }
