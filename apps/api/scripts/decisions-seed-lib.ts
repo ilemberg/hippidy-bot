@@ -78,7 +78,7 @@ export function seedMigration(entries: readonly LogEntry[], all: readonly LogEnt
     "insert into public.decisions",
     "  (statement, reason, status, decided_by_name, decided_at, origin, origin_ref)",
     "values",
-    `${rows.join(",\n")}`,
+    rows.join(",\n"),
     "on conflict (origin, origin_ref) where origin_ref is not null do nothing;",
     "",
   ].join("\n");
