@@ -167,3 +167,17 @@ describe("change_briefs", () => {
     }
   });
 });
+
+describe("conversations.agent_kind", () => {
+  it("takes the teammate besides the two agents before it", async () => {
+    for (const kind of ["engineer", "product", "teammate"]) {
+      await db.query(`update conversations set agent_kind = $2 where id = $1`, [
+        conversationId,
+        kind,
+      ]);
+    }
+    await expect(
+      db.query(`update conversations set agent_kind = 'worker' where id = $1`, [conversationId]),
+    ).rejects.toThrow();
+  });
+});

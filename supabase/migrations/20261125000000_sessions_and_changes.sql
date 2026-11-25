@@ -3,8 +3,8 @@
 -- session of an older thread) stays on `conversations`, as before; each change gets its own
 -- coding worker, whose session lives on the change. A brief joins the two.
 --
--- Additive only (decision 86): two new tables and one nullable column. The code before this
--- never reads them; part C writes them.
+-- Additive only (decision 86): two new tables, one nullable column, and one more value the
+-- agent kind may take. The code before this never reads them; part C writes them.
 
 -- A change to the code, asked for in a thread and handed to a coding worker (decision 181),
 -- with the worker's session and the loop's state for it, as `conversations` holds them for the
@@ -104,6 +104,12 @@ alter table public.inbound_messages
 create index inbound_messages_brief_idx
   on public.inbound_messages (change_brief_id)
   where change_brief_id is not null;
+
+-- New threads get the teammate (part E); older threads keep the agent they were given (59).
+alter table public.conversations drop constraint conversations_agent_kind_check;
+alter table public.conversations
+  add constraint conversations_agent_kind_check
+    check (agent_kind in ('engineer', 'product', 'teammate'));
 
 alter table public.changes enable row level security;
 alter table public.change_briefs enable row level security;
