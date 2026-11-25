@@ -77,6 +77,11 @@ export const notAllowedReasonSchema = z.enum([
   "not_in_thread",
   /** It was imported from the decision log, which is its source. */
   "read_only",
+  /**
+   * It replaces someone else's decision, so only its deciders (the area's owner, the fallback,
+   * the replaced decision's own decider) may confirm or reword it (slice 3.2, decision 208).
+   */
+  "not_decider",
 ]);
 export type NotAllowedReason = z.infer<typeof notAllowedReasonSchema>;
 
@@ -149,6 +154,8 @@ export const decisionDetailSchema = z.strictObject({
   youMay: z.strictObject({
     act: z.boolean(),
     reason: notAllowedReasonSchema.nullable(),
+    /** May reject (withdraw) a proposal they may not confirm (slice 3.2, decision 208). */
+    withdraw: z.boolean().optional(),
   }),
 });
 export type DecisionDetail = z.infer<typeof decisionDetailSchema>;

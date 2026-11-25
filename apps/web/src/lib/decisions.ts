@@ -183,6 +183,7 @@ export const actionErrors = [
   "not_allowed",
   "not_in_thread",
   "read_only",
+  "not_decider",
   "invalid",
   "unchanged",
   "changed",
@@ -457,6 +458,8 @@ export function notAllowedText(reason: NotAllowedReason | null, decision: Decisi
         : "Only people who wrote in the thread it came from, or the owner of its area, can confirm or change it.";
     case "read_only":
       return "Imported from the decision log; change it there.";
+    case "not_decider":
+      return "It would replace someone else's decision, so only the people who decide it can confirm or change it: the owner of its area (or the project's owner), or whoever made the decision it replaces. You may still withdraw it.";
     case null:
       return "You cannot confirm or change it.";
   }
@@ -491,6 +494,7 @@ export function noticeText(notice: ActionNotice, decision: Decision | undefined)
       return "You cannot confirm or change it.";
     case "not_in_thread":
     case "read_only":
+    case "not_decider":
       return decision === undefined
         ? "You cannot confirm or change it."
         : notAllowedText(notice.error, decision);

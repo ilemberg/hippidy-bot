@@ -16,6 +16,7 @@ export const customToolNameSchema = z.enum([
   "start_change",
   "record_decision",
   "recall_decisions",
+  "raise_conflict",
 ]);
 export type CustomToolName = z.infer<typeof customToolNameSchema>;
 
@@ -136,6 +137,39 @@ export const recordDecisionOutputSchema = z.strictObject({
   status: z.enum(["active", "proposed"]),
 });
 export type RecordDecisionOutput = z.infer<typeof recordDecisionOutputSchema>;
+
+/**
+ * Input of `raise_conflict` (slice 3.2, decision 208): people in the thread want opposite
+ * things, or a request contradicts an active decision. The API posts it with who decides.
+ */
+export const raiseConflictInputSchema = z
+  .strictObject({
+    summary: z.string().trim().min(1).max(300).refine(noNull, noNullMessage),
+    /** Active decisions it bears on. */
+    decisions: z.array(z.number().int().positive().max(1_000_000)).max(3).optional(),
+    /** Who wants what. */
+    positions: z
+      .array(
+        z.strictObject({
+          actorId: z.string().trim().min(1).max(255).refine(noNull, noNullMessage),
+          says: z.string().trim().min(1).max(300).refine(noNull, noNullMessage),
+        }),
+      )
+      .max(4)
+      .optional(),
+    area: z.string().trim().min(1).max(100).refine(noNull, noNullMessage).optional(),
+  })
+  .refine((c) => (c.decisions?.length ?? 0) >= 1 || (c.positions?.length ?? 0) >= 2, {
+    message: "Name at least one decision, or two positions",
+  });
+export type RaiseConflictInput = z.infer<typeof raiseConflictInputSchema>;
+
+/** Result of `raise_conflict`: its number, and who was asked to decide. */
+export const raiseConflictOutputSchema = z.strictObject({
+  number: z.number().int().positive(),
+  deciders: z.array(z.string()),
+});
+export type RaiseConflictOutput = z.infer<typeof raiseConflictOutputSchema>;
 
 /** Input of `recall_decisions`: words to search the active decisions for, and an area. */
 export const recallDecisionsInputSchema = z.strictObject({
