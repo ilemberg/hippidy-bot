@@ -187,8 +187,7 @@ export function signOut(request: Request, deps: Pick<AuthDeps, "config" | "log">
   const origin = request.headers.get("origin");
   const site = request.headers.get("sec-fetch-site");
   const sameOrigin =
-    site === "same-origin" ||
-    (origin !== null && origin === deps.config?.webBaseUrl);
+    site === "same-origin" || (origin !== null && origin === deps.config?.webBaseUrl);
   if (!sameOrigin) {
     deps.log.warn("signin.signout_refused", { reason: "cross_origin" });
     return new Response("Sign-out must come from this app.", { status: 403 });
