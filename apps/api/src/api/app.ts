@@ -4,6 +4,8 @@ import {
   inboundMessageSchema,
   listAgentEventsQuerySchema,
   listConversationsQuerySchema,
+  listSessionsQuerySchema,
+  type SessionList,
   MAX_INBOUND_MESSAGE_BYTES,
   startBriefRequestSchema,
   stopRequestSchema,
@@ -20,6 +22,7 @@ import type { VerifyAgentWebhook } from "../agent/webhooks.ts";
 import type { ApiConfig } from "../config.ts";
 import type { Logger } from "../log.ts";
 import { findChangeBySession } from "../store/changes.ts";
+import { listSessions } from "../store/sessions.ts";
 import { findConversationBySession } from "../store/conversations.ts";
 import {
   listConversations,
@@ -216,6 +219,20 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
       "Query is invalid",
       error.issues.map((issue) => ({ path: issue.path.join("."), message: issue.message })),
     );
+
+  // The agents at work (slice 2.4): every thread's session and every change's worker, the ones
+  // working first. From the database alone, like the routes below.
+  api.get("/v1/sessions", readers, async (c) => {
+    const query = listSessionsQuerySchema.safeParse(c.req.query());
+    if (!query.success) return invalidQuery(c, query.error);
+    const db = deps.conversations?.db ?? deps.status.db;
+    if (db === undefined) {
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    }
+    const list: SessionList = { sessions: await listSessions(db, query.data.limit) };
+    c.var.log.info("sessions.listed", { count: list.sessions.length });
+    return c.json(list);
+  });
 
   api.get("/v1/conversations", readers, async (c) => {
     const query = listConversationsQuerySchema.safeParse(c.req.query());

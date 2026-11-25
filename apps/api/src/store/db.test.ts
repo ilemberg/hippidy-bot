@@ -31,6 +31,7 @@ import {
   storedEventsToActOn,
 } from "./record.ts";
 import { createBrief, unsentBriefs, workerReportsSince } from "./changes.ts";
+import { listSessions } from "./sessions.ts";
 import { applyMigration, applyMigrations } from "./testing.ts";
 
 // The production client (postgres.js) over a real Postgres connection, served by PGlite.
@@ -601,6 +602,19 @@ describe("changes and briefs through postgres.js (slice 2.1)", () => {
       ),
     ).toEqual([{ cost: 123, seconds: 1.5 }]);
     expect(await workerReportsSince(db, conversation.id)).toEqual([]);
+  });
+});
+
+describe("the sessions list through postgres.js (slice 2.4)", () => {
+  it("reads costs as numbers and times as ISO strings", async () => {
+    // The thread from the conversation loop test (cost 7) and the change above (cost 123).
+    const sessions = await listSessions(db, 50);
+    const thread = sessions.find((s) => s.kind === "thread" && s.thread.threadId === "5.5");
+    const worker = sessions.find((s) => s.kind === "worker" && s.thread.threadId === "brief.1");
+    expect(thread?.cost).toEqual({ spentMinor: 7, budgetMinor: null, currency: "USD" });
+    expect(thread?.latestActivity?.text).toBe("before ab \ufffd after");
+    expect(worker?.cost).toEqual({ spentMinor: 123, budgetMinor: 500, currency: "USD" });
+    expect(worker?.startedAt).toMatch(/^\d{4}-\d\d-\d\dT.*Z$/);
   });
 });
 

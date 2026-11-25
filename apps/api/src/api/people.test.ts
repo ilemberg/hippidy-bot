@@ -3,6 +3,7 @@ import {
   conversationListSchema,
   errorResponseSchema,
   meResponseSchema,
+  sessionListSchema,
   type InboundMessage,
 } from "@hippidy/contracts";
 import { Hono } from "hono";
@@ -168,6 +169,41 @@ describe("a person reading the record", () => {
     expect(lines).toContainEqual(
       expect.objectContaining({ msg: "conversations.listed", actorId: "U0123456789" }),
     );
+  });
+});
+
+describe("GET /v1/sessions", () => {
+  it("lists the agents at work for a person, and for the service", async () => {
+    const { app, lines } = setup();
+    const posted = await app.request("/v1/messages", {
+      method: "POST",
+      headers: { ...bearer(serviceToken), "content-type": "application/json" },
+      body: JSON.stringify(message),
+    });
+    expect(posted.status).toBe(202);
+
+    const res = await app.request("/v1/sessions?limit=5", {
+      headers: bearer(await signPersonToken()),
+    });
+    expect(res.status).toBe(200);
+    const list = sessionListSchema.parse(await res.json());
+    expect(list.sessions).toMatchObject([
+      { kind: "thread", title: "hello", state: "working", askedBy: { actorId: "U1" } },
+    ]);
+    expect(lines).toContainEqual(
+      expect.objectContaining({ msg: "sessions.listed", count: 1, actorId: "U0123456789" }),
+    );
+
+    const service = await app.request("/v1/sessions", { headers: bearer(serviceToken) });
+    expect(sessionListSchema.parse(await service.json()).sessions).toHaveLength(1);
+  });
+
+  it("refuses a bad limit and a caller with no token", async () => {
+    const { app } = setup();
+    const headers = bearer(await signPersonToken());
+    expect((await app.request("/v1/sessions?limit=51", { headers })).status).toBe(400);
+    expect((await app.request("/v1/sessions?other=1", { headers })).status).toBe(400);
+    await expectUnauthorized(await app.request("/v1/sessions"));
   });
 });
 

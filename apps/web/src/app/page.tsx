@@ -1,8 +1,10 @@
+import type { SessionActivity } from "@hippidy/contracts";
 import { cookies } from "next/headers";
 import type { SignInNotice } from "../lib/auth-flow.ts";
 import { SESSION_COOKIE } from "../lib/cookies.ts";
-import { loadHome, type HomeView } from "../lib/home.ts";
+import { loadHome, SESSIONS_SHOWN, type HomeView } from "../lib/home.ts";
 import { serverDeps } from "../lib/server.ts";
+import { agentLabel, ago, costText, stateLabel, threadLink } from "../lib/sessions-view.ts";
 
 export const dynamic = "force-dynamic";
 
@@ -48,22 +50,80 @@ function View({ view }: { view: HomeView }) {
           </a>
         </>
       );
-    case "signed_in":
+    case "signed_in": {
+      const readAt = new Date(view.readAt);
       return (
         <>
-          <p>Signed in as {view.person.name}</p>
-          <h2>What the API says</h2>
-          {view.me.kind === "ok" ? (
-            <pre>{JSON.stringify(view.me.me, null, 2)}</pre>
+          <div className="bar">
+            <h2>Agents at work</h2>
+            {/* The page is rendered on each request, so reloading it is the refresh. */}
+            <a className="button" href="/">
+              Refresh
+            </a>
+          </div>
+          <p className="muted">
+            The latest {SESSIONS_SHOWN}, working ones first. As of{" "}
+            <time dateTime={view.readAt}>{readAt.toUTCString()}</time>.
+          </p>
+          {view.sessions.kind === "failed" ? (
+            <p className="notice">The API did not answer ({view.sessions.reason}).</p>
+          ) : view.sessions.value.length === 0 ? (
+            <p className="muted">No agent has worked yet.</p>
           ) : (
-            <p className="notice">The API did not answer ({view.me.reason}).</p>
+            <ul className="sessions">
+              {view.sessions.value.map((session) => (
+                <SessionItem
+                  key={`${session.kind}:${session.changeId ?? session.conversationId}`}
+                  session={session}
+                  now={readAt}
+                />
+              ))}
+            </ul>
           )}
-          <form method="post" action="/auth/signout">
-            <button className="button" type="submit">
-              Sign out
-            </button>
-          </form>
+          <footer className="muted">
+            Signed in as {view.person.name}.{" "}
+            <form method="post" action="/auth/signout" className="inline">
+              <button className="link" type="submit">
+                Sign out
+              </button>
+            </form>
+          </footer>
         </>
       );
+    }
   }
+}
+
+function SessionItem({ session, now }: { session: SessionActivity; now: Date }) {
+  const link = threadLink(session.thread);
+  const asked = session.askedBy?.name ?? session.askedBy?.actorId;
+  return (
+    <li className="session">
+      <div className="session-head">
+        <span className={`state state-${session.state}`}>{stateLabel[session.state]}</span>
+        <span className="muted">{agentLabel[session.agent]}</span>
+        <span className="muted">{costText(session.cost)}</span>
+      </div>
+      <p className="session-title">
+        {link === undefined ? (
+          session.title
+        ) : (
+          <a href={link} rel="noreferrer">
+            {session.title}
+          </a>
+        )}
+      </p>
+      <p className="muted">
+        {asked === undefined ? "Asked by someone unknown" : `Asked by ${asked}`}
+        {session.project === null ? "" : ` · ${session.project.name}`} · started{" "}
+        {ago(session.startedAt, now)}
+      </p>
+      {session.latestActivity === null ? null : (
+        <p className="latest">
+          <span className="muted">{ago(session.latestActivity.at, now)}:</span>{" "}
+          {session.latestActivity.text}
+        </p>
+      )}
+    </li>
+  );
 }
