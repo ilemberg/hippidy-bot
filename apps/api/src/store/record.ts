@@ -200,11 +200,13 @@ export async function recordUsage(
   db: Db,
   conversationId: string,
   usage: UsageToStore,
+  /** Where the session's usage is kept: the thread's own session, or a change's worker. */
+  table: "conversations" | "changes" = "conversations",
 ): Promise<boolean> {
   const { currency, ...numbers } = usage;
   if (Object.values(numbers).every((value) => value === null)) return false;
   await db.query(
-    `update conversations
+    `update ${table === "changes" ? "changes" : "conversations"}
      set usage_input_tokens = greatest(usage_input_tokens, $2::bigint),
          usage_output_tokens = greatest(usage_output_tokens, $3::bigint),
          usage_cache_read_tokens = greatest(usage_cache_read_tokens, $4::bigint),

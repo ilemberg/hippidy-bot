@@ -498,7 +498,11 @@ export async function pendingForwards(
   });
 }
 
-/** Which pending messages to settle. */
+/**
+ * Which pending messages to settle. The first three are the thread's own session's: they
+ * leave out messages that led to a brief, which a coding worker's turn settles instead
+ * (slice 2.1, decision 184).
+ */
 export type Settlement =
   /** Messages whose agent events are listed: the agent processed them. */
   | { kind: "agent_events"; ids: string[] }
@@ -509,7 +513,13 @@ export type Settlement =
   /** Every pending message, handed over or not (a stop). */
   | { kind: "all_pending" }
   /** Specific inbound messages, by their id here. */
-  | { kind: "inbound"; ids: string[] };
+  | { kind: "inbound"; ids: string[] }
+  /** Messages that led to briefs the worker has processed, by the briefs' worker event ids. */
+  | { kind: "briefs"; workerEventIds: string[] }
+  /** Messages that led to any brief of this change already handed to its worker. */
+  | { kind: "handed_over"; changeId: string }
+  /** Every message that led to a brief of this change (its worker can do no more). */
+  | { kind: "change"; changeId: string };
 
 /**
  * Settles the selected pending messages. The conversation stays waiting while any message
@@ -527,18 +537,29 @@ export async function settleMessages(
   return db.transaction(async (tx) => {
     await lockConversation(tx, conversationId);
     const where = {
-      agent_events: "agent_event_id = any($3::text[])",
+      agent_events: "agent_event_id = any($3::text[]) and change_brief_id is null",
       forwarded_without_event:
-        "agent_event_id is null and forwarded_at is not null and forwarded_at <= $3",
-      all_forwarded: "forwarded_at is not null",
+        "agent_event_id is null and forwarded_at is not null and forwarded_at <= $3 " +
+        "and change_brief_id is null",
+      all_forwarded: "forwarded_at is not null and change_brief_id is null",
       all_pending: "true",
       inbound: "id = any($3::uuid[])",
+      briefs:
+        "change_brief_id in (select id from change_briefs where worker_event_id = any($3::text[]))",
+      handed_over:
+        "change_brief_id in (select id from change_briefs " +
+        "where change_id = $3::uuid and worker_event_id is not null)",
+      change: "change_brief_id in (select id from change_briefs where change_id = $3::uuid)",
     }[settlement.kind];
     const params: unknown[] = [conversationId, status];
     if (settlement.kind === "agent_events" || settlement.kind === "inbound") {
       params.push(settlement.ids);
     } else if (settlement.kind === "forwarded_without_event") {
       params.push(settlement.cutoff);
+    } else if (settlement.kind === "briefs") {
+      params.push(settlement.workerEventIds);
+    } else if (settlement.kind === "change" || settlement.kind === "handed_over") {
+      params.push(settlement.changeId);
     }
     const settled = await tx.query(
       `update inbound_messages set status = $2
@@ -546,13 +567,16 @@ export async function settleMessages(
        returning message_id, sent_at`,
       params,
     );
+    // The thread waits on its own session only for messages that led to no brief: a coding
+    // worker keeps its own clock (decision 184).
     await tx.query(
       `update conversations c
        set status = case when p.oldest is null then $2 else 'waiting' end,
            waiting_since = p.oldest,
            updated_at = now()
        from (select min(coalesce(forwarded_at, created_at)) as oldest from inbound_messages
-             where conversation_id = $1 and status = 'received') p
+             where conversation_id = $1 and status = 'received'
+               and change_brief_id is null) p
        where c.id = $1 and c.status in ('new', 'waiting')`,
       [conversationId, status],
     );

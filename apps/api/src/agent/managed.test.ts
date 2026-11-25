@@ -123,6 +123,23 @@ describe("toAgentEvent", () => {
     ).toBeUndefined();
   });
 
+  it("reads which MCP server and tool the agent called (slice 2.1's start rule)", () => {
+    const use: BetaManagedAgentsSessionEvent = {
+      id: "sevt_m",
+      type: "agent.mcp_tool_use",
+      mcp_server_name: "atlassian",
+      name: "getJiraIssue",
+      input: { issueIdOrKey: "SCRUM-7" },
+      processed_at: "2026-11-25T10:00:00Z",
+    };
+    expect(toAgentEvent(use)).toEqual({
+      kind: "mcp_tool_use",
+      id: "sevt_m",
+      server: "atlassian",
+      name: "getJiraIssue",
+    });
+  });
+
   it("reads a git push from a shell command, and nothing else", () => {
     const bash = (command: string): BetaManagedAgentsSessionEvent => ({
       id: "sevt_b",

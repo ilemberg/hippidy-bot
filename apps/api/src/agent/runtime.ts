@@ -87,6 +87,11 @@ export type AgentEvent =
   | { kind: "pull_request"; id: string; url: string }
   /** The agent ran `git push` in its sandbox. */
   | { kind: "pushed"; id: string }
+  /**
+   * The agent called a tool of an MCP server (Jira, Confluence, GitHub). The start rule of
+   * slice 2.1 reads these: a brief written after one needs a person to start it (decision 181).
+   */
+  | { kind: "mcp_tool_use"; id: string; server: string; name: string }
   /** An answer to a tool call that waited for approval. */
   | { kind: "tool_confirmation"; id: string; toolUseId: string }
   /**

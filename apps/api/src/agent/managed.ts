@@ -333,6 +333,13 @@ export function toAgentEvent(event: BetaManagedAgentsSessionEvent): AgentEvent |
       const url = PULL_REQUEST_URL.exec(text)?.[1];
       return url === undefined ? undefined : { kind: "pull_request", id: event.id, url };
     }
+    case "agent.mcp_tool_use":
+      return {
+        kind: "mcp_tool_use",
+        id: event.id,
+        server: event.mcp_server_name,
+        name: event.name,
+      };
     case "agent.tool_use": {
       const command = event.name === "bash" ? event.input.command : undefined;
       return typeof command === "string" && GIT_PUSH.test(command)

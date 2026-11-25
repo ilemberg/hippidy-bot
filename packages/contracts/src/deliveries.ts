@@ -11,8 +11,8 @@ export const deliveryTargetSchema = z.strictObject({
 export type DeliveryTarget = z.infer<typeof deliveryTargetSchema>;
 
 /**
- * Something the API sends back to a source (decision 53): a reply in the thread, or the
- * status of the messages it answered (for Slack: reactions).
+ * Something the API sends back to a source (decision 53): a reply in the thread, a brief, or
+ * the status of the messages it answered (for Slack: reactions).
  */
 export const outboundDeliverySchema = z.discriminatedUnion("kind", [
   z.strictObject({
@@ -20,6 +20,19 @@ export const outboundDeliverySchema = z.discriminatedUnion("kind", [
     target: deliveryTargetSchema,
     /** Markdown. Each source converts it to its own format. */
     text: z.string().min(1),
+  }),
+  z.strictObject({
+    /**
+     * A brief for a coding worker (slice 2.1): posted in the thread before the worker gets it.
+     * With `needsStart`, the source offers a way for a person to start it, which calls
+     * `POST /v1/briefs/:briefId/start`.
+     */
+    kind: z.literal("brief"),
+    target: deliveryTargetSchema,
+    briefId: z.guid(),
+    /** Markdown. Each source converts it to its own format. */
+    text: z.string().min(1),
+    needsStart: z.boolean(),
   }),
   z.strictObject({
     kind: z.literal("status"),

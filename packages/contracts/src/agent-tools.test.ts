@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { linkProjectInputSchema, recordApprovalInputSchema } from "./agent-tools.ts";
+import {
+  linkProjectInputSchema,
+  MAX_BRIEF_CHARACTERS,
+  recordApprovalInputSchema,
+  startChangeInputSchema,
+} from "./agent-tools.ts";
 
 const id = "6f1c2b9e-1d2a-4c3b-9e8f-0a1b2c3d4e5f";
 
@@ -53,5 +58,40 @@ describe("recordApprovalInputSchema", () => {
     ]) {
       expect(recordApprovalInputSchema.safeParse(input).success, JSON.stringify(input)).toBe(false);
     }
+  });
+});
+
+describe("startChangeInputSchema", () => {
+  const brief = { title: " Rename ", what: "Rename x.", why: "Asked.", doneWhen: "CI passes." };
+
+  it("takes a trimmed brief, with no links by default", () => {
+    expect(startChangeInputSchema.parse(brief)).toEqual({ ...brief, title: "Rename", links: [] });
+    expect(startChangeInputSchema.parse({ ...brief, changeId: id, links: ["SCRUM-7"] })).toEqual({
+      ...brief,
+      title: "Rename",
+      changeId: id,
+      links: ["SCRUM-7"],
+    });
+  });
+
+  it("refuses a missing part, an unknown field, a null character or a bad change id", () => {
+    for (const input of [
+      { ...brief, what: " " },
+      { title: "x", what: "x", why: "x" },
+      { ...brief, stage: "ship" },
+      { ...brief, why: "a\u0000b" },
+      { ...brief, changeId: "nope" },
+      { ...brief, links: ["x".repeat(501)] },
+    ]) {
+      expect(startChangeInputSchema.safeParse(input).success, JSON.stringify(input)).toBe(false);
+    }
+  });
+
+  it("caps the whole brief, links included", () => {
+    const long = "x".repeat(MAX_BRIEF_CHARACTERS - 30);
+    expect(startChangeInputSchema.safeParse({ ...brief, what: long }).success).toBe(true);
+    expect(
+      startChangeInputSchema.safeParse({ ...brief, what: long, links: ["x".repeat(40)] }).success,
+    ).toBe(false);
   });
 });
