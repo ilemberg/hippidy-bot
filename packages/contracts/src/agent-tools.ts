@@ -17,6 +17,9 @@ export const customToolNameSchema = z.enum([
   "record_decision",
   "recall_decisions",
   "raise_conflict",
+  "link_task",
+  "record_wait",
+  "end_wait",
 ]);
 export type CustomToolName = z.infer<typeof customToolNameSchema>;
 
@@ -170,6 +173,33 @@ export const raiseConflictOutputSchema = z.strictObject({
   deciders: z.array(z.string()),
 });
 export type RaiseConflictOutput = z.infer<typeof raiseConflictOutputSchema>;
+
+const taskKey = z
+  .string()
+  .trim()
+  .min(1)
+  .max(30)
+  .regex(/^[A-Za-z][A-Za-z0-9]{0,19}-[1-9][0-9]{0,8}$/, "a task key, like T-12 or SCRUM-8");
+const actorId = z.string().trim().min(1).max(255).refine(noNull, noNullMessage);
+
+/** Input of `link_task` (slice 3.3, decision 210): the task this thread works on. */
+export const linkTaskInputSchema = z.strictObject({ key: taskKey });
+export type LinkTaskInput = z.infer<typeof linkTaskInputSchema>;
+
+/** Input of `record_wait`: someone in the thread waits on someone, for something. */
+export const recordWaitInputSchema = z.strictObject({
+  waiter: actorId,
+  waitingOn: actorId,
+  what: z.string().trim().min(1).max(300).refine(noNull, noNullMessage),
+  taskKey: taskKey.optional(),
+});
+export type RecordWaitInput = z.infer<typeof recordWaitInputSchema>;
+
+/** Input of `end_wait`: a wait recorded in this thread, by its number. */
+export const endWaitInputSchema = z.strictObject({
+  number: z.number().int().positive().max(1_000_000_000),
+});
+export type EndWaitInput = z.infer<typeof endWaitInputSchema>;
 
 /** Input of `recall_decisions`: words to search the active decisions for, and an area. */
 export const recallDecisionsInputSchema = z.strictObject({
