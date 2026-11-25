@@ -100,6 +100,10 @@ function View({ view }: { view: ListeningView }) {
             Open a proposal to confirm, change or reject it. Only the people who wrote in its thread
             can. All decisions are under <a href="/decisions">Decisions</a>.
           </p>
+          <footer className="muted">
+            <a href="/">Agents at work</a> · <a href="/decisions">Decisions</a> ·{" "}
+            <a href="/areas">Areas</a> · Signed in as {view.person.name}.
+          </footer>
         </>
       );
     }

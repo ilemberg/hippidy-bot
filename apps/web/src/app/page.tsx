@@ -81,8 +81,8 @@ function View({ view }: { view: HomeView }) {
             </ul>
           )}
           <footer className="muted">
-            <a href="/decisions">Decisions</a> · <a href="/listening">Listening in channels</a> ·
-            Signed in as {view.person.name}.{" "}
+            <a href="/decisions">Decisions</a> · <a href="/areas">Areas</a> ·{" "}
+            <a href="/listening">Listening in channels</a> · Signed in as {view.person.name}.{" "}
             <form method="post" action="/auth/signout" className="inline">
               <button className="link" type="submit">
                 Sign out
