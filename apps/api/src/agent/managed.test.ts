@@ -146,6 +146,37 @@ describe("toAgentEvent", () => {
     });
   });
 
+  it("reads a git command that reads refs other than main, for the start rule (decision 189)", () => {
+    const bash = (command: string): BetaManagedAgentsSessionEvent => ({
+      id: "sevt_g",
+      type: "agent.tool_use",
+      name: "bash",
+      input: { command },
+      processed_at: "2026-11-25T14:00:00Z",
+    });
+    for (const command of [
+      "git -C /workspace/hippidy-bot fetch origin '+refs/pull/*/head:refs/remotes/pr/*'",
+      "cd /workspace/hippidy-bot && git pull",
+      "git clone https://github.com/someone/fork.git",
+      "git ls-remote origin",
+      "git log origin/feature-x",
+      "git show FETCH_HEAD:README.md",
+      "git log --all --oneline",
+      "git branch -r",
+      "git remote update",
+    ]) {
+      expect(toAgentEvent(bash(command)), command).toEqual({ kind: "git_read", id: "sevt_g" });
+    }
+    for (const command of [
+      "git log -5",
+      "git show HEAD:CLAUDE.md",
+      "git status",
+      "cat .git/HEAD",
+    ]) {
+      expect(toAgentEvent(bash(command)), command).toBeUndefined();
+    }
+  });
+
   it("reads a git push from a shell command, and nothing else", () => {
     const bash = (command: string): BetaManagedAgentsSessionEvent => ({
       id: "sevt_b",

@@ -1,8 +1,9 @@
 # Slice 2.1: one bot, everyone trusted
 
-Status: **planned 2026-11-25 (decisions 181 to 184). Built, not merged: part A, the probe,
-which then waits to be run by hand; part B, the schema
-(`supabase/migrations/20261125000000_sessions_and_changes.sql`). C to E are not built.** The wave is in
+Status: **built 2026-11-25 (decisions 181 to 189).** Parts A and B merged in
+ilemberg/hippidy-bot 49; the probe ran (run 45632116294, decision 189). Parts C to E merge in
+ilemberg/hippidy-bot 50. Live once the Slack app is updated from its manifest and reinstalled;
+the "done when" lines below are still to be checked in production. The wave is in
 `wave-2.md`; the direction in `team-layer.md`. G1 is answered by this plan (181), G3 is
 answered (182), G2 is deferred. G17 and G18 are open and block part D.
 

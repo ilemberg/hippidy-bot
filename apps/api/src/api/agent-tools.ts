@@ -105,8 +105,8 @@ export async function answerCustomToolCall(
 
 /**
  * The start rule (slice 2.1, decision 181; G18): a brief needs a person to start it when the
- * session called any MCP tool (Jira, Confluence) before writing it, since what it read there
- * may have shaped the brief. Undefined when no one needs to. Read from the session's events,
+ * session called any MCP tool (Jira, Confluence) or read git refs other than `main` (decision
+ * 189) before writing it, since what it read there may have shaped the brief. Undefined when no one needs to. Read from the session's events,
  * not from the agent; if the call is not among them, a person must start it (fail closed).
  */
 export function startReason(events: readonly AgentEvent[], callId: string): string | undefined {
@@ -114,11 +114,12 @@ export function startReason(events: readonly AgentEvent[], callId: string): stri
   if (index < 0) return "could not tell what was read before this brief";
   const tools = [
     ...new Set(
-      events
-        .slice(0, index)
-        .flatMap((event) =>
-          event.kind === "mcp_tool_use" ? [`${event.server}.${event.name}`] : [],
-        ),
+      events.slice(0, index).flatMap((event) => {
+        if (event.kind === "mcp_tool_use") return [`${event.server}.${event.name}`];
+        // Refs anyone on GitHub can write: a fork's pull request, say (G18, decision 189).
+        if (event.kind === "git_read") return ["git (refs other than main)"];
+        return [];
+      }),
     ),
   ];
   return tools.length === 0 ? undefined : `read with ${tools.join(", ")}`;

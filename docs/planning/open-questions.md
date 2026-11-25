@@ -188,7 +188,8 @@ changes asked for in Slack alone, but rests on the API seeing every untrusted re
 checks the one it may not see (the teammate fetching a fork's branch with git).
 *Recommendation:* only tainted briefs, if part A shows the teammate cannot fetch other refs
 or the start rule can count the fetch. Otherwise every brief, and revisit once the share of
-briefs that needed a start is known.
+briefs that needed a start is known. **Answered 2026-11-25 (decision 189): the probe showed the teammate can fetch
+other refs, so the start rule counts git reads of them; only tainted briefs need a start.**
 
 **G4 (2.2). Where does the memory live?** In the runtime's memory stores, or in our own
 table behind tools the API answers. *Recommendation:* our own table, after the probe in

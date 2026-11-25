@@ -45,6 +45,7 @@ const TYPE_OF: Record<AgentEvent["kind"], string> = {
   pull_request: "agent.mcp_tool_result",
   pushed: "agent.tool_use",
   mcp_tool_use: "agent.mcp_tool_use",
+  git_read: "agent.tool_use",
   custom_tool_use: "agent.custom_tool_use",
   custom_tool_result: "user.custom_tool_result",
 };
@@ -263,6 +264,11 @@ export class FakeAgentRuntime implements AgentRuntime {
   /** The agent calls a tool of an MCP server, in a turn already running. */
   mcpToolUse(sessionId: string, server: string, name: string): void {
     this.push(this.session(sessionId), { kind: "mcp_tool_use", id: this.id("sevt"), server, name });
+  }
+
+  /** The agent fetches or reads git refs other than `main`, in a turn already running. */
+  gitRead(sessionId: string): void {
+    this.push(this.session(sessionId), { kind: "git_read", id: this.id("sevt") });
   }
 
   /** The agent runs `git push`, in a turn already running. */

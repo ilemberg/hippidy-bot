@@ -309,6 +309,15 @@ function minorUnits(amount: string | undefined): number | null {
 const PULL_REQUEST_URL = /"html_url"\s*:\s*"(https:\/\/github\.com\/[^/"]+\/[^/"]+\/pull\/\d+)"/;
 /** `git push`, also with options between (`git -C dir push`), in a shell command. */
 const GIT_PUSH = /\bgit\b[^\n;&|]*\spush\b/;
+/**
+ * A shell command that reads git refs other than the mounted `main` (G18, decision 189): a
+ * fetch, pull, clone or listing of the remote, or a command naming remote refs, all refs or
+ * what was last fetched. The teammate's sandbox can fetch any pull request of the public
+ * repository through the git proxy (the probe of run 45632116294), so such a read counts for
+ * the start rule like a Jira or Confluence call.
+ */
+const GIT_OTHER_REFS =
+  /\bgit\b[^\n;&|]*(\s(fetch|pull|clone|ls-remote|remote\s+update)\b|\borigin\/|\brefs\/|\bFETCH_HEAD\b|\s--(all|remotes|branches)\b|\sbranch\s+-[ar]\b)/;
 
 /** Reduces a Managed Agents event to what the API acts on; undefined for everything else. */
 export function toAgentEvent(event: BetaManagedAgentsSessionEvent): AgentEvent | undefined {
@@ -354,9 +363,9 @@ export function toAgentEvent(event: BetaManagedAgentsSessionEvent): AgentEvent |
       };
     case "agent.tool_use": {
       const command = event.name === "bash" ? event.input.command : undefined;
-      return typeof command === "string" && GIT_PUSH.test(command)
-        ? { kind: "pushed", id: event.id }
-        : undefined;
+      if (typeof command !== "string") return undefined;
+      if (GIT_PUSH.test(command)) return { kind: "pushed", id: event.id };
+      return GIT_OTHER_REFS.test(command) ? { kind: "git_read", id: event.id } : undefined;
     }
     case "user.tool_confirmation":
       return { kind: "tool_confirmation", id: event.id, toolUseId: event.tool_use_id };

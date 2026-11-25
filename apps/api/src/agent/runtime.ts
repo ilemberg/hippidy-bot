@@ -95,6 +95,12 @@ export type AgentEvent =
    * slice 2.1 reads these: a brief written after one needs a person to start it (decision 181).
    */
   | { kind: "mcp_tool_use"; id: string; server: string; name: string }
+  /**
+   * The agent ran a git command that reads refs other than the mounted `main` (a fetch, a
+   * pull request's branch): content anyone on GitHub can write, so it counts for the start
+   * rule too (G18, decision 189).
+   */
+  | { kind: "git_read"; id: string }
   /** An answer to a tool call that waited for approval. */
   | { kind: "tool_confirmation"; id: string; toolUseId: string }
   /**

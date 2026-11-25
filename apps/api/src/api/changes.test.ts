@@ -598,3 +598,21 @@ describe("what the review found", () => {
     expect(runtime.sessions.get(workerOf(await getChange(db, change.id)))?.sent).toHaveLength(2);
   });
 });
+
+describe("the start rule counts git reads of other refs (G18, decision 189)", () => {
+  it("makes a person start a brief written after the teammate fetched other refs", async () => {
+    await receiveMessage(deps, message(1), log);
+    const teammate = runtime.onlySessionId();
+    runtime.work(teammate);
+    runtime.gitRead(teammate);
+    runtime.callCustomTools(teammate, [{ name: "start_change", input: brief }]);
+    await syncConversation(deps, await thread(), log);
+    expect(briefs()).toEqual([
+      expect.objectContaining({
+        needsStart: true,
+        text: expect.stringContaining("git (refs other than main)") as string,
+      }),
+    ]);
+    expect(runtime.sessions.size).toBe(1);
+  });
+});
