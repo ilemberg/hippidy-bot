@@ -6,12 +6,19 @@ import {
   type CryptoKey,
   type JWTVerifyGetKey,
 } from "jose";
-import type { Area, AreaDetail, Decision, DecisionDetail } from "@hippidy/contracts";
+import type {
+  Area,
+  AreaDetail,
+  Conflict,
+  ConflictDetail,
+  Decision,
+  DecisionDetail,
+} from "@hippidy/contracts";
 import type { WebConfig } from "./config.ts";
 import { SLACK_TEAM_CLAIM } from "./slack-oidc.ts";
 
-// Test helpers: a stand-in for Slack's signing keys and its id tokens, and a decision and an
-// area as the API returns them. Nothing here reaches the network.
+// Test helpers: a stand-in for Slack's signing keys and its id tokens, and a decision, an area
+// and a conflict as the API returns them. Nothing here reaches the network.
 
 export const config: WebConfig = {
   slack: {
@@ -147,4 +154,42 @@ export const areaDetail: AreaDetail = {
       after: fieldsOf(area),
     },
   ],
+};
+
+/** A conflict the teammate raised in a thread, open, decided by Ada (slice 3.2). */
+export const conflict: Conflict = {
+  id: "5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a",
+  number: 3,
+  kind: "raised",
+  summary: "Grace and Linus disagree on how search ranks results",
+  area: "search",
+  decisions: [
+    {
+      number: 7,
+      statement: "Use Postgres for search",
+      status: "active",
+      decidedBy: { actorId: "U2", name: "Grace" },
+    },
+  ],
+  proposal: null,
+  positions: [
+    { actorId: "U2", name: "Grace", says: "Keep Postgres full-text search" },
+    { actorId: "U3", name: "Linus", says: "Move to a vector index" },
+  ],
+  deciders: [{ actorId: "U1", name: "Ada" }],
+  status: "open",
+  outcome: null,
+  note: null,
+  settledBy: null,
+  settledAt: null,
+  conversationId: "6f1c2b9e-1d2a-4c3b-9e8f-0a1b2c3d4e5f",
+  channelId: "C1",
+  threadId: "1700.000100",
+  createdAt: "2026-11-25T11:00:00.000Z",
+};
+
+/** `GET /v1/conflicts/3` for one of its deciders. */
+export const conflictDetail: ConflictDetail = {
+  conflict,
+  youMay: { settle: true, reason: null },
 };

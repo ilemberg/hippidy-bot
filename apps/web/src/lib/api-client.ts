@@ -2,6 +2,8 @@ import {
   areaActionResultSchema,
   areaDetailSchema,
   areaListSchema,
+  conflictDetailSchema,
+  conflictListSchema,
   CORRELATION_ID_HEADER,
   decisionActionResultSchema,
   decisionDetailSchema,
@@ -9,9 +11,12 @@ import {
   listeningListSchema,
   peopleListSchema,
   sessionListSchema,
+  settleConflictResultSchema,
   type AreaActionResult,
   type AreaDetail,
   type AreaList,
+  type Conflict,
+  type ConflictDetail,
   type CreateAreaRequest,
   type Decision,
   type DecisionActionResult,
@@ -22,6 +27,8 @@ import {
   type ListeningList,
   type PeopleList,
   type SessionActivity,
+  type SettleConflictRequest,
+  type SettleConflictResult,
 } from "@hippidy/contracts";
 import type { z } from "zod";
 import type { Logger } from "./log.ts";
@@ -269,4 +276,57 @@ export function editArea(
 ): Promise<ApiResult<AreaActionResult>> {
   const route = `/v1/areas/${encodeURIComponent(areaId)}`;
   return apiSend(person, "PATCH", route, edit, areaActionResultSchema, deps);
+}
+
+/** What `GET /v1/conflicts` is asked for: which status, bearing on which decision, how many. */
+export interface ConflictsQuery {
+  status?: "open" | "settled" | "all";
+  decision?: number;
+  limit?: number;
+}
+
+/** `GET /v1/conflicts` as the person: open ones first, newest first (slice 3.2). */
+export async function fetchConflicts(
+  person: Person,
+  query: ConflictsQuery,
+  deps: ApiClientDeps,
+): Promise<ApiResult<Conflict[]>> {
+  const params = new URLSearchParams();
+  if (query.status !== undefined) params.set("status", query.status);
+  if (query.decision !== undefined) params.set("decision", String(query.decision));
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  const search = params.toString();
+  const result = await apiGet(
+    person,
+    `/v1/conflicts${search === "" ? "" : `?${search}`}`,
+    conflictListSchema,
+    deps,
+  );
+  return result.kind === "ok" ? { kind: "ok", value: result.value.conflicts } : result;
+}
+
+/** A conflict looked up by its number: found, not on record, or why the API gave nothing. */
+export type ConflictLookup = ApiResult<ConflictDetail> | { kind: "not_found" };
+
+/** `GET /v1/conflicts/:number` as the person: one conflict, and whether they may settle it. */
+export async function fetchConflict(
+  person: Person,
+  number: number,
+  deps: ApiClientDeps,
+): Promise<ConflictLookup> {
+  const result = await apiGet(person, `/v1/conflicts/${number}`, conflictDetailSchema, deps);
+  return result.kind === "failed" && result.reason === "status_404"
+    ? { kind: "not_found" }
+    : result;
+}
+
+/** `POST /v1/conflicts/:id/settle` as the person, whom the API takes from the token. */
+export function settleConflict(
+  person: Person,
+  conflictId: string,
+  settle: SettleConflictRequest,
+  deps: ApiClientDeps,
+): Promise<ApiResult<SettleConflictResult>> {
+  const route = `/v1/conflicts/${encodeURIComponent(conflictId)}/settle`;
+  return apiSend(person, "POST", route, settle, settleConflictResultSchema, deps);
 }

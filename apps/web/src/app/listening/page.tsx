@@ -102,7 +102,8 @@ function View({ view }: { view: ListeningView }) {
           </p>
           <footer className="muted">
             <a href="/">Agents at work</a> · <a href="/decisions">Decisions</a> ·{" "}
-            <a href="/areas">Areas</a> · Signed in as {view.person.name}.
+            <a href="/areas">Areas</a> · <a href="/conflicts">Conflicts</a> · Signed in as{" "}
+            {view.person.name}.
           </footer>
         </>
       );

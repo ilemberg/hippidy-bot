@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   editDecisionRequestSchema,
+  type Conflict,
   type Decision,
   type DecisionActionResult,
   type DecisionDetail,
@@ -12,6 +13,7 @@ import {
 import {
   confirmDecision,
   editDecision,
+  fetchConflicts,
   fetchDecision,
   fetchDecisions,
   rejectDecision,
@@ -217,6 +219,8 @@ export type DecisionView =
       kind: "ok";
       person: Person;
       detail: DecisionDetail;
+      /** The open conflicts bearing on it, or proposing to replace it (slice 3.2). */
+      conflicts: ApiResult<Conflict[]>;
       notice: ActionNotice | undefined;
       readAt: string;
     };
@@ -245,7 +249,11 @@ export async function loadDecision(
   }
   const number = decisionNumber(input.number);
   if (number === undefined) return { kind: "not_found", person };
-  const lookup = await fetchDecision(person, number, clientDeps(person, config, deps, now));
+  const client = clientDeps(person, config, deps, now);
+  const [lookup, conflicts] = await Promise.all([
+    fetchDecision(person, number, client),
+    fetchConflicts(person, { status: "open", decision: number }, client),
+  ]);
   switch (lookup.kind) {
     case "not_found":
       return { kind: "not_found", person };
@@ -264,6 +272,7 @@ export async function loadDecision(
         kind: "ok",
         person,
         detail,
+        conflicts,
         notice: saidBelow ? undefined : notice,
         readAt: now.toISOString(),
       };
@@ -459,11 +468,18 @@ export function notAllowedText(reason: NotAllowedReason | null, decision: Decisi
     case "read_only":
       return "Imported from the decision log; change it there.";
     case "not_decider":
-      return "It would replace someone else's decision, so only the people who decide it can confirm or change it: the owner of its area (or the project's owner), or whoever made the decision it replaces. You may still withdraw it.";
+      return "It would replace someone else's decision, so only the people who decide it can confirm or change it: the owner of its area (or the project's owner), or whoever made the decision it replaces.";
     case null:
       return "You cannot confirm or change it.";
   }
 }
+
+/**
+ * Why a person who may not confirm a proposal may still withdraw it (decision 208): withdrawing
+ * changes nothing on record.
+ */
+export const WITHDRAW_TEXT =
+  "You may still withdraw it, as someone who could act on it before: the decision it would replace stays as it is.";
 
 /** What the page says about changing a decision that is not a proposal, if anything. */
 export function notProposedText(decision: Decision): string | undefined {

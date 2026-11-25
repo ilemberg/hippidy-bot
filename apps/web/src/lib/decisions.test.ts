@@ -15,11 +15,12 @@ import {
   searchWords,
   when,
   whereDecided,
+  WITHDRAW_TEXT,
 } from "./decisions.ts";
 import type { HomeDeps } from "./home.ts";
 import { memoryLogger } from "./log.ts";
 import type { Fetch } from "./slack-oidc.ts";
-import { config, proposal, proposalDetail } from "./testing.ts";
+import { config, conflict, proposal, proposalDetail } from "./testing.ts";
 import { signSession, type Person } from "./tokens.ts";
 
 const person: Person = { actorId: "U0123456789", workspaceId: "T0123456789", name: "Ilya" };
@@ -174,16 +175,28 @@ describe("loadDecision", () => {
     error,
   });
 
-  it("reads the decision by its number, with a notice this app sent", async () => {
-    const api = fakeApi(() => Response.json(proposalDetail));
+  /** The API's reads: `detail` for the decision, and the open conflicts bearing on it. */
+  const reads = (detail: DecisionDetail = proposalDetail) =>
+    fakeApi((call) =>
+      call.url.includes("/v1/conflicts")
+        ? Response.json({ conflicts: [conflict] })
+        : Response.json(detail),
+    );
+
+  it("reads the decision by its number and its open conflicts, with a notice this app sent", async () => {
+    const api = reads();
     expect(await loadDecision(await input("7", "confirmed"), deps(api.fetch))).toEqual({
       kind: "ok",
       person,
       detail: proposalDetail,
+      conflicts: { kind: "ok", value: [conflict] },
       notice: { kind: "done", done: "confirmed" },
       readAt: now.toISOString(),
     });
-    expect(api.calls[0]?.url).toBe("https://api.example.test/v1/decisions/7");
+    expect(api.calls.map((call) => call.url).sort()).toEqual([
+      "https://api.example.test/v1/conflicts?status=open&decision=7",
+      "https://api.example.test/v1/decisions/7",
+    ]);
     expect(
       await loadDecision(await input("7", undefined, "not_in_thread"), deps(api.fetch)),
     ).toMatchObject({ notice: { kind: "error", error: "not_in_thread" } });
@@ -193,9 +206,22 @@ describe("loadDecision", () => {
     });
   });
 
+  it("shows the decision when only its conflicts could not be read", async () => {
+    const api = fakeApi((call) =>
+      call.url.includes("/v1/conflicts")
+        ? new Response(null, { status: 500 })
+        : Response.json(proposalDetail),
+    );
+    expect(await loadDecision(await input("7"), deps(api.fetch))).toMatchObject({
+      kind: "ok",
+      detail: proposalDetail,
+      conflicts: { kind: "failed", reason: "status_500" },
+    });
+  });
+
   it("does not repeat a refusal the page already gives under the proposal", async () => {
     const refused = { ...proposalDetail, youMay: { act: false, reason: "not_in_thread" as const } };
-    const api = fakeApi(() => Response.json(refused));
+    const api = reads(refused);
     expect(
       await loadDecision(await input("7", undefined, "not_in_thread"), deps(api.fetch)),
     ).toMatchObject({ kind: "ok", notice: undefined });
@@ -541,6 +567,14 @@ describe("how a decision is worded", () => {
     );
     expect(noticeText({ kind: "error", error: "not_in_thread" }, proposal)).toBe(
       notAllowedText("not_in_thread", proposal),
+    );
+    expect(notAllowedText("not_decider", proposal)).toMatch(
+      /^It would replace someone else's decision, so only the people who decide it can confirm/,
+    );
+    expect(notAllowedText("not_decider", proposal)).not.toMatch(/withdraw/);
+    expect(WITHDRAW_TEXT).toMatch(/withdraw/);
+    expect(noticeText({ kind: "error", error: "not_decider" }, proposal)).toBe(
+      notAllowedText("not_decider", proposal),
     );
     expect(notProposedText({ ...proposal, status: "active" })).toMatch(/replaces it/);
     expect(notProposedText({ ...proposal, status: "rejected" })).toBeUndefined();

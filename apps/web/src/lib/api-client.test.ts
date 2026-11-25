@@ -10,9 +10,12 @@ import {
   fetchAreas,
   fetchPeople,
   editDecision,
+  fetchConflict,
+  fetchConflicts,
   fetchDecision,
   fetchDecisions,
   rejectDecision,
+  settleConflict,
 } from "./api-client.ts";
 import { memoryLogger } from "./log.ts";
 import type { Fetch } from "./slack-oidc.ts";
@@ -20,6 +23,8 @@ import {
   area,
   areaDetail,
   config,
+  conflict,
+  conflictDetail,
   proposal as decision,
   proposalDetail as detail,
 } from "./testing.ts";
@@ -285,5 +290,77 @@ describe("areas and people", () => {
       kind: "failed",
       reason: "unexpected_response",
     });
+  });
+});
+
+describe("conflicts", () => {
+  it("lists them by status and decision, as the person, asking only for what is given", async () => {
+    const api = fakeApi(() => Response.json({ conflicts: [conflict] }));
+    expect(
+      await fetchConflicts(person, { status: "all", decision: 7, limit: 200 }, deps(api.fetch)),
+    ).toEqual({ kind: "ok", value: [conflict] });
+    await fetchConflicts(person, {}, deps(api.fetch));
+    expect(api.calls.map(({ url, method }) => [method, url])).toEqual([
+      ["GET", "https://api.example.test/v1/conflicts?status=all&decision=7&limit=200"],
+      ["GET", "https://api.example.test/v1/conflicts"],
+    ]);
+    for (const call of api.calls) expect(await tokenSubject(call.headers)).toBe("U0123456789");
+    const odd = fakeApi(() => Response.json({ conflicts: [{ number: 3 }] }));
+    expect(await fetchConflicts(person, {}, deps(odd.fetch))).toEqual({
+      kind: "failed",
+      reason: "unexpected_response",
+    });
+  });
+
+  it("reads one by its number, and tells not found from an API that did not answer", async () => {
+    const api = fakeApi(() => Response.json(conflictDetail));
+    expect(await fetchConflict(person, 3, deps(api.fetch))).toEqual({
+      kind: "ok",
+      value: conflictDetail,
+    });
+    expect(api.calls[0]?.url).toBe("https://api.example.test/v1/conflicts/3");
+    const missing = fakeApi(() =>
+      Response.json({ error: { code: "not_found", message: "No such conflict" } }, { status: 404 }),
+    );
+    expect(await fetchConflict(person, 3, deps(missing.fetch))).toEqual({ kind: "not_found" });
+    const down = fakeApi(() => new Response(null, { status: 503 }));
+    expect(await fetchConflict(person, 3, deps(down.fetch))).toEqual({
+      kind: "failed",
+      reason: "status_503",
+    });
+  });
+
+  it("settles with a POST to the conflict's id as the person, naming no one else", async () => {
+    const settled = { ...conflict, status: "settled" as const, outcome: "kept" as const };
+    const api = fakeApi(() => Response.json({ status: "settled", conflict: settled }));
+    expect(
+      await settleConflict(
+        person,
+        conflict.id,
+        { outcome: "kept", note: "Postgres stays" },
+        deps(api.fetch),
+      ),
+    ).toEqual({ kind: "ok", value: { status: "settled", conflict: settled } });
+    expect(api.calls.map(({ url, method, body }) => ({ url, method, body }))).toEqual([
+      {
+        url: `https://api.example.test/v1/conflicts/${conflict.id}/settle`,
+        method: "POST",
+        body: { outcome: "kept", note: "Postgres stays" },
+      },
+    ]);
+    const call = api.calls[0];
+    expect(call?.headers.get("content-type")).toBe("application/json");
+    expect(call?.headers.get("x-correlation-id")).toBe("corr-1");
+    expect(await tokenSubject(call?.headers ?? new Headers())).toBe("U0123456789");
+    const refused = fakeApi(() =>
+      Response.json({ status: "not_allowed", reason: "not_decider", conflict }),
+    );
+    expect(
+      await settleConflict(person, conflict.id, { outcome: "dismissed" }, deps(refused.fetch)),
+    ).toEqual({ kind: "ok", value: { status: "not_allowed", reason: "not_decider", conflict } });
+    const odd = fakeApi(() => Response.json({ status: "closed" }));
+    expect(await settleConflict(person, conflict.id, { outcome: "kept" }, deps(odd.fetch))).toEqual(
+      { kind: "failed", reason: "unexpected_response" },
+    );
   });
 });

@@ -58,6 +58,9 @@ const styles = `
   .edit label { display: block; margin: 0.75rem 0; }
   .edit textarea, .edit input, .edit select { display: block; width: 100%; margin-top: 0.25rem; }
   .change { font-size: 0.95rem; white-space: pre-wrap; }
+  .edit fieldset { border: 0; padding: 0; margin: 0.75rem 0; }
+  .edit fieldset label { margin: 0.25rem 0; }
+  .edit input[type="radio"] { display: inline; width: auto; margin: 0 0.5rem 0 0; }
 `;
 
 export default function RootLayout({ children }: { children: ReactNode }) {
