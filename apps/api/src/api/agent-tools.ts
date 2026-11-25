@@ -124,6 +124,24 @@ export function startReason(events: readonly AgentEvent[], callId: string): stri
   return tools.length === 0 ? undefined : `read with ${tools.join(", ")}`;
 }
 
+/**
+ * The user messages of the call's own turn: processed after the last turn that ended before
+ * the call. A message from an earlier turn that is still waiting (its turn's end not yet
+ * synced) is not the call's, so it is not linked to the brief.
+ */
+export function turnMessages(events: readonly AgentEvent[], callId: string): string[] {
+  const index = events.findIndex((event) => event.id === callId);
+  if (index < 0) return [];
+  const before = events.slice(0, index);
+  const lastEnd = before.findLastIndex(
+    (event) =>
+      event.kind === "terminated" || (event.kind === "idle" && event.reason !== "requires_action"),
+  );
+  return before
+    .slice(lastEnd + 1)
+    .flatMap((event) => (event.kind === "user_message" && event.processed ? [event.id] : []));
+}
+
 /** The brief as people read it in the thread, with whether someone must start it. */
 export function briefForThread(brief: StartChangeInput, reason: string | undefined): string {
   const links = brief.links.length === 0 ? "" : `\n**Links:** ${brief.links.join(", ")}`;
@@ -170,9 +188,11 @@ async function startChange(
     },
     brief: input,
     startReason: reason,
-    turnEventIds: messages
-      .filter((message) => Date.parse(message.processedAt) <= callAt)
-      .map((message) => message.eventId),
+    turnEventIds: turnMessages(events, call.id).filter((eventId) =>
+      messages.some(
+        (message) => message.eventId === eventId && Date.parse(message.processedAt) <= callAt,
+      ),
+    ),
   });
   if (result.kind === "no_change") return error(toolErrors.noChange(input.changeId ?? ""));
   if (result.kind === "stopped") return error(toolErrors.changeStopped);

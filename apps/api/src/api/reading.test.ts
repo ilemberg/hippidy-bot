@@ -129,7 +129,7 @@ describe("GET /v1/conversations/:id", () => {
       threadId: "100.000001",
       status: "failed",
       sessionState: "budget_reached",
-      agent: { sessionId, agentId: "agent_fake", version: 1 },
+      agent: { sessionId, agentId: "agent_fake_teammate", version: 1 },
       usage: {
         inputTokens: 1200,
         outputTokens: 340,

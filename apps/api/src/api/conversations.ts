@@ -177,7 +177,7 @@ export async function receiveMessage(
     }
     // Outside any sync lease: receiving a message never holds one.
     const about = await senderAndProject(deps, conversation.id, message.actor.id, log);
-    const reports = await reportsSinceLastReply(deps, conversation.id, sessionId, log);
+    const reports = await reportsSinceLastReply(deps, conversation.id, log);
     const agentEventId = await deps.runtime.sendMessage(
       sessionId,
       formatForAgent(
@@ -277,18 +277,16 @@ export function formatForAgent(
 }
 
 /**
- * What the thread's coding workers posted since the thread's own session last did anything.
- * Optional: if it cannot be read, it is logged and the message goes without it.
+ * What the thread's coding workers posted since a message was last handed to the thread's own
+ * session. Optional: if it cannot be read, it is logged and the message goes without it.
  */
 async function reportsSinceLastReply(
   deps: ConversationDeps,
   conversationId: string,
-  sessionId: string,
   log: Logger,
 ): Promise<WorkerReport[]> {
   try {
-    const since = await latestStoredEventTime(deps.db, conversationId, sessionId);
-    return await workerReportsSince(deps.db, conversationId, since);
+    return await workerReportsSince(deps.db, conversationId);
   } catch (error) {
     log.warn("conversation.worker_reports_failed", { conversationId, error });
     return [];
@@ -623,7 +621,10 @@ export async function pullRequestVerdict(
   before: readonly AgentEvent[],
   log: Logger,
 ): Promise<{ status: SettledStatus; note: string | undefined }> {
-  const done = { status: "answered" as const, note: undefined };
+  const done: { status: SettledStatus; note: string | undefined } = {
+    status: "answered",
+    note: undefined,
+  };
   const pullRequest = before.findLast((event) => event.kind === "pull_request");
   if (pullRequest?.kind !== "pull_request") {
     return { status: "failed", note: notes.no_pull_request };
@@ -985,13 +986,6 @@ export async function stopConversation(
     );
   }
 
-  // Nothing more goes to the thread's coding workers; those at work are interrupted.
-  for (const workerId of await stopChanges(deps.db, conversation.id)) {
-    await deps.runtime.interrupt(workerId).catch((error: unknown) => {
-      log.warn("conversation.worker_interrupt_failed", { sessionId: workerId, error });
-    });
-  }
-
   if (working) {
     const sessionId = sessionIdOf(conversation);
     if (sessionId !== undefined) await deps.runtime.interrupt(sessionId);
@@ -1008,6 +1002,15 @@ export async function stopConversation(
     });
   }
   // A 🛑 on a finished thread does nothing: no note for every stray reaction.
+
+  // Then nothing more goes to the thread's coding workers, and those started are interrupted.
+  // After the messages are settled: a brief being written meanwhile either was linked to them
+  // before (and its change is stopped here) or finds them stopped and starts nothing.
+  for (const workerId of await stopChanges(deps.db, conversation.id)) {
+    await deps.runtime.interrupt(workerId).catch((error: unknown) => {
+      log.warn("conversation.worker_interrupt_failed", { sessionId: workerId, error });
+    });
+  }
 
   await flushSoon(deps, conversation.id, log);
   log.info("conversation.stopped", { conversationId: conversation.id, working });

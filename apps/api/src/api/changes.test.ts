@@ -8,7 +8,13 @@ import { getConversation } from "../store/conversations.ts";
 import { createTestDb } from "../store/testing.ts";
 import { memoryLogger } from "../testing.ts";
 import { briefForThread, startReason } from "./agent-tools.ts";
-import { changeTexts, formatBriefForWorker, startBriefByPerson, syncChange } from "./changes.ts";
+import {
+  changeTexts,
+  formatBriefForWorker,
+  MAX_HAND_OVER_ATTEMPTS,
+  startBriefByPerson,
+  syncChange,
+} from "./changes.ts";
 import {
   changeNotes,
   formatForAgent,
@@ -181,7 +187,7 @@ describe("a brief that needs no one to start it", () => {
     const worker = workerOf(change);
     expect(runtime.sessions.get(worker)?.agentKind).toBe("engineer");
     expect(runtime.sessions.get(worker)?.sent).toEqual([
-      formatBriefForWorker(change, { id: "", ...brief, followUp: false }),
+      formatBriefForWorker(change, { id: "", ...brief, followUp: false, posted: "sent" }),
     ]);
     expect(runtime.sessions.get(worker)?.sent[0]).toMatch(
       /^Change asked for by Ada \(slack user U1\) in Slack\.\n\n# Change the reaction/,
@@ -436,5 +442,159 @@ describe("start_change's answers", () => {
       { messageIds: ["100.000001"], status: "answered" },
       { messageIds: ["100.000002"], status: "answered" },
     ]);
+  });
+});
+
+// From the independent review of part C.
+describe("what the review found", () => {
+  const stop = {
+    source: "slack" as const,
+    sourceEventId: "EvStop",
+    workspaceId: "T1",
+    channelId: "C1",
+    threadId: "100.000001",
+    actor: { id: "U1" },
+  };
+
+  async function followUp(teammate: string, change: Change, n: number, mcpReads: string[] = []) {
+    await receiveMessage(deps, message(n, `follow-up ${String(n)}`), log);
+    runtime.work(teammate);
+    for (const name of mcpReads) runtime.mcpToolUse(teammate, "atlassian", name);
+    runtime.callCustomTools(teammate, [
+      {
+        name: "start_change",
+        input: { ...brief, title: `Follow-up ${String(n)}`, changeId: change.id },
+      },
+    ]);
+    await syncConversation(deps, await thread(), log);
+    runtime.finish(teammate, "Sent.");
+    await syncConversation(deps, await thread(), log);
+  }
+
+  it("does not settle a follow-up by the turn before it while the worker works on it", async () => {
+    const teammate = await askForChange();
+    const change = await onlyChange();
+    await workerDelivers(change);
+    await followUp(teammate, change, 2);
+    // The worker takes up the follow-up but has not finished it.
+    runtime.work(workerOf(change));
+    await syncChange(deps, await getChange(db, change.id), log);
+    expect(slack.statuses()).toEqual([{ messageIds: ["100.000001"], status: "answered" }]);
+    expect((await getChange(db, change.id)).waitingSince).not.toBeNull();
+  });
+
+  it("reads an Atlassian call from an earlier turn back from the record: a person must start", async () => {
+    await receiveMessage(deps, message(1, "what does SCRUM-12 say?"), log);
+    const teammate = runtime.onlySessionId();
+    runtime.work(teammate);
+    runtime.mcpToolUse(teammate, "atlassian", "getJiraIssue");
+    runtime.finish(teammate, "It asks for a new reaction.");
+    await syncConversation(deps, await thread(), log);
+    // A later turn, read by a later sync that lists only new events.
+    await receiveMessage(deps, message(2, "do it"), log);
+    runtime.work(teammate);
+    runtime.callCustomTools(teammate, [{ name: "start_change", input: brief }]);
+    await syncConversation(deps, await thread(), log);
+    expect(briefs()).toEqual([
+      expect.objectContaining({
+        needsStart: true,
+        text: expect.stringContaining("getJiraIssue") as string,
+      }),
+    ]);
+    expect(runtime.sessions.size).toBe(1);
+  });
+
+  it("starts nothing when the thread was stopped before the call was answered", async () => {
+    await receiveMessage(deps, message(1), log);
+    const teammate = runtime.onlySessionId();
+    runtime.work(teammate);
+    runtime.callCustomTools(teammate, [{ name: "start_change", input: brief }]);
+    await stopConversation(deps, stop, log);
+    await syncConversation(deps, await thread(), log);
+    expect(runtime.sessions.get(teammate)?.answered[0]?.text).toMatch(/stopped/);
+    expect(await db.query(`select count(*)::int as n from changes`)).toEqual([{ n: 0 }]);
+    expect(runtime.sessions.size).toBe(1);
+  });
+
+  it("interrupts a worker a stop finds, even between its turns", async () => {
+    await askForChange();
+    const change = await onlyChange();
+    await workerDelivers(change);
+    await stopConversation(deps, stop, log);
+    expect(runtime.sessions.get(workerOf(change))?.interrupted).toBe(1);
+  });
+
+  it("links only the call's own turn's messages, not an earlier one still waiting", async () => {
+    await receiveMessage(deps, message(1, "a question"), log);
+    const teammate = runtime.onlySessionId();
+    runtime.reply(teammate, "An answer."); // its end is not synced yet
+    await receiveMessage(deps, message(2), log);
+    runtime.work(teammate);
+    runtime.callCustomTools(teammate, [{ name: "start_change", input: brief }]);
+    await syncConversation(deps, await thread(), log);
+    runtime.finish(teammate, "Handed over.");
+    await syncConversation(deps, await thread(), log);
+    expect(slack.statuses()).toEqual([{ messageIds: ["100.000001"], status: "answered" }]);
+    await workerDelivers(await onlyChange());
+    expect(slack.statuses().at(-1)).toEqual({ messageIds: ["100.000002"], status: "answered" });
+  });
+
+  it("hands a brief over only once it is posted in the thread", async () => {
+    await receiveMessage(deps, message(1), log);
+    const teammate = runtime.onlySessionId();
+    runtime.work(teammate);
+    runtime.callCustomTools(teammate, [{ name: "start_change", input: brief }]);
+    slack.failures = 1; // the brief's post fails once
+    await syncConversation(deps, await thread(), log);
+    expect((await onlyChange()).agentSessionId).toBeNull();
+    await reconcile(deps, log); // posts it, then hands it over
+    expect(briefs()).toHaveLength(1);
+    expect(runtime.sessions.get(workerOf(await onlyChange()))?.sent).toHaveLength(1);
+  });
+
+  it("gives a brief up with a note after several failed hand-overs", async () => {
+    await receiveMessage(deps, message(1), log);
+    const teammate = runtime.onlySessionId();
+    runtime.work(teammate);
+    runtime.callCustomTools(teammate, [{ name: "start_change", input: brief }]);
+    runtime.rejectAllSends = new Error("runtime down");
+    await syncConversation(deps, await thread(), log);
+    for (let attempt = 1; attempt < MAX_HAND_OVER_ATTEMPTS; attempt++) await reconcile(deps, log);
+    expect(slack.replies()).toContain(notes.undeliverable);
+    expect(slack.statuses()).toEqual([{ messageIds: ["100.000001"], status: "failed" }]);
+    expect(await db.query(`select gave_up_at is not null as gave_up from change_briefs`)).toEqual([
+      { gave_up: true },
+    ]);
+    // Nothing is left for reconcile to try.
+    expect((await reconcile(deps, log)).checked).toBe(0);
+  });
+
+  it("answers a follow-up for a worker that can take no more with a note, once", async () => {
+    const teammate = await askForChange();
+    const change = await onlyChange();
+    runtime.idle(workerOf(change), "budget_reached");
+    await syncChange(deps, await getChange(db, change.id), log);
+    await followUp(teammate, change, 2);
+    expect(slack.replies()).toContain(notes.closed_budget);
+    expect(slack.statuses().at(-1)).toEqual({ messageIds: ["100.000002"], status: "failed" });
+    expect(runtime.sessions.get(workerOf(change))?.sent).toHaveLength(1);
+    expect((await reconcile(deps, log)).checked).toBe(0);
+  });
+
+  it("hands two briefs started together to one new worker", async () => {
+    const teammate = await askForChange(["getJiraIssue"]);
+    const change = await onlyChange();
+    await followUp(teammate, change, 2);
+    const [first, second] = briefs();
+    // Started in the database together, then handed over by one sync.
+    await db.query(
+      `update change_briefs set started_at = now(), started_by_source = 'slack',
+         started_by_workspace_id = 'T1', started_by_actor_id = 'U2'`,
+    );
+    await db.query(`update changes set status = 'started'`);
+    expect(first?.needsStart && second?.needsStart).toBe(true);
+    await syncChange(deps, await getChange(db, change.id), log);
+    expect(runtime.sessions.size).toBe(2);
+    expect(runtime.sessions.get(workerOf(await getChange(db, change.id)))?.sent).toHaveLength(2);
   });
 });

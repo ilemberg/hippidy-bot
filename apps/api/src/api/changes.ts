@@ -9,9 +9,11 @@ import {
   claimWorkerStart,
   clearChangeWaiting,
   getChange,
+  giveUpBrief,
   markBriefSent,
   markChangeWaiting,
   pendingChangeMessageCount,
+  recordHandOverFailure,
   releaseChangeLease,
   releaseWorkerStart,
   renewChangeLease,
@@ -148,10 +150,15 @@ async function ensureWorker(deps: ConversationDeps, change: Change, log: Logger)
   return session.sessionId;
 }
 
+/** Failed hand-overs of one brief before it is given up and answered with a note. */
+export const MAX_HAND_OVER_ATTEMPTS = 5;
+
 /**
- * Hands the change's started briefs to its worker, in order. A worker that can take no more
- * (its budget reached, its session ended) gets nothing, and the messages that led to its
- * briefs are answered with a note instead.
+ * Hands the change's started briefs to its worker, in order, each only once it has been posted
+ * in the thread (rule 3). A worker that can take no more (budget reached, session ended) gets
+ * nothing, and a brief that cannot be posted or handed over after several tries is given up;
+ * either way the messages that led to it are answered with a note. The change's status is read
+ * again before each send and after it, so a stop that lands meanwhile still stops the worker.
  */
 async function handOverBriefs(
   deps: ConversationDeps,
@@ -159,41 +166,66 @@ async function handOverBriefs(
   change: Change,
   log: Logger,
 ): Promise<void> {
-  if (change.status !== "started") return;
-  const briefs = await unsentBriefs(deps.db, change.id);
-  if (briefs.length === 0) return;
-  if (change.sessionState !== "active") {
-    await settleAndQueue(
-      deps,
-      conversation,
-      "failed",
-      { kind: "change", changeId: change.id },
-      log,
-      {
-        key: `change:${change.id}:closed:${briefs.map((b) => b.id).join(",")}`,
-        note: change.sessionState === "terminated" ? notes.closed_terminated : notes.closed_budget,
-      },
-    );
-    return;
-  }
-  for (const brief of briefs) {
+  for (const brief of await unsentBriefs(deps.db, change.id)) {
+    const current = await getChange(deps.db, change.id);
+    if (current.status !== "started") return;
+    if (current.sessionState !== "active" || brief.posted === "abandoned") {
+      await giveUp(deps, conversation, brief.id, log, {
+        note:
+          brief.posted === "abandoned"
+            ? notes.undeliverable
+            : current.sessionState === "terminated"
+              ? notes.closed_terminated
+              : notes.closed_budget,
+      });
+      continue;
+    }
+    // Not posted yet: it waits, and so do the briefs after it.
+    if (brief.posted !== "sent") return;
+    let sessionId: string;
     try {
-      const sessionId = await ensureWorker(deps, change, log);
+      sessionId = await ensureWorker(deps, current, log);
       const eventId = await deps.runtime.sendMessage(
         sessionId,
-        formatBriefForWorker(change, brief),
+        formatBriefForWorker(current, brief),
       );
       // Without an event id the brief is still sent once; its messages are then settled when
-      // the worker is idle with nothing queued (the `handed_over` settlement).
+      // the worker is idle with nothing left to do (the `untracked_briefs` settlement).
       await markBriefSent(deps.db, brief.id, eventId ?? `untracked:${brief.id}`);
       await markChangeWaiting(deps.db, change.id);
       log.info("change.brief_handed_over", { briefId: brief.id, sessionId });
     } catch (error) {
-      // Left for the next sync or reconcile, in order: later briefs wait for this one.
-      log.error("change.hand_over_failed", { briefId: brief.id, error });
+      const attempts = await recordHandOverFailure(deps.db, brief.id);
+      log.error("change.hand_over_failed", { briefId: brief.id, attempts, error });
+      if (attempts >= MAX_HAND_OVER_ATTEMPTS) {
+        await giveUp(deps, conversation, brief.id, log, { note: notes.undeliverable });
+        continue;
+      }
+      return; // keep the order: later briefs wait for this one
+    }
+    // A stop that landed while this brief was on its way: the worker must not act on it.
+    if ((await getChange(deps.db, change.id)).status === "stopped") {
+      await deps.runtime.interrupt(sessionId);
+      log.warn("change.stopped_during_hand_over", { briefId: brief.id, sessionId });
       return;
     }
   }
+}
+
+/** Gives a brief up and answers the messages that led to it with ❌ and a note. */
+async function giveUp(
+  deps: ConversationDeps,
+  conversation: Conversation,
+  briefId: string,
+  log: Logger,
+  options: { note: string },
+): Promise<void> {
+  await giveUpBrief(deps.db, briefId);
+  await settleAndQueue(deps, conversation, "failed", { kind: "brief", briefId }, log, {
+    key: `brief:${briefId}:given_up`,
+    note: options.note,
+  });
+  log.warn("change.brief_given_up", { briefId });
 }
 
 /**
@@ -276,7 +308,11 @@ async function readWorker(
   const processedBefore = events
     .slice(0, stateIndex)
     .flatMap((event) => (event.kind === "user_message" && event.processed ? [event.id] : []));
-  const anyQueued = events.some((event) => event.kind === "user_message" && !event.processed);
+  // A brief queued, or taken up after this turn ended: the worker is not done, so nothing it
+  // was handed later is settled by this turn's verdict, and it still has work.
+  const busy = events.slice(stateIndex + 1).some((event) => event.kind === "user_message");
+  const anyQueued =
+    busy || events.some((event) => event.kind === "user_message" && !event.processed);
   const { status, note } =
     ending === "end_turn"
       ? await judgeWorkerTurn(deps, conversation, change, events, stateIndex, log)
@@ -292,16 +328,15 @@ async function readWorker(
     );
   }
   if (!anyQueued) {
+    // Briefs sent without an event id: settled once the worker is idle with nothing queued.
+    // The note goes with the first settlement only.
     await settleAndQueue(
       deps,
       conversation,
       status,
-      { kind: "handed_over", changeId: change.id },
+      { kind: "untracked_briefs", changeId: change.id },
       log,
-      {
-        key: `${state.id}:handed_over`,
-        note,
-      },
+      { key: `${state.id}:untracked`, note: processedBefore.length > 0 ? undefined : note },
     );
     if ((await unsentBriefs(deps.db, change.id)).length === 0) {
       await clearChangeWaiting(deps.db, change.id);

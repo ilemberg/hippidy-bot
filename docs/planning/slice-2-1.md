@@ -171,10 +171,9 @@ Each is its own pull request. A to C change nothing a person sees and can merge 
 
 **One vault per agent.** Today the sync keeps one vault, `hippidy-bot`, with both the GitHub
 and the Atlassian credential, and every session attaches it (`apps/api/scripts/sync-lib.ts`).
-A credential is only used for an MCP server the agent declares, so this holds rule 1 today,
-but one wrong line in an agent file would hand the teammate GitHub's token. Part E splits it:
-the teammate's sessions attach a vault with Atlassian's credential only, the worker's a vault
-with GitHub's only.
+Part E gives each agent a vault named after it, with credentials for its own MCP servers only.
+The shared vault becomes the worker's and keeps its Atlassian credential until the open
+product-agent threads that attached it are done, then it is archived by hand (decision 187).
 
 **Part A as built.** `.github/workflows/teammate-probe.yml` runs
 `apps/api/scripts/teammate-probe.ts` from `main`, by hand. It makes a throwaway environment

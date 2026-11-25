@@ -600,7 +600,7 @@ describe("changes and briefs through postgres.js (slice 2.1)", () => {
         `select usage_list_cost_minor::int as cost, usage_active_seconds as seconds from changes`,
       ),
     ).toEqual([{ cost: 123, seconds: 1.5 }]);
-    expect(await workerReportsSince(db, conversation.id, undefined)).toEqual([]);
+    expect(await workerReportsSince(db, conversation.id)).toEqual([]);
   });
 });
 

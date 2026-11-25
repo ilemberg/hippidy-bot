@@ -149,6 +149,9 @@ export async function createBrief(
   },
 ): Promise<CreateBriefResult> {
   return db.transaction(async (tx) => {
+    // The thread's row is the lock a stop takes too (settling its messages, stopping its
+    // changes), so a brief and a stop never interleave: one sees the other's result.
+    await tx.query(`select id from conversations where id = $1 for update`, [input.conversationId]);
     const existing = await tx.query(
       `select b.id, b.change_id, b.started_at from change_briefs b
        where b.custom_tool_use_id = $1`,
@@ -164,6 +167,17 @@ export async function createBrief(
         briefId: r.id,
         started: r.started_at !== null,
       };
+    }
+
+    // A stop settled the turn's messages before this call was answered: start nothing.
+    if (input.turnEventIds.length > 0) {
+      const stopped = await tx.query(
+        `select 1 from inbound_messages
+         where conversation_id = $1 and agent_event_id = any($2::text[]) and status = 'stopped'
+         limit 1`,
+        [input.conversationId, input.turnEventIds],
+      );
+      if (stopped.length > 0) return { kind: "stopped" };
     }
 
     let changeId: string;
@@ -243,63 +257,69 @@ export async function startBrief(
   briefId: string,
   person: ChangeActor,
 ): Promise<{ status: StartBriefStatus; changeId?: string; conversationId?: string }> {
-  const started = await db.query(
-    `update change_briefs b
-     set started_at = now(), started_by_source = $2, started_by_workspace_id = $3,
-         started_by_actor_id = $4, started_by_name = $5
-     from changes c, conversations v
-     where b.id = $1 and c.id = b.change_id and v.id = c.conversation_id
-       and v.source = $2 and v.workspace_id = $3
-       and b.started_at is null and c.status <> 'stopped'
-     returning b.change_id, c.conversation_id`,
-    [briefId, person.source, person.workspaceId, person.actorId, person.name],
-  );
-  if (started[0] !== undefined) {
-    const r = z.object({ change_id: z.string(), conversation_id: z.string() }).parse(started[0]);
-    await db.query(
+  return db.transaction(async (tx) => {
+    // Locks the change, as a stop does (`stopChanges`), so a start and a stop never pass each
+    // other: a stopped change is never started, and a started brief always has a started change.
+    const rows = await tx.query(
+      `select b.started_at, c.status, c.id as change_id, c.conversation_id
+       from change_briefs b join changes c on c.id = b.change_id
+       join conversations v on v.id = c.conversation_id
+       where b.id = $1 and v.source = $2 and v.workspace_id = $3
+       for update of b, c`,
+      [briefId, person.source, person.workspaceId],
+    );
+    if (rows[0] === undefined) return { status: "not_found" };
+    const r = z
+      .object({
+        started_at: z.date().nullable(),
+        status: z.string(),
+        change_id: z.string(),
+        conversation_id: z.string(),
+      })
+      .parse(rows[0]);
+    const ids = { changeId: r.change_id, conversationId: r.conversation_id };
+    if (r.started_at !== null) return { status: "already_started", ...ids };
+    if (r.status === "stopped") return { status: "stopped", ...ids };
+    await tx.query(
+      `update change_briefs
+       set started_at = now(), started_by_source = $2, started_by_workspace_id = $3,
+           started_by_actor_id = $4, started_by_name = $5
+       where id = $1`,
+      [briefId, person.source, person.workspaceId, person.actorId, person.name],
+    );
+    await tx.query(
       `update changes set status = 'started', updated_at = now()
        where id = $1 and status = 'waiting_for_start'`,
       [r.change_id],
     );
-    return { status: "started", changeId: r.change_id, conversationId: r.conversation_id };
-  }
-  const found = await db.query(
-    `select b.started_at, c.status, c.id as change_id, c.conversation_id
-     from change_briefs b join changes c on c.id = b.change_id
-     join conversations v on v.id = c.conversation_id
-     where b.id = $1 and v.source = $2 and v.workspace_id = $3`,
-    [briefId, person.source, person.workspaceId],
-  );
-  if (found[0] === undefined) return { status: "not_found" };
-  const r = z
-    .object({
-      started_at: z.date().nullable(),
-      status: z.string(),
-      change_id: z.string(),
-      conversation_id: z.string(),
-    })
-    .parse(found[0]);
-  return {
-    status: r.started_at !== null ? "already_started" : "stopped",
-    changeId: r.change_id,
-    conversationId: r.conversation_id,
-  };
+    return { status: "started", ...ids };
+  });
 }
 
 export interface BriefToSend extends BriefText {
   id: string;
   /** Whether an earlier brief of the same change was handed over before this one. */
   followUp: boolean;
+  /**
+   * Whether the brief has been posted in the thread (its delivery's status): it is handed to
+   * the worker only once people can see it (rule 3 of slice 2.1).
+   */
+  posted: "sent" | "abandoned" | "not_yet";
 }
 
-/** The change's started briefs not yet handed to its worker, in order. */
+/** The change's started briefs not yet handed to its worker nor given up, in order. */
 export async function unsentBriefs(db: Db, changeId: string): Promise<BriefToSend[]> {
   const rows = await db.query(
     `select b.id, b.title, b.what, b.why, b.done_when, b.links::text as links,
             exists (select 1 from change_briefs e
-                    where e.change_id = b.change_id and e.worker_event_id is not null) as follow_up
+                    where e.change_id = b.change_id and e.worker_event_id is not null) as follow_up,
+            d.status as delivery_status
      from change_briefs b
+     join changes c on c.id = b.change_id
+     left join deliveries d
+       on d.conversation_id = c.conversation_id and d.agent_event_id = 'brief:' || b.id::text
      where b.change_id = $1 and b.started_at is not null and b.worker_event_id is null
+       and b.gave_up_at is null
      order by b.seq`,
     [changeId],
   );
@@ -313,6 +333,7 @@ export async function unsentBriefs(db: Db, changeId: string): Promise<BriefToSen
         done_when: z.string(),
         links: z.string(),
         follow_up: z.boolean(),
+        delivery_status: z.string().nullable(),
       })
       .parse(row);
     return {
@@ -323,8 +344,32 @@ export async function unsentBriefs(db: Db, changeId: string): Promise<BriefToSen
       doneWhen: r.done_when,
       links: z.array(z.string()).parse(JSON.parse(r.links)),
       followUp: r.follow_up,
+      posted:
+        r.delivery_status === "sent"
+          ? "sent"
+          : r.delivery_status === "abandoned"
+            ? "abandoned"
+            : "not_yet",
     };
   });
+}
+
+/** Counts a failed hand-over of the brief. Returns the number of failures so far. */
+export async function recordHandOverFailure(db: Db, briefId: string): Promise<number> {
+  const rows = await db.query(
+    `update change_briefs set hand_over_attempts = hand_over_attempts + 1 where id = $1
+     returning hand_over_attempts`,
+    [briefId],
+  );
+  return z.object({ hand_over_attempts: z.number().int() }).parse(one(rows)).hand_over_attempts;
+}
+
+/** Gives a brief up: it is never handed over. */
+export async function giveUpBrief(db: Db, briefId: string): Promise<void> {
+  await db.query(
+    `update change_briefs set gave_up_at = now() where id = $1 and worker_event_id is null`,
+    [briefId],
+  );
 }
 
 /** Records that the brief was handed to the worker, under the event id it was given. */
@@ -465,7 +510,7 @@ export async function setChangeSessionState(
 export async function markChangeWaiting(db: Db, changeId: string): Promise<void> {
   await db.query(
     `update changes set waiting_since = coalesce(waiting_since, now()), updated_at = now()
-     where id = $1`,
+     where id = $1 and status <> 'stopped'`,
     [changeId],
   );
 }
@@ -478,28 +523,26 @@ export async function clearChangeWaiting(db: Db, changeId: string): Promise<void
 }
 
 /**
- * Stops every change of a thread: nothing more is handed to their workers. Returns the workers
- * that were working, to interrupt.
+ * Stops every change of a thread: nothing more is handed to their workers. Returns every
+ * worker started for them, to interrupt (interrupting one that is idle does nothing). Takes the
+ * thread's lock, as `createBrief` does, and each change's, as `startBrief` does.
  */
 export async function stopChanges(db: Db, conversationId: string): Promise<string[]> {
-  const rows = await db.query(
-    `update changes c
-     set status = 'stopped', waiting_since = null, updated_at = now()
-     from (select id, waiting_since as was_waiting from changes
-           where conversation_id = $1 and status <> 'stopped' for update) o
-     where c.id = o.id
-     returning c.agent_session_id, o.was_waiting`,
-    [conversationId],
-  );
-  return rows.flatMap((row) => {
-    const r = z
-      .object({ agent_session_id: z.string().nullable(), was_waiting: z.date().nullable() })
-      .parse(row);
-    return r.agent_session_id !== null &&
-      !r.agent_session_id.startsWith(STARTING_PREFIX) &&
-      r.was_waiting !== null
-      ? [r.agent_session_id]
-      : [];
+  return db.transaction(async (tx) => {
+    await tx.query(`select id from conversations where id = $1 for update`, [conversationId]);
+    const rows = await tx.query(
+      `update changes c
+       set status = 'stopped', waiting_since = null, updated_at = now()
+       from (select id from changes
+             where conversation_id = $1 and status <> 'stopped' for update) o
+       where c.id = o.id
+       returning c.agent_session_id`,
+      [conversationId],
+    );
+    return rows.flatMap((row) => {
+      const id = z.object({ agent_session_id: z.string().nullable() }).parse(row).agent_session_id;
+      return id !== null && !id.startsWith(STARTING_PREFIX) ? [id] : [];
+    });
   });
 }
 
@@ -520,7 +563,7 @@ export async function changesToReconcile(
              and c.waiting_since < now() - make_interval(secs => $1))
             or exists (select 1 from change_briefs b
                        where b.change_id = c.id and b.started_at is not null
-                         and b.worker_event_id is null))
+                         and b.worker_event_id is null and b.gave_up_at is null))
      order by c.updated_at
      limit $2`,
     [options.waitingForSeconds, options.limit],
@@ -535,7 +578,7 @@ export async function changesWithUnsentBriefs(db: Db, conversationId: string): P
      where c.conversation_id = $1 and c.status = 'started'
        and exists (select 1 from change_briefs b
                    where b.change_id = c.id and b.started_at is not null
-                     and b.worker_event_id is null)
+                     and b.worker_event_id is null and b.gave_up_at is null)
      order by c.created_at`,
     [conversationId],
   );
@@ -552,15 +595,12 @@ export interface WorkerReport {
 }
 
 /**
- * What the thread's workers posted in the thread after `since` (the last event of the
- * thread's own session): the last message of each of their turns, oldest first, at most ten.
- * Given to the teammate with the next message (decision 184).
+ * What the thread's workers posted in the thread since a message was last handed to the
+ * thread's own session (by the database's clock: their deliveries were queued after it), the
+ * last message of each of their turns, oldest first, at most ten. Given to the teammate with
+ * the next message (decision 184), so a report from while it was busy is not lost.
  */
-export async function workerReportsSince(
-  db: Db,
-  conversationId: string,
-  since: Date | undefined,
-): Promise<WorkerReport[]> {
+export async function workerReportsSince(db: Db, conversationId: string): Promise<WorkerReport[]> {
   const rows = await db.query(
     `select (select b.title from change_briefs b where b.change_id = c.id
              order by b.seq desc limit 1) as title,
@@ -571,10 +611,12 @@ export async function workerReportsSince(
      join deliveries d on d.conversation_id = e.conversation_id
                       and d.agent_event_id = e.event_id
      where e.conversation_id = $1 and e.kind = 'agent_message' and e.text is not null
-       and ($2::timestamptz is null or e.processed_at > $2::timestamptz)
-     order by e.processed_at desc, e.seq desc
+       and d.created_at > coalesce(
+         (select max(m.forwarded_at) from inbound_messages m where m.conversation_id = $1),
+         '-infinity'::timestamptz)
+     order by d.created_at desc, d.seq desc
      limit 10`,
-    [conversationId, since ?? null],
+    [conversationId],
   );
   return rows
     .map((row) => {

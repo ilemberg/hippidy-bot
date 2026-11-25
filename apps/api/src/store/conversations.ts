@@ -511,6 +511,10 @@ export type Settlement =
   | { kind: "briefs"; workerEventIds: string[] }
   /** Messages that led to any brief of this change already handed to its worker. */
   | { kind: "handed_over"; changeId: string }
+  /** Messages that led to briefs of this change handed over without an event id. */
+  | { kind: "untracked_briefs"; changeId: string }
+  /** Messages that led to one brief. */
+  | { kind: "brief"; briefId: string }
   /** Every message that led to a brief of this change (its worker can do no more). */
   | { kind: "change"; changeId: string };
 
@@ -542,6 +546,10 @@ export async function settleMessages(
       handed_over:
         "change_brief_id in (select id from change_briefs " +
         "where change_id = $3::uuid and worker_event_id is not null)",
+      untracked_briefs:
+        "change_brief_id in (select id from change_briefs " +
+        "where change_id = $3::uuid and worker_event_id like 'untracked:%')",
+      brief: "change_brief_id = $3::uuid",
       change: "change_brief_id in (select id from change_briefs where change_id = $3::uuid)",
     }[settlement.kind];
     const params: unknown[] = [conversationId, status];
@@ -551,8 +559,14 @@ export async function settleMessages(
       params.push(settlement.cutoff);
     } else if (settlement.kind === "briefs") {
       params.push(settlement.workerEventIds);
-    } else if (settlement.kind === "change" || settlement.kind === "handed_over") {
+    } else if (
+      settlement.kind === "change" ||
+      settlement.kind === "handed_over" ||
+      settlement.kind === "untracked_briefs"
+    ) {
       params.push(settlement.changeId);
+    } else if (settlement.kind === "brief") {
+      params.push(settlement.briefId);
     }
     const settled = await tx.query(
       `update inbound_messages set status = $2
