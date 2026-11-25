@@ -159,6 +159,26 @@ describe("the areas store", () => {
     ]);
   });
 
+  it("keeps an area's decisions when it is renamed, and the name of an owner who names themselves", async () => {
+    const search = await area("search", null);
+    await db.query(
+      `insert into decisions (statement, status, decided_by_source, decided_by_workspace_id,
+         decided_by_name, decided_at, origin, area)
+       values ('X.', 'active', 'slack', $1, 'Ada', now(), 'capture', 'Search')`,
+      [ws],
+    );
+    await editArea(db, actor("U5", "Bo"), search.id, {
+      version: 1,
+      name: "find",
+      ownerActorId: "U5",
+    });
+    expect(await db.query(`select area from decisions where statement = 'X.'`)).toEqual([
+      { area: "find" },
+    ]);
+    const [row] = await db.query(`select owner_name from areas where id = $1`, [search.id]);
+    expect(row?.owner_name).toBe("Bo");
+  });
+
   it("lists the people the record knows, with their latest names", async () => {
     await receiveMessage(deps, message(1, "hi", "U1", "Ada"), log);
     await area("billing", "U3");

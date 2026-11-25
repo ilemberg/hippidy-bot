@@ -117,6 +117,11 @@ export async function areaHistory(db: Db, areaId: string): Promise<AreaEvent[]> 
   });
 }
 
+/** An owner's name: the record's, or the person's own when they name themselves. */
+async function ownerName(db: Db, actor: AreaActor, ownerId: string): Promise<string | null> {
+  return (await knownName(db, actor, ownerId)) ?? (ownerId === actor.actorId ? actor.name : null);
+}
+
 /** The latest name the record knows for a person, if any. */
 export async function knownName(db: Db, place: Place, actorId: string): Promise<string | null> {
   const people = await listPeople(db, place);
@@ -214,7 +219,7 @@ export async function createArea(
 ): Promise<AreaWrite> {
   return db.transaction(async (tx) => {
     const ownerId = request.ownerActorId ?? null;
-    const ownerName = ownerId === null ? null : await knownName(tx, actor, ownerId);
+    const ownerNameNow = ownerId === null ? null : await ownerName(tx, actor, ownerId);
     const rows = await tx.query(
       `insert into areas (source, workspace_id, name, description, owner_actor_id, owner_name,
          paths, words, created_by_actor_id, created_by_name)
@@ -227,7 +232,7 @@ export async function createArea(
         request.name,
         request.description ? storable(request.description) : null,
         ownerId,
-        ownerName,
+        ownerNameNow,
         distinct(request.paths ?? []),
         distinct((request.words ?? []).map((w) => w.toLowerCase())),
         actor.actorId,
@@ -276,7 +281,7 @@ export async function editArea(
           ? null
           : ownerId === current.owner?.actorId
             ? current.owner
-            : { actorId: ownerId, name: await knownName(tx, actor, ownerId) },
+            : { actorId: ownerId, name: await ownerName(tx, actor, ownerId) },
       paths: request.paths === undefined ? current.paths : distinct(request.paths),
       words:
         request.words === undefined
@@ -309,6 +314,14 @@ export async function editArea(
         after.words,
       ],
     );
+    // Decisions carry the area as a label: a renamed area keeps its decisions (slice 3.1).
+    if (after.name !== current.name) {
+      await tx.query(
+        `update decisions set area = $3, updated_at = now()
+         where lower(area) = $2 and coalesce(decided_by_workspace_id, $1) = $1`,
+        [actor.workspaceId, current.name, after.name],
+      );
+    }
     await recordEvent(tx, areaId, "edited", actor, before, after);
     return { status: "edited", area: toArea(updated[0] ?? rows[0]) };
   });

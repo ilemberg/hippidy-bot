@@ -13,7 +13,8 @@ export const areaNameSchema = z
   .string()
   .trim()
   .toLowerCase()
-  .regex(/^[a-z0-9][a-z0-9 ._/-]{0,59}$/, "letters, digits, spaces and . _ / - only, at most 60");
+  // No `/`: a name is one segment of the web app's addresses (`/areas/<name>`).
+  .regex(/^[a-z0-9][a-z0-9 ._-]{0,59}$/, "letters, digits, spaces and . _ - only, at most 60");
 
 /** A glob over the repository, like a CODEOWNERS line: relative, no `..`. */
 export const areaPathSchema = z

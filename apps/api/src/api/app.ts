@@ -574,7 +574,8 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
     if (db === undefined || place === undefined) {
       return errorResponse(c, 503, "not_configured", "Storage is not configured");
     }
-    const area = await findAreaByName(db, place, decodeURIComponent(c.req.param("name")));
+    // Hono has decoded the segment already.
+    const area = await findAreaByName(db, place, c.req.param("name"));
     if (area === undefined) return errorResponse(c, 404, "not_found", "No such area");
     const body: AreaDetail = { area, history: await areaHistory(db, area.id) };
     return c.json(body);

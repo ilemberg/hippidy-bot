@@ -71,9 +71,9 @@ const notFound = () =>
 
 describe("an area's address", () => {
   it("encodes the name as one segment, and reads it back however it arrives", () => {
-    expect(areaHref("apps/api search")).toBe("/areas/apps%2Fapi%20search");
-    expect(areaNameFromPath("apps%2Fapi%20search")).toBe("apps/api search");
-    expect(areaNameFromPath("apps/api search")).toBe("apps/api search");
+    expect(areaHref("api search")).toBe("/areas/api%20search");
+    expect(areaNameFromPath("api%20search")).toBe("api search");
+    expect(areaNameFromPath("api search")).toBe("api search");
     expect(areaNameFromPath("Search")).toBe("search");
   });
 
@@ -384,15 +384,15 @@ describe("handleAreaAction: edit", () => {
   });
 
   it("clears an emptied description, and goes to the new name after a rename", async () => {
-    const fake = api(Response.json({ status: "edited", area: { ...area, name: "find/rank" } }));
+    const fake = api(Response.json({ status: "edited", area: { ...area, name: "find rank" } }));
     const res = await edit(
-      formOf({ name: "Find/Rank", description: "", paths: "", owner: "U2" }),
+      formOf({ name: "Find Rank", description: "", paths: "", owner: "U2" }),
       fake.fetch,
     );
-    expect(location(res)).toBe(`${config.webBaseUrl}/areas/find%2Frank?done=edited`);
+    expect(location(res)).toBe(`${config.webBaseUrl}/areas/find%20rank?done=edited`);
     expect(writes(fake.calls)[0]?.body).toEqual({
       version: 2,
-      name: "find/rank",
+      name: "find rank",
       description: null,
       ownerActorId: "U2",
       paths: [],
@@ -433,14 +433,14 @@ describe("handleAreaAction: edit", () => {
     }
   });
 
-  it("goes back to an area whose name holds a slash or a space", async () => {
+  it("goes back to an area whose name holds a space", async () => {
     const res = await handleAreaAction(
-      post("/areas/apps%2Fapi%20x/edit", { form: {} }),
+      post("/areas/api%20x/edit", { form: {} }),
       "edit",
-      "apps%2Fapi%20x",
+      "api%20x",
       deps(noCalls),
     );
-    expect(location(res)).toBe(`${config.webBaseUrl}/areas/apps%2Fapi%20x?error=signed_out`);
+    expect(location(res)).toBe(`${config.webBaseUrl}/areas/api%20x?error=signed_out`);
   });
 
   it("answers 404 for a name that cannot be an area's, and refuses another site", async () => {
