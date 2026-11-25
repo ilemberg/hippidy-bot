@@ -54,7 +54,7 @@ describe("seedMigration", () => {
     const entries = parseLog(log);
     const sql = seedMigration(entries.slice(1), entries);
     expect(sql).toContain(
-      `('It''s "one door"', 'O''Brien said so', 'superseded', 'the owner', '2026-11-17T00:00:00Z', 'import', '2')`,
+      `(2, 'It''s "one door"', 'O''Brien said so', 'superseded', 'the owner', '2026-11-17T00:00:00Z', 'import', '2')`,
     );
     expect(sql).toContain(`'active', 'the owner', '2026-11-18T00:00:00Z', 'import', '3')`);
     expect(sql).toContain(
