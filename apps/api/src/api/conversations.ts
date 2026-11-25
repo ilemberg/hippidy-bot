@@ -13,6 +13,7 @@ import {
   actedOn,
   type AgentEvent,
   type AgentEventRecord,
+  type AgentKind,
   type AgentRuntime,
 } from "../agent/runtime.ts";
 import type { PullRequestChecks } from "../github/checks.ts";
@@ -78,6 +79,8 @@ export interface ConversationDeps {
    * that pushed or opened a pull request cannot be called done.
    */
   checks?: PullRequestChecks;
+  /** The agent every new thread gets: the teammate unless a test says otherwise (181). */
+  newThreadAgent?: AgentKind;
 }
 
 /** How long a message may wait for the agent before reconcile looks at it. */
@@ -325,8 +328,12 @@ async function ensureSession(
       let session;
       let agentKind;
       try {
-        // Chosen once, from the thread's first message, and kept (decision 167).
-        agentKind = await chooseAgentKind(deps.db, conversation.id);
+        // Chosen once, when the thread's first session starts, and kept (decisions 59, 181).
+        agentKind = await chooseAgentKind(
+          deps.db,
+          conversation.id,
+          deps.newThreadAgent ?? "teammate",
+        );
         session = await deps.runtime.startSession({
           agentKind,
           title: `${conversation.key.source} ${conversation.key.channelId} ${conversation.key.threadId}`,

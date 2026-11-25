@@ -30,6 +30,7 @@ import {
   storeAgentEvents,
   storedEventsToActOn,
 } from "./record.ts";
+import { createBrief, unsentBriefs, workerReportsSince } from "./changes.ts";
 import { applyMigration, applyMigrations } from "./testing.ts";
 
 // The production client (postgres.js) over a real Postgres connection, served by PGlite.
@@ -550,6 +551,56 @@ describe("createPostgresDb", () => {
     expect(await at("2026-11-18T00:00:01.000002Z")).toBe("U1");
     expect(await at("2026-11-18T00:00:01.000003Z")).toBe("U2");
     expect(await at("2026-11-18T00:00:01Z")).toBeUndefined();
+  });
+});
+
+describe("changes and briefs through postgres.js (slice 2.1)", () => {
+  it("writes a brief's links as a JSON array and reads them back, and a worker's usage as numbers", async () => {
+    const conversation = await findOrCreateConversation(db, {
+      source: "slack",
+      workspaceId: "T",
+      channelId: "C",
+      threadId: "brief.1",
+    });
+    const links = ["SCRUM-12", 'a \u0000 null and "quotes"'];
+    const created = await createBrief(db, {
+      conversationId: conversation.id,
+      customToolUseId: "sevt_brief_pg",
+      changeId: undefined,
+      requestedBy: { source: "slack", workspaceId: "T", actorId: "U1", name: null },
+      brief: { title: "T", what: "W", why: "Y", doneWhen: "D", links },
+      startReason: undefined,
+      turnEventIds: [],
+    });
+    expect(created).toMatchObject({ kind: "created", started: true });
+    expect(await db.query(`select jsonb_typeof(links) as type from change_briefs`)).toEqual([
+      { type: "array" },
+    ]);
+    const [brief] = await unsentBriefs(db, created.kind === "created" ? created.changeId : "");
+    // toJsonText drops what Postgres cannot hold (the null character), and nothing else.
+    expect(brief?.links).toEqual(["SCRUM-12", 'a  null and "quotes"']);
+
+    await recordUsage(
+      db,
+      created.kind === "created" ? created.changeId : "",
+      {
+        inputTokens: 10,
+        outputTokens: 20,
+        cacheReadTokens: null,
+        cacheCreationTokens: null,
+        activeSeconds: 1.5,
+        listCostMinor: 123,
+        budgetMinor: 500,
+        currency: "USD",
+      },
+      "changes",
+    );
+    expect(
+      await db.query(
+        `select usage_list_cost_minor::int as cost, usage_active_seconds as seconds from changes`,
+      ),
+    ).toEqual([{ cost: 123, seconds: 1.5 }]);
+    expect(await workerReportsSince(db, conversation.id, undefined)).toEqual([]);
   });
 });
 
