@@ -9,6 +9,8 @@
   },
   "scripts": {
     "dev": "pnpm --filter @hippidy/api dev",
+    "dev:web": "pnpm --filter @hippidy/web dev",
+    "build:web": "pnpm --filter @hippidy/web build",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

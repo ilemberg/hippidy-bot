@@ -14,6 +14,7 @@ import {
   type AgentEventList,
   type ConversationDetail,
   type ConversationList,
+  type MeResponse,
 } from "@hippidy/contracts";
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
@@ -30,7 +31,7 @@ import {
   readConversation,
   readTranscript,
 } from "../store/reading.ts";
-import { requireServiceToken } from "./auth.ts";
+import { requireServiceOrPerson, requireServiceToken } from "./auth.ts";
 import { startBriefByPerson, syncChange } from "./changes.ts";
 import { confirmDecisionByPerson } from "./decisions.ts";
 import {
@@ -219,9 +220,29 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
     },
   );
 
+  // Who the API takes the caller to be: a service, or a person signed in to the web app
+  // (decisions 193 and 194). The web app reads it to show who is signed in.
+  const people = requireServiceOrPerson(deps.config.serviceToken, deps.config.personAuth);
+  api.get("/v1/me", people, (c) => {
+    const caller = c.var.caller;
+    const body: MeResponse =
+      caller.kind === "person"
+        ? {
+            kind: "person",
+            workspaceId: caller.workspaceId,
+            actorId: caller.actorId,
+            name: caller.name,
+          }
+        : { kind: "service" };
+    return c.json(body);
+  });
+
   // Reading the record (decision 79). Everything below is answered from the database alone:
   // the agent runtime is not asked, so a conversation reads the same when it is unreachable.
-  const readers = requireServiceToken(deps.config.serviceToken);
+  // A signed-in person may read it too (slice 2.4's monitoring page); every route that
+  // writes still takes the service token only.
+  const serviceOnly = requireServiceToken(deps.config.serviceToken);
+  const readers = people;
 
   /** The issues of a bad query string, in the error shape. */
   const invalidQuery = (c: Context<ApiEnv>, error: z.ZodError) =>
@@ -307,7 +328,8 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
 
   // Projects, roles and approvals (slice 5A). They need only storage, so they take the
   // database the status check uses, which is there even when the agent is not configured.
-  addProjectRoutes(api, { db: deps.status.db, auth: readers, limitBody });
+  // They write as well as read, so they stay on the service token.
+  addProjectRoutes(api, { db: deps.status.db, auth: serviceOnly, limitBody });
 
   // The decisions on record (slice 2.2): read from the database alone, newest or best matching
   // first. The web app's wiki (slice 2.6) builds on this.

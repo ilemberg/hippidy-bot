@@ -33,3 +33,7 @@ jobs:
       - run: pnpm test
       - name: Build and smoke test what Vercel runs
         run: pnpm build && pnpm smoke
+      # The web app is its own Vercel project (slice 2.3): build it as Vercel will, so a break
+      # shows here rather than on its first deploy.
+      - name: Build the web app
+        run: pnpm build:web

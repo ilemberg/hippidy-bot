@@ -10,7 +10,23 @@ export interface ApiConfig {
   serviceToken: string | undefined;
   /** For the scheduled caller of `/v1/reconcile` only. Undefined: every request is rejected. */
   reconcileToken: string | undefined;
+  /**
+   * For people signed in to the web app (decisions 193 and 194). Undefined when either
+   * variable is missing or bad: every person token is rejected.
+   */
+  personAuth: PersonAuthConfig | undefined;
 }
+
+export interface PersonAuthConfig {
+  /** Shared with the web app's server only; it signs the person tokens. */
+  secret: string;
+  /** The one Slack workspace whose members may sign in (Slack team id). */
+  workspaceId: string;
+}
+
+/** A Slack team id (`T...`), or an Enterprise Grid organization's (`E...`). */
+// A workspace's team id (`T…`), as the person token's `team` claim carries it.
+const workspaceIdSchema = z.string().regex(/^T[A-Z0-9]{2,30}$/);
 
 const tokenSchema = z
   .string()
@@ -42,5 +58,23 @@ export function readApiConfig(env: Env, log: Logger): ApiConfig {
   return {
     serviceToken: readToken(env, "API_SERVICE_TOKEN", log, "service_token"),
     reconcileToken: readToken(env, "RECONCILE_TOKEN", log, "reconcile_token"),
+    personAuth: readPersonAuth(env, log),
   };
+}
+
+function readPersonAuth(env: Env, log: Logger): PersonAuthConfig | undefined {
+  const secret = readToken(env, "WEB_API_SECRET", log, "web_api_secret");
+  const raw = env.SLACK_WORKSPACE_ID;
+  let workspaceId: string | undefined;
+  if (raw === undefined || raw === "") {
+    log.warn("config.slack_workspace_id_missing", { variable: "SLACK_WORKSPACE_ID" });
+  } else if (!workspaceIdSchema.safeParse(raw).success) {
+    log.error("config.slack_workspace_id_invalid", {
+      variable: "SLACK_WORKSPACE_ID",
+      reason: "must be a Slack team id, like T0123456789",
+    });
+  } else {
+    workspaceId = raw;
+  }
+  return secret === undefined || workspaceId === undefined ? undefined : { secret, workspaceId };
 }
