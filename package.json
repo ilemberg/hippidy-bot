@@ -19,7 +19,8 @@
     "agent:sync": "pnpm --filter @hippidy/api agent:sync",
     "agent:experiment": "pnpm --filter @hippidy/api agent:experiment",
     "atlassian:probe": "pnpm --filter @hippidy/api atlassian:probe",
-    "teammate:probe": "pnpm --filter @hippidy/api teammate:probe"
+    "teammate:probe": "pnpm --filter @hippidy/api teammate:probe",
+    "decisions:seed": "pnpm --filter @hippidy/api decisions:seed"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
