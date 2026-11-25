@@ -677,6 +677,7 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
       place,
       number.data,
       caller.kind === "person" ? caller.actorId : undefined,
+      deps.conversations?.fallback,
     );
     if (detail === undefined) return errorResponse(c, 404, "not_found", "No such conflict");
     return c.json(detail);

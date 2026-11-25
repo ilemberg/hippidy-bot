@@ -180,27 +180,28 @@ async function captureThread(
       decisions.push(decision);
       continue;
     }
-    // Replacing someone else's decision waits for its deciders (decision 208).
+    // A captured replacement always waits for the replaced decision's deciders: who the model
+    // says decided it is not proof, and a proposal from listening is never active anyway (from
+    // the review of 3.2).
     const deciders = await decidersFor(
       deps.db,
       place,
       {
         area: replacing.area,
+        ownedBy: replacing.decidedAt,
         replacedDecider: replacing.origin === "import" ? null : replacing.decidedBy.actorId,
       },
       deps.fallback,
     );
-    const theirs = deciders.some((d) => d.actorId === decision.decidedBy.actorId);
     decisions.push({
       ...decision,
       replaces: {
         id: replacing.id,
-        deciders: theirs ? undefined : deciders.map((d) => d.actorId),
+        area: replacing.area,
+        deciders: deciders.map((d) => d.actorId),
       },
     });
   }
-  const dropped = result.decisions.length - decisions.length;
-  if (dropped > 0) log.info("capture.decisions_dropped", { dropped });
   const { proposed } = await finishCapture(deps.db, {
     ...base,
     ...usageColumns,

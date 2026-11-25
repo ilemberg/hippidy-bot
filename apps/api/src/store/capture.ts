@@ -155,10 +155,10 @@ export interface CapturedDecision {
   messageId: string;
   decidedAt: string;
   /**
-   * The active decision it replaces (slice 3.2, decision 208), and, when someone else made it,
-   * who alone decides the replacement.
+   * The active decision it replaces (slice 3.2, decision 208), its area, and who alone decides
+   * the replacement.
    */
-  replaces?: { id: string; deciders: string[] | undefined } | undefined;
+  replaces?: { id: string; area: string | null; deciders: string[] } | undefined;
 }
 
 export interface CaptureRun {
@@ -270,8 +270,7 @@ export async function finishCapture(db: Db, run: CaptureRun): Promise<{ proposed
       );
       proposed += rows.length;
       const inserted = rows[0];
-      const guarded = decision.replaces?.deciders;
-      if (inserted !== undefined && decision.replaces !== undefined && guarded !== undefined) {
+      if (inserted !== undefined && decision.replaces !== undefined) {
         // Nothing is posted in a listened thread (176): the conflict is listed for its deciders.
         await recordConflict(tx, {
           place: { source: run.thread.source, workspaceId: run.thread.workspaceId },
@@ -280,7 +279,7 @@ export async function finishCapture(db: Db, run: CaptureRun): Promise<{ proposed
           conversationId: null,
           channelId: run.thread.channelId,
           threadId: run.thread.threadId,
-          area: decision.area,
+          area: decision.replaces.area,
           decisionIds: [decision.replaces.id],
           proposalId: z.object({ id: z.string() }).parse(inserted).id,
           positions: [
@@ -290,7 +289,7 @@ export async function finishCapture(db: Db, run: CaptureRun): Promise<{ proposed
               says: decision.statement,
             },
           ],
-          deciders: guarded,
+          deciders: decision.replaces.deciders,
         });
       }
     }

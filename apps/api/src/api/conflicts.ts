@@ -6,11 +6,13 @@ import {
   type SettleConflictRequest,
   type SettleConflictResult,
 } from "@hippidy/contracts";
+import { z } from "zod";
 import type { Logger } from "../log.ts";
 import { findAreaByName } from "../store/areas.ts";
 import { actorNameInConversation } from "../store/changes.ts";
 import {
   decidersFor,
+  decidersForDecisions,
   openConflictsIn,
   recordConflict,
   settleConflict,
@@ -39,6 +41,8 @@ export const conflictErrors = {
     `${actorId} has not written in this thread and made none of the decisions named, so their position cannot be recorded`,
   noArea: (area: string) =>
     `there is no area named "${area}"; leave out area to use the decision's`,
+  otherArea: (area: string, theirs: string | null) =>
+    `the decisions named are in ${theirs === null ? "no area" : `the area "${theirs}"`}, not "${area}"; leave out area`,
 } as const;
 
 function clip(text: string, max: number): string {
@@ -84,29 +88,43 @@ export function replacementLines(
   };
 }
 
-/**
- * Whether a decision replacing `replaced` must wait for its deciders: it replaces an active
- * decision, and the person deciding the new one is not among them (decision 208). Answers the
- * deciders when it must.
- */
-export async function guardFor(
+/** Who decides a replacement of `replaced`: its area's owner as of then, else the fallback, and its maker. */
+export function replacementDeciders(
   db: Db,
   context: ToolCallContext,
-  replaced: Decision | undefined,
-  newDecider: string,
+  replaced: Decision,
   routing: Routing,
-): Promise<Decider[] | undefined> {
-  if (replaced?.status !== "active") return undefined;
-  const deciders = await decidersFor(
+): Promise<Decider[]> {
+  return decidersFor(
     db,
     context,
     {
       area: replaced.area,
+      ownedBy: replaced.decidedAt,
       replacedDecider: replaced.origin === "import" ? null : replaced.decidedBy.actorId,
     },
     routing.fallback,
   );
-  return deciders.some((d) => d.actorId === newDecider) ? undefined : deciders;
+}
+
+/**
+ * The roles of stored deciders, for posting again: `decidersFor` puts the owner (or fallback)
+ * first and the replaced decision's maker after.
+ */
+export function rolesFromStored(
+  ids: readonly string[],
+  replaced: Decision,
+  fallback: { actorId: string } | undefined,
+): Decider[] {
+  return ids.map((actorId, index) => ({
+    actorId,
+    role:
+      index > 0 || actorId === replaced.decidedBy.actorId
+        ? "decider"
+        : actorId === fallback?.actorId
+          ? "fallback"
+          : "owner",
+  }));
 }
 
 function error(text: string): CustomToolAnswer {
@@ -125,6 +143,16 @@ export async function raiseConflict(
   input: RaiseConflictInput,
   routing: Routing,
 ): Promise<CustomToolAnswer> {
+  // Answered again: from what the first answer recorded, whatever has changed since.
+  const own = await db.query(
+    `select number::int as number, deciders from conflicts where custom_tool_use_id = $1`,
+    [call.id],
+  );
+  if (own[0] !== undefined) {
+    const mine = z.object({ number: z.number(), deciders: z.array(z.string()) }).parse(own[0]);
+    const output: RaiseConflictOutput = { number: mine.number, deciders: mine.deciders };
+    return { text: JSON.stringify(output), isError: false };
+  }
   const decisions: Decision[] = [];
   for (const number of [...new Set(input.decisions ?? [])]) {
     const decision = await findDecisionByNumber(db, number);
@@ -144,18 +172,23 @@ export async function raiseConflict(
       says: position.says,
     });
   }
+  // With decisions named, their areas decide who decides, not the model (from the review).
   let area = decisions.find((d) => d.area !== null)?.area ?? null;
   if (input.area !== undefined) {
     const found = await findAreaByName(db, context, input.area);
     if (found === undefined) return error(conflictErrors.noArea(input.area));
+    if (decisions.length > 0 && found.name !== area) {
+      return error(conflictErrors.otherArea(found.name, area));
+    }
     area = found.name;
   }
   if ((await openConflictsIn(db, conversationId)) >= MAX_OPEN_CONFLICTS_PER_THREAD) {
-    // A call answered again finds its own conflict below, not this limit.
-    const mine = await db.query(`select 1 from conflicts where custom_tool_use_id = $1`, [call.id]);
-    if (mine.length === 0) return error(conflictErrors.tooMany);
+    return error(conflictErrors.tooMany);
   }
-  const deciders = await decidersFor(db, context, { area }, routing.fallback);
+  const deciders =
+    decisions.length > 0
+      ? await decidersForDecisions(db, context, decisions, routing.fallback)
+      : await decidersFor(db, context, { area }, routing.fallback);
   const conversation = await getConversation(db, conversationId);
   const recorded = await db.transaction(async (tx) => {
     const conflict = await recordConflict(tx, {
@@ -227,7 +260,7 @@ export async function settleConflictByPerson(
   request: SettleConflictRequest,
   log: Logger,
 ): Promise<SettleConflictResult> {
-  const result = await settleConflict(deps.db, person, conflictId, request);
+  const result = await settleConflict(deps.db, person, conflictId, request, deps.fallback);
   log.info("conflict.settle", { conflictId, status: result.status });
   if (result.status !== "settled") {
     return result.status === "not_allowed"

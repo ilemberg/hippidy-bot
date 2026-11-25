@@ -131,6 +131,8 @@ export async function recordDecision(
     guard?:
       | {
           deciders: readonly string[];
+          /** The replaced decision's area, whose owner decides. */
+          area: string | null;
           summary: string;
           positions: readonly Position[];
         }
@@ -184,7 +186,7 @@ export async function recordDecision(
         conversationId: input.conversationId,
         channelId: null,
         threadId: null,
-        area: input.area ?? null,
+        area: input.guard.area,
         decisionIds: [supersedesId],
         proposalId: id,
         positions: input.guard.positions,

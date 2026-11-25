@@ -847,6 +847,7 @@ describe("conflicts through postgres.js (slice 3.2)", () => {
       supersedes: recorded.decision.number,
       guard: {
         deciders: ["UOWNER", "U2"],
+        area: "search",
         summary: "Replace it",
         positions: [{ actorId: "U1", name: "Linus", says: 'say "vectors" \u0000 now' }],
       },
@@ -926,5 +927,30 @@ describe("conflicts through postgres.js (slice 3.2)", () => {
       conflict: { status: "settled", outcome: "dismissed", note: null },
     });
     expect(typeof settled.conflict?.settledAt).toBe("string");
+
+    // A guarded proposal: only its deciders confirm, and its conflict settles with it.
+    const proposalId = guarded.decision.id;
+    expect(
+      await actOnProposal(
+        db,
+        proposalId,
+        { ...place, actorId: "U1", name: null },
+        { kind: "confirm" },
+      ),
+    ).toMatchObject({ status: "not_allowed", reason: "not_decider" });
+    expect(
+      await actOnProposal(
+        db,
+        proposalId,
+        { ...place, actorId: "U2", name: "Grace" },
+        { kind: "confirm" },
+      ),
+    ).toMatchObject({ status: "confirmed", replaced: { stillActive: true } });
+    const after = await listConflicts(db, place, { status: "all", limit: 10 });
+    expect(after.find((c) => c.kind === "replacement")).toMatchObject({
+      status: "settled",
+      outcome: "changed",
+      settledBy: { actorId: "U2", name: "Grace" },
+    });
   });
 });

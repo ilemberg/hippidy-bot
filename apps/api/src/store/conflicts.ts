@@ -3,11 +3,12 @@ import type {
   ConflictDetail,
   ConflictOutcome,
   ConflictRefusal,
+  Decision,
   ListConflictsQuery,
   SettleConflictRequest,
 } from "@hippidy/contracts";
 import { z } from "zod";
-import { findAreaByName, listPeople, type Place } from "./areas.ts";
+import { listPeople, type Place } from "./areas.ts";
 import type { Db, Row } from "./db.ts";
 import { storable, toJsonText } from "./json.ts";
 
@@ -22,22 +23,78 @@ export interface Decider {
   role: "owner" | "fallback" | "decider";
 }
 
-/** Who decides a conflict in an area, or a replacement of a decision. */
+/**
+ * Who decides a conflict in an area, or a replacement of a decision. The area's owner counts
+ * only if they owned it by `ownedBy` (when the replaced decision was made): anyone may make
+ * themselves owner, and doing so must not hand them a decision someone else already made (from
+ * the review of 3.2). Otherwise the fallback decides. The replaced decision's own maker always
+ * does.
+ */
 export async function decidersFor(
   db: Db,
   place: Place,
-  input: { area: string | null; replacedDecider?: string | null | undefined },
+  input: {
+    area: string | null;
+    ownedBy?: string | undefined;
+    replacedDecider?: string | null | undefined;
+  },
   fallback: { actorId: string } | undefined,
 ): Promise<Decider[]> {
   const out: Decider[] = [];
-  const area = input.area === null ? undefined : await findAreaByName(db, place, input.area);
-  if (area?.owner != null) out.push({ actorId: area.owner.actorId, role: "owner" });
-  else if (fallback !== undefined) out.push({ actorId: fallback.actorId, role: "fallback" });
+  const owner =
+    input.area === null
+      ? undefined
+      : (
+          await db.query(
+            `select owner_actor_id from areas
+             where source = $1 and workspace_id = $2 and name = lower($3)
+               and owner_actor_id is not null and owner_since <= coalesce($4::timestamptz, now())`,
+            [place.source, place.workspaceId, input.area.trim(), input.ownedBy ?? null],
+          )
+        )[0];
+  if (owner !== undefined) {
+    out.push({
+      actorId: z.object({ owner_actor_id: z.string() }).parse(owner).owner_actor_id,
+      role: "owner",
+    });
+  } else if (fallback !== undefined) {
+    out.push({ actorId: fallback.actorId, role: "fallback" });
+  }
   const replaced = input.replacedDecider;
   if (replaced != null && !out.some((d) => d.actorId === replaced)) {
     out.push({ actorId: replaced, role: "decider" });
   }
   return out;
+}
+
+/** The deciders of several decisions' areas together, each owner as of its decision. */
+export async function decidersForDecisions(
+  db: Db,
+  place: Place,
+  decisions: readonly Pick<Decision, "area" | "decidedAt">[],
+  fallback: { actorId: string } | undefined,
+): Promise<Decider[]> {
+  const all: Decider[] = [];
+  const seen = new Set<string>();
+  for (const decision of decisions) {
+    const found = await decidersFor(
+      db,
+      place,
+      { area: decision.area, ownedBy: decision.decidedAt },
+      fallback,
+    );
+    for (const d of found) {
+      if (!seen.has(d.actorId)) all.push(d);
+      seen.add(d.actorId);
+    }
+  }
+  return all;
+}
+
+/** The stored deciders of a guarded proposal; null for one that is not guarded. */
+export async function storedDeciders(db: Db, decisionId: string): Promise<string[] | null> {
+  const rows = await db.query(`select deciders from decisions where id = $1`, [decisionId]);
+  return z.object({ deciders: z.array(z.string()).nullable() }).parse(rows[0]).deciders;
 }
 
 /** A position as kept: who, their latest name, and what they want. */
@@ -255,11 +312,23 @@ export async function findConflictByNumber(
   return (await toConflicts(db, place, rows))[0];
 }
 
-/** Why a person may not settle a conflict here; null when they may. */
-function refusal(conflict: Conflict, actorId: string): ConflictRefusal | null {
+/**
+ * Why a person may not settle a conflict here; null when they may. One recorded with nobody to
+ * decide it (no owner, no fallback then) is decided by the fallback configured now, so it does
+ * not stay open for ever.
+ */
+function refusal(
+  conflict: Conflict,
+  actorId: string,
+  fallback: { actorId: string } | undefined,
+): ConflictRefusal | null {
   if (conflict.status === "settled") return "settled";
   if (conflict.proposal !== null) return "has_proposal";
-  if (!conflict.deciders.some((d) => d.actorId === actorId)) return "not_decider";
+  const deciders =
+    conflict.deciders.length === 0 && fallback !== undefined
+      ? [fallback.actorId]
+      : conflict.deciders.map((d) => d.actorId);
+  if (!deciders.includes(actorId)) return "not_decider";
   return null;
 }
 
@@ -269,10 +338,11 @@ export async function conflictDetail(
   place: Place,
   number: number,
   actorId: string | undefined,
+  fallback?: { actorId: string },
 ): Promise<ConflictDetail | undefined> {
   const conflict = await findConflictByNumber(db, place, number);
   if (conflict === undefined) return undefined;
-  const reason = actorId === undefined ? "not_decider" : refusal(conflict, actorId);
+  const reason = actorId === undefined ? "not_decider" : refusal(conflict, actorId, fallback);
   return { conflict, youMay: { settle: reason === null, reason } };
 }
 
@@ -287,6 +357,7 @@ export async function settleConflict(
   person: Place & { actorId: string; name: string | null },
   conflictId: string,
   request: SettleConflictRequest,
+  fallback?: { actorId: string },
 ): Promise<SettleOutcome> {
   return db.transaction(async (tx) => {
     const rows = await tx.query(
@@ -297,7 +368,7 @@ export async function settleConflict(
     );
     const [conflict] = await toConflicts(tx, person, rows);
     if (conflict === undefined) return { status: "not_found" };
-    const reason = refusal(conflict, person.actorId);
+    const reason = refusal(conflict, person.actorId, fallback);
     if (reason !== null) return { status: "not_allowed", reason, conflict };
     await tx.query(
       `update conflicts

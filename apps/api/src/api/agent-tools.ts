@@ -19,7 +19,13 @@ import {
   type StartChangeOutput,
 } from "@hippidy/contracts";
 import { areasInText, nameChangeAreas, ownerLines, type Fallback } from "./areas.ts";
-import { guardFor, raiseConflict, replacementLines } from "./conflicts.ts";
+import {
+  raiseConflict,
+  replacementDeciders,
+  replacementLines,
+  rolesFromStored,
+} from "./conflicts.ts";
+import { storedDeciders } from "../store/conflicts.ts";
 import { findAreaByName, listAreas } from "../store/areas.ts";
 import type { z } from "zod";
 import type { AgentEvent } from "../agent/runtime.ts";
@@ -159,11 +165,11 @@ export function proposedBecause(conditions: {
   askedToRecord: boolean;
   untrustedRead: string | undefined;
   othersInTurn?: boolean;
-  /** The number of someone else's decision it replaces (slice 3.2, decision 208). */
-  replacesOthers?: number | undefined;
+  /** The number of a decision it replaces that waits for its deciders (decision 208). */
+  replaces?: number | undefined;
 }): string | undefined {
-  if (conditions.replacesOthers !== undefined) {
-    return `it replaces decision ${String(conditions.replacesOthers)}, which someone else decided, so only the people named below can confirm it`;
+  if (conditions.replaces !== undefined) {
+    return `it would replace decision ${String(conditions.replaces)}, so only the people named above can confirm it`;
   }
   if (conditions.untrustedRead !== undefined) {
     return `I ${conditions.untrustedRead} first, so a person needs to confirm it`;
@@ -176,6 +182,13 @@ export function proposedBecause(conditions: {
   if (!conditions.askedToRecord) return "nobody asked for it to be recorded";
   return undefined;
 }
+
+/** No condition for a proposal holds: for a reason that is only the replacement's. */
+const noConditions: {
+  deciderIsAsker: boolean;
+  askedToRecord: boolean;
+  untrustedRead: string | undefined;
+} = { deciderIsAsker: true, askedToRecord: true, untrustedRead: undefined };
 
 /** A recorded decision as people read it in the thread. */
 export function decisionForThread(
@@ -235,15 +248,25 @@ async function recordDecisionFor(
     senders.actorIds.every((actorId) => actorId === input.decidedBy.actorId);
   const replaced =
     input.supersedes === undefined ? undefined : await findDecisionByNumber(db, input.supersedes);
-  // Replacing someone else's decision waits for its deciders, whoever asked (decision 208).
-  const deciders = await guardFor(db, context, replaced, input.decidedBy.actorId, routing);
-  const because = proposedBecause({
+  const ordinary = proposedBecause({
     deciderIsAsker: deciderAlone && turn?.actorId === input.decidedBy.actorId,
     askedToRecord: input.askedToRecord,
     untrustedRead: startReason(events, call.id),
     othersInTurn: senders.carriedContext,
-    replacesOthers: deciders !== undefined && replaced !== undefined ? replaced.number : undefined,
   });
+  // Replacing an active decision waits for its deciders (decision 208), unless it would be
+  // active anyway, which proves the decider is the asker, and the asker is one of them. The
+  // decider the model names is not trusted on its own (from the review of 3.2).
+  const deciders =
+    replaced?.status === "active"
+      ? await replacementDeciders(db, context, replaced, routing)
+      : undefined;
+  const exempt =
+    ordinary === undefined && deciders?.some((d) => d.actorId === input.decidedBy.actorId) === true;
+  const guarded = replaced !== undefined && deciders !== undefined && !exempt;
+  const because = guarded
+    ? proposedBecause({ ...noConditions, replaces: replaced.number })
+    : ordinary;
   const deciderName = await actorNameInConversation(db, conversationId, input.decidedBy.actorId);
   const result = await recordDecision(db, {
     customToolUseId: call.id,
@@ -255,29 +278,29 @@ async function recordDecisionFor(
     decidedBy: { ...decider, name: deciderName },
     status: because === undefined ? "active" : "proposed",
     supersedes: input.supersedes,
-    guard:
-      deciders === undefined || replaced === undefined
-        ? undefined
-        : {
-            deciders: deciders.map((d) => d.actorId),
-            summary: `Replace decision ${String(replaced.number)} ("${replaced.statement.slice(0, 200)}") with: ${input.statement}`,
-            positions: [
-              {
-                actorId: input.decidedBy.actorId,
-                name: deciderName,
-                says: input.statement,
-              },
-              ...(replaced.decidedBy.actorId === null
-                ? []
-                : [
-                    {
-                      actorId: replaced.decidedBy.actorId,
-                      name: replaced.decidedBy.name,
-                      says: replaced.statement,
-                    },
-                  ]),
-            ],
-          },
+    guard: !guarded
+      ? undefined
+      : {
+          deciders: deciders.map((d) => d.actorId),
+          area: replaced.area,
+          summary: `Replace decision ${String(replaced.number)} ("${replaced.statement.slice(0, 200)}") with: ${input.statement}`,
+          positions: [
+            {
+              actorId: input.decidedBy.actorId,
+              name: deciderName,
+              says: input.statement,
+            },
+            ...(replaced.decidedBy.actorId === null
+              ? []
+              : [
+                  {
+                    actorId: replaced.decidedBy.actorId,
+                    name: replaced.decidedBy.name,
+                    says: replaced.statement,
+                  },
+                ]),
+          ],
+        },
   });
   if (result.kind === "no_superseded") {
     return error(toolErrors.noActiveDecision(input.supersedes ?? 0));
@@ -292,10 +315,18 @@ async function recordDecisionFor(
           routing.log?.error("areas.decision_failed", { conversationId, error: failure });
           return undefined;
         });
-  // A guarded replacement names who decides it instead (decision 208).
+  // A guarded replacement names who decides it instead (decision 208), from what was stored,
+  // so answering the call again posts what was decided the first time.
+  const stored = await storedDeciders(db, decision.id);
+  const guard =
+    stored === null || replaced === undefined
+      ? undefined
+      : result.kind === "recorded" && deciders !== undefined
+        ? deciders
+        : rolesFromStored(stored, replaced, routing.fallback);
   const owner =
-    deciders !== undefined && replaced !== undefined
-      ? replacementLines(replaced, deciders)
+    guard !== undefined && replaced !== undefined
+      ? replacementLines(replaced, guard)
       : area === undefined
         ? undefined
         : ownerLines([area], routing.fallback);
@@ -303,7 +334,11 @@ async function recordDecisionFor(
   const conversation = await getConversation(db, conversationId);
   const text = decisionForThread(
     decision,
-    proposed ? (because ?? "it is a proposal") : undefined,
+    proposed
+      ? guard !== undefined && replaced !== undefined
+        ? proposedBecause({ ...noConditions, replaces: replaced.number })
+        : (because ?? "it is a proposal")
+      : undefined,
     replaced === undefined ? undefined : { number: replaced.number, statement: replaced.statement },
   );
   await enqueueDelivery(db, conversationId, `decision:${decision.id}`, "note", {

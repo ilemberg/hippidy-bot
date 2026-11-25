@@ -1,6 +1,6 @@
 # Slice 3.2: conflict surfacing
 
-Status: **planned 2026-11-25 (decision 208).** The wave is in `wave-3.md`; areas and owners in
+Status: **built 2026-11-25, not merged (decisions 208 and 209).** The wave is in `wave-3.md`; areas and owners in
 `slice-3-1.md`.
 
 **Demo:** Ada owns the area `search`, and decision 12 says "Search uses Postgres full-text
@@ -26,8 +26,9 @@ settles it there.
 
 The **deciders** of a conflict, or of a guarded proposal, are fixed when it is recorded:
 
-- the owner of the area of the decision being replaced (or of the conflict's area), if the area
-  has one and they owned it then (`owner_since`, as 207);
+- the owner of the area of the decision being replaced (or of the areas of the decisions a
+  conflict names), if they owned it when that decision was made (`owner_since`, as 207 and
+  209);
 - otherwise the fallback (`FALLBACK_OWNER`);
 - and, for a replacement, the person who made the decision being replaced: changing your own
   decision is not a conflict with yourself.
@@ -39,9 +40,10 @@ owner and no fallback configured, the post says nobody is set to decide, and the
 
 ## The rule for replacements (part B)
 
-- When `record_decision` names `supersedes` N, N is active, and the new decider is not one of
-  N's deciders, the decision is recorded as **proposed**, whatever else holds (G6's "asked to
-  record" does not make it active), with its deciders and a conflict of kind `replacement`.
+- When `record_decision` names `supersedes` N and N is active, the decision is recorded as
+  **proposed**, with its deciders and a conflict of kind `replacement`, unless it would be
+  active anyway (its decider asked, alone, 192 and 195) and that person is one of N's deciders
+  (209). Who the call names as deciding is not trusted on its own.
 - **Confirm and reword:** only a decider. **Reject:** a decider, or whoever could act on it
   before (G11, 201): withdrawing a proposal does not change the record.
 - The decision post says "This would replace decision N, which X decided. @Owner decides, as

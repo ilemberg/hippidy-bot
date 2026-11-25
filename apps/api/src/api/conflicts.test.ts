@@ -18,6 +18,7 @@ import { actOnProposal, recordDecision } from "../store/decisions.ts";
 import { recordObservation, setListening } from "../store/listening.ts";
 import { createTestDb } from "../store/testing.ts";
 import { memoryLogger } from "../testing.ts";
+import { answerCustomToolCall } from "./agent-tools.ts";
 import { runCapture } from "./capture.ts";
 import { MAX_OPEN_CONFLICTS_PER_THREAD } from "./conflicts.ts";
 import { receiveMessage, syncConversation, type ConversationDeps } from "./conversations.ts";
@@ -259,6 +260,122 @@ describe("replacing someone else's decision", () => {
     expect(post?.kind === "decision" ? post.text : "").toContain("Nobody is set to decide it");
     const [proposal] = await db.query(`select deciders from decisions where origin = 'thread'`);
     expect(proposal?.deciders).toEqual([]);
+  });
+});
+
+describe("what the review of 3.2 found", () => {
+  it("does not trust the decider the model names: a writer's replacement in a decider's name waits", async () => {
+    await createArea(db, person("UMAKER"), { name: "search", ownerActorId: "UADA" });
+    await receiveMessage(deps, message(1, "hi", "U2", "Grace"), log);
+    // Grace's message is answered first, so the next turn is Linus's.
+    const teammate = runtime.onlySessionId();
+    runtime.work(teammate);
+    runtime.finish(teammate, "Hi.");
+    await syncConversation(deps, await thread(), log);
+    const old = await activeBy("U2", "Grace", "Search uses Postgres full-text search.", "search");
+    // Linus asks, and the call names Grace, a decider, as deciding.
+    await receiveMessage(
+      deps,
+      message(2, "record that Grace decided search moves to vectors"),
+      log,
+    );
+    await teammateCalls("record_decision", {
+      statement: "Search uses a vector index.",
+      area: "search",
+      decidedBy: { actorId: "U2" },
+      askedToRecord: true,
+      supersedes: old.number,
+    });
+    const [proposal] = await db.query(
+      `select id, status, deciders from decisions where supersedes_id = $1`,
+      [old.id],
+    );
+    expect(proposal).toMatchObject({ status: "proposed", deciders: ["UADA", "U2"] });
+    expect(
+      await actOnProposal(db, String(proposal?.id), person("U1"), { kind: "confirm" }),
+    ).toMatchObject({ status: "not_allowed", reason: "not_decider" });
+    // The person who made the replaced decision may confirm it.
+    expect(
+      await actOnProposal(db, String(proposal?.id), person("U2", "Grace"), { kind: "confirm" }),
+    ).toMatchObject({ status: "confirmed" });
+  });
+
+  it("does not let a new owner of the area decide a replacement of an older decision", async () => {
+    await receiveMessage(deps, message(1, "please record: search moves to vectors"), log);
+    const old = await activeBy("U2", "Grace", "Search uses Postgres full-text search.", "search");
+    // Linus makes himself owner of the decision's area after it was made.
+    await createArea(db, person("U1", "Linus"), { name: "search", ownerActorId: "U1" });
+    await teammateCalls("record_decision", {
+      statement: "Search uses a vector index.",
+      area: "search",
+      decidedBy: { actorId: "U1" },
+      askedToRecord: true,
+      supersedes: old.number,
+    });
+    expect((await decisionRow(old.number))?.status).toBe("active");
+    const [proposal] = await db.query(
+      `select id, status, deciders from decisions where supersedes_id = $1`,
+      [old.id],
+    );
+    // The fallback decides, as if the area had no owner, with the person who made it.
+    expect(proposal).toMatchObject({ status: "proposed", deciders: ["UOWNER", "U2"] });
+    expect(
+      await actOnProposal(db, String(proposal?.id), person("UOWNER"), { kind: "confirm" }),
+    ).toMatchObject({ status: "confirmed" });
+  });
+
+  it("takes a conflict's deciders from the decisions it names, not from an area the model picks", async () => {
+    await createArea(db, person("UMAKER"), { name: "search", ownerActorId: "UADA" });
+    await createArea(db, person("U1"), { name: "linus tools", ownerActorId: "U1" });
+    await receiveMessage(deps, message(1, "a"), log);
+    const old = await activeBy("U2", "Grace", "Search uses Postgres full-text search.", "search");
+    const answer = await teammateCalls("raise_conflict", {
+      summary: "x",
+      decisions: [old.number],
+      area: "linus tools",
+    });
+    expect(answer).toContain('the decisions named are in the area "search"');
+    expect(await db.query(`select 1 from conflicts`)).toHaveLength(0);
+  });
+
+  it("answers a raise_conflict call again from what it recorded, whatever changed since", async () => {
+    await receiveMessage(deps, message(1, "a"), log);
+    const old = await activeBy("U2", "Grace", "Search uses Postgres full-text search.");
+    const conversation = await thread();
+    const call = {
+      id: "sevt_raise_twice",
+      name: "raise_conflict",
+      input: { summary: "x", decisions: [old.number] },
+      processedAt: null,
+    };
+    const first = await answerCustomToolCall(db, conversation.id, call, [], [], deps);
+    await db.query(`update decisions set status = 'superseded' where id = $1`, [old.id]);
+    const again = await answerCustomToolCall(db, conversation.id, call, [], [], deps);
+    expect(again).toEqual(first);
+    expect(first.isError).toBe(false);
+    expect(await db.query(`select 1 from conflicts`)).toHaveLength(1);
+  });
+
+  it("lets the fallback configured now settle a conflict recorded with nobody to decide it", async () => {
+    deps = { ...deps, fallback: undefined };
+    await receiveMessage(deps, message(1, "a"), log);
+    await receiveMessage(deps, message(2, "b", "U2", "Grace"), log);
+    await teammateCalls("raise_conflict", {
+      summary: "x",
+      positions: [
+        { actorId: "U1", says: "this" },
+        { actorId: "U2", says: "that" },
+      ],
+    });
+    const [row] = await db.query(`select id, deciders from conflicts`);
+    expect(row?.deciders).toEqual([]);
+    deps = { ...deps, fallback: { actorId: "UOWNER" } };
+    const settled = await app().request(`/v1/conflicts/${String(row?.id)}/settle`, {
+      method: "POST",
+      headers: await as("UOWNER"),
+      body: JSON.stringify({ outcome: "dismissed" }),
+    });
+    expect(settleConflictResultSchema.parse(await settled.json()).status).toBe("settled");
   });
 });
 
@@ -528,6 +645,60 @@ describe("capture", () => {
       status: "open",
     });
     expect(slack.delivered.length).toBe(delivered);
+    const listed = conflictListSchema.parse(
+      await (await app().request("/v1/conflicts", { headers: await as("UOWNER") })).json(),
+    );
+    expect(listed.conflicts.map((c) => [c.kind, c.proposal?.statement])).toEqual([
+      ["capture", "Search ranking moves to a vector index."],
+    ]);
+  });
+
+  it("guards a captured replacement even when the model says its maker decided it", async () => {
+    const extractor = new FakeExtractor();
+    const now = new Date("2026-11-25T12:00:00.000Z");
+    const channel = { source: "slack" as const, workspaceId: ws, channelId: "C9" };
+    await setListening(db, { ...channel, listening: true, actor: { id: "U1" } });
+    await receiveMessage(deps, message(1, "hello"), log);
+    const old = await activeBy("U2", "Grace", "Search uses Postgres full-text search ranking.");
+    for (const [messageId, actor, text] of [
+      ["200.1", "U2", "ok search ranking full-text"],
+      ["200.2", "U4", "search ranking moves to vectors, Grace said so"],
+    ] as const) {
+      await recordObservation(db, {
+        kind: "posted",
+        ...channel,
+        messageId,
+        threadId: "200.1",
+        actor: { id: actor, displayName: actor },
+        text,
+        sentAt: new Date(now.getTime() - 40 * 60_000).toISOString(),
+      });
+    }
+    extractor.answer({
+      kind: "ok",
+      usage: { inputTokens: 100, outputTokens: 10 },
+      decisions: [
+        {
+          statement: "Search ranking moves to a vector index.",
+          reason: null,
+          area: null,
+          decidedBy: "U2",
+          messageId: "200.1",
+          replaces: old.number,
+        },
+      ],
+    });
+    await runCapture(
+      { db, extractor, dailyBudgetCents: 100, now: () => now, fallback: { actorId: "UOWNER" } },
+      log,
+    );
+    const [proposal] = await db.query(
+      `select id, deciders from decisions where origin = 'capture'`,
+    );
+    expect(proposal?.deciders).toEqual(["UOWNER", "U2"]);
+    expect(
+      await actOnProposal(db, String(proposal?.id), person("U4"), { kind: "confirm" }),
+    ).toMatchObject({ status: "not_allowed", reason: "not_decider" });
   });
 
   it("ignores a decision number the model was not shown", async () => {
