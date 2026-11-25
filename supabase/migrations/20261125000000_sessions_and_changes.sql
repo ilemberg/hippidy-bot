@@ -86,6 +86,11 @@ create table public.change_briefs (
   -- The event id the worker's session gave the brief when it was sent, so it is sent once.
   worker_event_id text unique,
   check (worker_event_id is null or started_at is not null),
+  -- Failed tries to hand it to the worker; after a few, or when the worker can take no more,
+  -- it is given up and the messages that led to it are answered with a note.
+  hand_over_attempts integer not null default 0,
+  gave_up_at timestamptz,
+  check (gave_up_at is null or worker_event_id is null),
   seq bigint generated always as identity,
   created_at timestamptz not null default now()
 );
@@ -93,7 +98,7 @@ create table public.change_briefs (
 create index change_briefs_change_idx on public.change_briefs (change_id, seq);
 create index change_briefs_unsent_idx
   on public.change_briefs (change_id)
-  where started_at is not null and worker_event_id is null;
+  where started_at is not null and worker_event_id is null and gave_up_at is null;
 
 -- The brief a person's message led to. Such a message is settled by the worker's turn that
 -- handled the brief (✅ only once its pull request's CI has passed, decision 132), not by the

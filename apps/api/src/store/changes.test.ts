@@ -142,6 +142,13 @@ describe("change_briefs", () => {
     ).rejects.toThrow();
   });
 
+  it("gives a brief up only if it was never handed over", async () => {
+    const changeId = await change();
+    await insertBrief(changeId, "toolu_1", { startedAt: "2026-11-25T12:00:00Z" });
+    await db.query(`update change_briefs set gave_up_at = now(), hand_over_attempts = 5`);
+    await expect(db.query(`update change_briefs set worker_event_id = 'sevt_1'`)).rejects.toThrow();
+  });
+
   it("links a person's message to a brief, and lets go of it if the brief goes", async () => {
     const changeId = await change();
     const [brief] = await insertBrief(changeId, "toolu_1");
