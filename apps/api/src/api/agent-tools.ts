@@ -22,7 +22,13 @@ import type { AgentEvent } from "../agent/runtime.ts";
 import { actorNameInConversation, createBrief } from "../store/changes.ts";
 import { enqueueDelivery, getConversation } from "../store/conversations.ts";
 import type { Db } from "../store/db.ts";
-import { readTurnMessage, recordDecision, searchDecisions } from "../store/decisions.ts";
+import {
+  findDecisionByNumber,
+  readTurnMessage,
+  readTurnSenders,
+  recordDecision,
+  searchDecisions,
+} from "../store/decisions.ts";
 import {
   createProject,
   getProject,
@@ -126,9 +132,13 @@ export function proposedBecause(conditions: {
   deciderIsAsker: boolean;
   askedToRecord: boolean;
   untrustedRead: string | undefined;
+  othersInTurn?: boolean;
 }): string | undefined {
   if (conditions.untrustedRead !== undefined) {
     return `I ${conditions.untrustedRead} first, so a person needs to confirm it`;
+  }
+  if (conditions.othersInTurn === true) {
+    return "other people's words came with the message, so a person needs to confirm it";
   }
   if (!conditions.deciderIsAsker)
     return "it was not recorded at the request of the person who decided it";
@@ -137,11 +147,22 @@ export function proposedBecause(conditions: {
 }
 
 /** A recorded decision as people read it in the thread. */
-export function decisionForThread(decision: Decision, because: string | undefined): string {
+export function decisionForThread(
+  decision: Decision,
+  because: string | undefined,
+  replaced?: { number: number; statement: string },
+): string {
   const who = decision.decidedBy.name ?? decision.decidedBy.actorId ?? "someone";
   const reason = decision.reason === null ? "" : ` Why: ${decision.reason}`;
+  // What it replaces is quoted, so whoever confirms a proposal sees which decision it retires.
+  const quoted =
+    replaced === undefined
+      ? ""
+      : `: "${replaced.statement.length > 300 ? `${replaced.statement.slice(0, 299)}…` : replaced.statement}"`;
   const replaces =
-    decision.supersedes === null ? "" : ` It replaces decision ${String(decision.supersedes)}.`;
+    decision.supersedes === null
+      ? ""
+      : ` It replaces decision ${String(decision.supersedes)}${quoted}.`;
   return because === undefined
     ? `**Recorded as decision ${String(decision.number)}:** ${decision.statement}\n\n_Decided by ${who}.${reason}${replaces}_`
     : `**Proposed decision ${String(decision.number)}:** ${decision.statement}\n\n_Decided by ${who}.${reason}${replaces} It is only proposed because ${because}: press Confirm if the team has decided this._`;
@@ -174,11 +195,20 @@ async function recordDecisionFor(
     call.processedAt === null
       ? undefined
       : await readTurnMessage(db, conversationId, call.processedAt, messages);
+  // Every message of the call's own turn must be the decider's, and none may have come with
+  // other people's words from the thread: anyone else's text could have steered the call.
+  const senders = await readTurnSenders(db, conversationId, turnMessages(events, call.id));
+  const deciderAlone =
+    senders.actorIds.length > 0 &&
+    senders.actorIds.every((actorId) => actorId === input.decidedBy.actorId);
   const because = proposedBecause({
-    deciderIsAsker: turn?.actorId === input.decidedBy.actorId,
+    deciderIsAsker: deciderAlone && turn?.actorId === input.decidedBy.actorId,
     askedToRecord: input.askedToRecord,
     untrustedRead: startReason(events, call.id),
+    othersInTurn: senders.carriedContext,
   });
+  const replaced =
+    input.supersedes === undefined ? undefined : await findDecisionByNumber(db, input.supersedes);
   const result = await recordDecision(db, {
     customToolUseId: call.id,
     conversationId,
@@ -204,7 +234,13 @@ async function recordDecisionFor(
     kind: "decision",
     target: { ...conversation.key },
     decisionId: decision.id,
-    text: decisionForThread(decision, proposed ? (because ?? "it is a proposal") : undefined),
+    text: decisionForThread(
+      decision,
+      proposed ? (because ?? "it is a proposal") : undefined,
+      replaced === undefined
+        ? undefined
+        : { number: replaced.number, statement: replaced.statement },
+    ),
     needsConfirm: proposed,
   });
   const output: RecordDecisionOutput = {

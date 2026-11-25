@@ -154,8 +154,13 @@ export async function confirmDecision(
   decisionId: string,
   person: DecisionActor,
 ): Promise<
-  | { status: "confirmed"; decision: Decision }
-  | { status: "not_proposed" | "not_found"; decision?: Decision }
+  | {
+      status: "confirmed";
+      decision: Decision;
+      /** The decision it replaces, and whether that one was still active to replace. */
+      replaced?: { number: number; stillActive: boolean } | undefined;
+    }
+  | { status: "not_proposed" | "not_found"; decision?: Decision; replaced?: undefined }
 > {
   return db.transaction(async (tx) => {
     const rows = await tx.query(
@@ -183,15 +188,24 @@ export async function confirmDecision(
        where id = $1`,
       [decisionId, person.source, person.workspaceId, person.actorId, person.name],
     );
+    let replaced: { number: number; stillActive: boolean } | undefined;
     if (found.supersedes_id !== null) {
-      await tx.query(
-        `update decisions set status = 'superseded', updated_at = now()
-         where id = $1 and status = 'active'`,
+      const old = await tx.query(
+        `select number::float8 as number, status from decisions where id = $1 for update`,
         [found.supersedes_id],
       );
+      const o = z.object({ number: z.number(), status: z.string() }).parse(one(old));
+      // Only a decision still active is replaced; one superseded meanwhile is left as it is.
+      if (o.status === "active") {
+        await tx.query(
+          `update decisions set status = 'superseded', updated_at = now() where id = $1`,
+          [found.supersedes_id],
+        );
+      }
+      replaced = { number: o.number, stillActive: o.status === "active" };
     }
     const decision = await tx.query(`select ${columns} from ${from} where d.id = $1`, [decisionId]);
-    return { status: "confirmed", decision: toDecision(one(decision)) };
+    return { status: "confirmed", decision: toDecision(one(decision)), replaced };
   });
 }
 
@@ -206,6 +220,11 @@ export async function searchDecisions(
     area?: string | undefined;
     statuses?: readonly DecisionStatus[] | undefined;
     limit: number;
+    /**
+     * How many of the query's words a decision must share to be returned: 1 for a search, 2 for
+     * the decisions put before a message, so one common word does not bring in a decision.
+     */
+    minShared?: number;
   },
 ): Promise<Decision[]> {
   const statuses = options.statuses ?? ["active"];
@@ -214,27 +233,72 @@ export async function searchDecisions(
   // some of them matches, ranked by how many. Each is quoted (a word like `https:` would break
   // the query's syntax) and read with the `simple` configuration, so it is not stemmed twice.
   const rows = await db.query(
-    `with q as (
-       select case when $1::text is null then null
-                   else to_tsquery('simple', array_to_string(array(
-                     select quote_literal(lexeme) from unnest(to_tsvector('english', $1::text))
-                   ), ' | ')) end as query
+    `with w as (
+       select array(
+         select quote_literal(lexeme) from unnest(to_tsvector('english', coalesce($1::text, '')))
+       ) as words
+     ),
+     q as (
+       -- No query: everything. A query with no searchable words (only stop words): nothing,
+       -- without asking Postgres for an empty text search.
+       select case when $1::text is null or cardinality(w.words) = 0 then null
+                   else to_tsquery('simple', array_to_string(w.words, ' | ')) end as query,
+              $1::text is not null and cardinality(w.words) = 0 as nothing,
+              w.words
+       from w
      )
      select ${columns}
      from ${from}, q
      where d.status = any($2::text[])
+       and not q.nothing
        and ($3::text is null or lower(d.area) = lower($3::text))
-       and (q.query is null or (q.query::text <> '' and d.search @@ q.query))
-     order by case when q.query is null then 0 else ts_rank(d.search, q.query) end desc,
+       and (q.query is null or (
+         d.search @@ q.query
+         and (select count(*) from unnest(q.words) x where d.search @@ to_tsquery('simple', x))
+             >= $5
+       ))
+     -- Rank by matches, divided by the decision's length (normalization 1), so a long log entry
+     -- does not win on length alone.
+     order by case when q.query is null then 0 else ts_rank(d.search, q.query, 1) end desc,
               d.decided_at desc, d.number desc
      limit $4`,
-    [query, statuses, options.area ?? null, options.limit],
+    [query, statuses, options.area ?? null, options.limit, options.minShared ?? 1],
   );
   return rows.map(toDecision);
 }
 
 export async function getDecision(db: Db, id: string): Promise<Decision | undefined> {
   const rows = await db.query(`select ${columns} from ${from} where d.id = $1`, [id]);
+  return rows[0] === undefined ? undefined : toDecision(rows[0]);
+}
+
+/**
+ * Who sent the given messages of the thread (by their agent event ids), and whether any came
+ * with other people's words from the thread (decision 164).
+ */
+export async function readTurnSenders(
+  db: Db,
+  conversationId: string,
+  eventIds: readonly string[],
+): Promise<{ actorIds: string[]; carriedContext: boolean }> {
+  if (eventIds.length === 0) return { actorIds: [], carriedContext: false };
+  const rows = await db.query(
+    `select actor_id, carried_context from inbound_messages
+     where conversation_id = $1 and agent_event_id = any($2::text[])`,
+    [conversationId, eventIds],
+  );
+  const parsed = rows.map((r) =>
+    z.object({ actor_id: z.string(), carried_context: z.boolean() }).parse(r),
+  );
+  return {
+    actorIds: [...new Set(parsed.map((r) => r.actor_id))],
+    carriedContext: parsed.some((r) => r.carried_context),
+  };
+}
+
+/** An active decision by its number, for one that a new decision says it replaces. */
+export async function findDecisionByNumber(db: Db, number: number): Promise<Decision | undefined> {
+  const rows = await db.query(`select ${columns} from ${from} where d.number = $1`, [number]);
   return rows[0] === undefined ? undefined : toDecision(rows[0]);
 }
 

@@ -8,8 +8,13 @@ import { flushSoon, queue, targetOf, type ConversationDeps } from "./conversatio
 // posted in: `POST /v1/decisions/:decisionId/confirm`.
 
 export const decisionTexts = {
-  confirmed: (number: number, name: string) =>
-    `Decision ${String(number)} confirmed by ${name}. It is on record now.`,
+  confirmed: (number: number, name: string, replaced?: { number: number; stillActive: boolean }) =>
+    `Decision ${String(number)} confirmed by ${name}. It is on record now.` +
+    (replaced === undefined
+      ? ""
+      : replaced.stillActive
+        ? ` It replaces decision ${String(replaced.number)}.`
+        : ` Decision ${String(replaced.number)}, which it was to replace, had already been replaced or withdrawn, so it was left as it was.`),
 } as const;
 
 export async function confirmDecisionByPerson(
@@ -26,12 +31,21 @@ export async function confirmDecisionByPerson(
     name: request.actor.displayName ?? null,
   });
   log.info("decision.confirm", { decisionId, status: result.status });
-  if (result.status === "confirmed" && result.decision.conversationId !== null) {
+  // Said once, under a key of its own: if saying it failed after the confirmation committed, a
+  // second press (which finds the decision no longer proposed) says it then.
+  const confirmed =
+    result.status === "confirmed" ||
+    (result.status === "not_proposed" && result.decision?.confirmedBy != null);
+  if (confirmed && result.decision !== undefined && result.decision.conversationId !== null) {
     const conversation = await getConversation(deps.db, result.decision.conversationId);
     await queue(deps, conversation, `confirmed:${decisionId}`, "note", {
       kind: "reply",
       target: targetOf(conversation),
-      text: decisionTexts.confirmed(result.decision.number, name),
+      text: decisionTexts.confirmed(
+        result.decision.number,
+        result.decision.confirmedBy?.name ?? name,
+        result.replaced,
+      ),
     });
     await flushSoon(deps, conversation.id, log);
   }

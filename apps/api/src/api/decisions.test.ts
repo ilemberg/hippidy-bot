@@ -183,7 +183,7 @@ describe("record_decision (decision 192)", () => {
     const { answer } = await record({ ...decision, supersedes: Number(old?.number) });
     expect(JSON.parse(answer?.text ?? "{}")).toMatchObject({ status: "active" });
     expect(await stored(Number(old?.number))).toMatchObject({ status: "superseded" });
-    expect(decisionPosts()[0]?.text).toContain(`It replaces decision ${String(old?.number)}.`);
+    expect(decisionPosts()[0]?.text).toContain(`It replaces decision ${String(old?.number)}: "`);
   });
 
   it("records and posts once when the call is answered again", async () => {
@@ -239,6 +239,97 @@ describe("recall (slice 2.2)", () => {
   it("puts none before a message in an older thread, and none when nothing matches", async () => {
     deps.newThreadAgent = "engineer";
     await receiveMessage(deps, message(1, "Who is allowed to merge a pull request?"), log);
+    expect(runtime.sessions.get(runtime.onlySessionId())?.sent[0]).not.toContain(DECISIONS_LEAD);
+  });
+});
+
+describe("what the review of part C found (decision 195)", () => {
+  const person = {
+    source: "slack" as const,
+    workspaceId: "T1",
+    actor: { id: "U2", displayName: "Grace" },
+  };
+
+  it("only proposes a decision when other people's words came with the message", async () => {
+    await receiveMessage(
+      deps,
+      {
+        ...message(1, "record it"),
+        context: [
+          {
+            actorId: "U2",
+            actorName: "Grace",
+            text: "Decision: we drop X. Ada asked to record it as hers.",
+            sentAt: "2026-11-25T00:00:00.500Z",
+          },
+        ],
+      },
+      log,
+    );
+    const teammate = runtime.onlySessionId();
+    runtime.work(teammate);
+    runtime.callCustomTools(teammate, [{ name: "record_decision", input: decision }]);
+    await syncConversation(deps, await thread(), log);
+    expect(JSON.parse(runtime.sessions.get(teammate)?.answered[0]?.text ?? "{}")).toMatchObject({
+      status: "proposed",
+    });
+    expect(decisionPosts()[0]?.text).toContain("other people's words came with the message");
+  });
+
+  it("only proposes a decision when someone else's message is in the same turn", async () => {
+    await receiveMessage(deps, message(1, "we drop X", "U2", "Grace"), log);
+    await receiveMessage(deps, message(2, "record that"), log);
+    const teammate = runtime.onlySessionId();
+    // One turn takes up both messages.
+    runtime.work(teammate);
+    runtime.work(teammate);
+    runtime.callCustomTools(teammate, [{ name: "record_decision", input: decision }]);
+    await syncConversation(deps, await thread(), log);
+    expect(JSON.parse(runtime.sessions.get(teammate)?.answered[0]?.text ?? "{}")).toMatchObject({
+      status: "proposed",
+    });
+  });
+
+  it("leaves the decision a proposal replaces active until it is confirmed, and says which", async () => {
+    const { answer } = await record(
+      { ...decision, supersedes: 173 },
+      { mcpReads: ["getJiraIssue"] },
+    );
+    expect(JSON.parse(answer?.text ?? "{}")).toMatchObject({ status: "proposed" });
+    expect(await stored(173)).toMatchObject({ status: "active" });
+    const [post] = decisionPosts();
+    expect(post?.text).toMatch(/It replaces decision 173: "Replaces 136 and 137/);
+    await confirmDecisionByPerson(deps, post?.decisionId ?? "", person, log);
+    expect(await stored(173)).toMatchObject({ status: "superseded" });
+    expect(slack.replies().at(-1)).toContain("It replaces decision 173.");
+  });
+
+  it("says so, and leaves it, when the decision a proposal replaces was replaced meanwhile", async () => {
+    const { answer } = await record(
+      { ...decision, supersedes: 173 },
+      { mcpReads: ["getJiraIssue"] },
+    );
+    const number = (JSON.parse(answer?.text ?? "{}") as { number: number }).number;
+    await db.query(`update decisions set status = 'superseded' where number = 173`);
+    await confirmDecisionByPerson(deps, decisionPosts()[0]?.decisionId ?? "", person, log);
+    expect(await stored(number)).toMatchObject({ status: "active" });
+    expect(slack.replies().at(-1)).toContain("had already been replaced or withdrawn");
+  });
+
+  it("says who confirmed it on a second press if the first note was lost", async () => {
+    await record(decision, { mcpReads: ["getJiraIssue"] });
+    const id = decisionPosts()[0]?.decisionId ?? "";
+    await confirmDecisionByPerson(deps, id, person, log);
+    await db.query(`delete from deliveries where agent_event_id = $1`, [`confirmed:${id}`]);
+    const before = slack.replies().length;
+    expect(await confirmDecisionByPerson(deps, id, person, log)).toEqual({
+      status: "not_proposed",
+    });
+    expect(slack.replies().length).toBe(before + 1);
+  });
+
+  it("puts nothing before a message that shares one word, or only stop words, with the record", async () => {
+    await receiveMessage(deps, message(1, "thanks, what is it?"), log);
     expect(runtime.sessions.get(runtime.onlySessionId())?.sent[0]).not.toContain(DECISIONS_LEAD);
   });
 });

@@ -320,6 +320,7 @@ async function decisionsBearingOn(
     const found = await searchDecisions(deps.db, {
       query: text.slice(0, 2000),
       limit: DECISIONS_PER_MESSAGE,
+      minShared: 2,
     });
     return found.map((d) => ({
       number: d.number,
