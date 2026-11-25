@@ -31,6 +31,7 @@ import {
   storedEventsToActOn,
 } from "./record.ts";
 import { createBrief, unsentBriefs, workerReportsSince } from "./changes.ts";
+import { searchDecisions } from "./decisions.ts";
 import { applyMigration, applyMigrations } from "./testing.ts";
 
 // The production client (postgres.js) over a real Postgres connection, served by PGlite.
@@ -601,6 +602,16 @@ describe("changes and briefs through postgres.js (slice 2.1)", () => {
       ),
     ).toEqual([{ cost: 123, seconds: 1.5 }]);
     expect(await workerReportsSince(db, conversation.id)).toEqual([]);
+  });
+});
+
+describe("decisions through postgres.js (slice 2.2)", () => {
+  it("returns numbers as numbers and times as ISO strings, and searches by words", async () => {
+    const found = await searchDecisions(db, { query: "a person merges, https://x.y/z", limit: 3 });
+    expect(found.length).toBeGreaterThan(0);
+    expect(typeof found[0]?.number).toBe("number");
+    expect(found[0]?.decidedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(await searchDecisions(db, { query: "the and of", limit: 3 })).toEqual([]);
   });
 });
 

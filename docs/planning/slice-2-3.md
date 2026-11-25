@@ -54,6 +54,7 @@ sign in", and gets no session.
 |---|---|---|
 | `GET /v1/me` | Yes: `{ kind: "service" }` | Yes |
 | `GET /v1/conversations`, `/:id`, `/:id/events` | Yes | Yes (slice 2.4 needs them) |
+| `GET /v1/decisions` (slice 2.2) | Yes | Yes: the team's memory, read by the wiki (2.6) |
 | Every other `/v1` route, including every write and the projects and roles routes | Yes | No |
 | `POST /v1/reconcile` | No: its own token | No |
 

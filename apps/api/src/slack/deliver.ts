@@ -3,7 +3,7 @@ import { type types, webApi } from "@slack/bolt";
 import type { Env } from "../config.ts";
 import type { Logger } from "../log.ts";
 import { readSlackConfig } from "./config.ts";
-import { RECEIVED_REACTION, START_CHANGE_ACTION } from "./handler.ts";
+import { CONFIRM_DECISION_ACTION, RECEIVED_REACTION, START_CHANGE_ACTION } from "./handler.ts";
 import { markdownToSlack, splitForSlack } from "./markdown.ts";
 
 /** The Slack Web API calls deliveries make. */
@@ -55,7 +55,21 @@ export function createSlackDeliverer(poster: SlackPoster | (() => SlackPoster)):
             ];
             // The button belongs under the whole brief, so only the last part has it.
             if (delivery.needsStart && index === parts.length - 1) {
-              blocks.push(startButton(delivery.briefId));
+              blocks.push(button("Start", START_CHANGE_ACTION, delivery.briefId));
+            }
+            await slack.postMessage({ channel, thread_ts, text, blocks });
+          }
+          return;
+        }
+        case "decision": {
+          const parts = splitForSlack(markdownToSlack(delivery.text), SECTION_TEXT_CHARS);
+          if (parts.length === 0) parts.push("(The decision is empty.)");
+          for (const [index, text] of parts.entries()) {
+            const blocks: types.KnownBlock[] = [
+              { type: "section", text: { type: "mrkdwn", text } },
+            ];
+            if (delivery.needsConfirm && index === parts.length - 1) {
+              blocks.push(button("Confirm", CONFIRM_DECISION_ACTION, delivery.decisionId));
             }
             await slack.postMessage({ channel, thread_ts, text, blocks });
           }
@@ -77,19 +91,20 @@ export function createSlackDeliverer(poster: SlackPoster | (() => SlackPoster)):
 }
 
 /**
- * The Start button under a brief. Pressing it sends a `block_actions` payload to
- * `/slack/events`, which `handleStartBriefAction` turns into `POST /v1/briefs/:briefId/start`.
+ * A button under a brief (Start) or a proposed decision (Confirm). Pressing it sends a
+ * `block_actions` payload to `/slack/events`, which the handler for its action turns into a
+ * call to the API (`POST /v1/briefs/:id/start`, `POST /v1/decisions/:id/confirm`).
  */
-function startButton(briefId: string): types.ActionsBlock {
+function button(text: string, actionId: string, value: string): types.ActionsBlock {
   return {
     type: "actions",
     elements: [
       {
         type: "button",
-        text: { type: "plain_text", text: "Start" },
+        text: { type: "plain_text", text },
         style: "primary",
-        action_id: START_CHANGE_ACTION,
-        value: briefId,
+        action_id: actionId,
+        value,
       },
     ],
   };

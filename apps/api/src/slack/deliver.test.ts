@@ -126,6 +126,35 @@ describe("createSlackDeliverer", () => {
       ]);
     });
 
+    it("posts a proposed decision with a Confirm button, and an active one without (slice 2.2)", async () => {
+      const { poster, posts } = recordingPoster();
+      const decisionId = "7a1c2a9e-4b7d-4c3a-9e2f-1a2b3c4d5e6f";
+      const deliverer = createSlackDeliverer(poster);
+      await deliverer.deliver(
+        { kind: "decision", target, decisionId, text: "**Proposed**", needsConfirm: true },
+        "c",
+      );
+      await deliverer.deliver(
+        { kind: "decision", target, decisionId, text: "**Recorded**", needsConfirm: false },
+        "c",
+      );
+      expect(posts[0]?.blocks?.[1]).toEqual({
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            text: { type: "plain_text", text: "Confirm" },
+            style: "primary",
+            action_id: "confirm_decision",
+            value: decisionId,
+          },
+        ],
+      });
+      expect(posts[1]?.blocks).toEqual([
+        { type: "section", text: { type: "mrkdwn", text: "*Recorded*" } },
+      ]);
+    });
+
     it("posts the brief with no button when it starts by itself", async () => {
       const { poster, posts } = recordingPoster();
       await createSlackDeliverer(poster).deliver(

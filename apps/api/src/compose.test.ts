@@ -1,4 +1,5 @@
 import {
+  decisionListSchema,
   acceptedMessageSchema,
   CORRELATION_ID_HEADER,
   errorResponseSchema,
@@ -456,6 +457,44 @@ describe("a brief and its coding worker (slice 2.1)", () => {
     });
     expect(res.status).toBe(204);
     expect(slack.replies()).toContain("Opened the pull request.");
+  });
+});
+
+describe("decisions on record (slice 2.2)", () => {
+  function get(app: ReturnType<typeof setup>["app"], path: string, auth = `Bearer ${token}`) {
+    return app.request(path, { headers: { authorization: auth } });
+  }
+
+  it("lists the decisions, best matching first, behind the service token", async () => {
+    const { app } = setup();
+    const res = await get(app, "/v1/decisions?q=only%20a%20person%20merges&limit=3");
+    expect(res.status).toBe(200);
+    const body = decisionListSchema.parse(await res.json());
+    expect(body.decisions.length).toBeGreaterThan(0);
+    expect(body.decisions.length).toBeLessThanOrEqual(3);
+    expect(body.decisions.every((d) => d.status === "active")).toBe(true);
+    await expectError(await get(app, "/v1/decisions", "Bearer nope"), 401, "unauthorized");
+    await expectError(await get(app, "/v1/decisions?limit=0"), 400, "invalid_request");
+  });
+
+  it("confirms only a decision it knows, with a valid body", async () => {
+    const { app } = setup();
+    const confirm = (id: string, body: unknown) =>
+      app.request(`/v1/decisions/${id}/confirm`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      });
+    const person = { source: "slack", workspaceId: "T1", actor: { id: "U2" } };
+    await expectError(await confirm("nope", person), 404, "not_found");
+    await expectError(
+      await confirm("6f1c2b9e-1d2a-4c3b-9e8f-0a1b2c3d4e5f", { actor: {} }),
+      400,
+      "invalid_request",
+    );
+    const res = await confirm("6f1c2b9e-1d2a-4c3b-9e8f-0a1b2c3d4e5f", person);
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ status: "not_found" });
   });
 });
 
