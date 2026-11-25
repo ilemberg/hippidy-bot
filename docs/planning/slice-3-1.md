@@ -1,6 +1,6 @@
 # Slice 3.1: areas, owners and routing
 
-Status: **planned 2026-11-25 (decisions 205 and 206).** The wave is in `wave-3.md`.
+Status: **built 2026-11-25, not merged (decisions 205 and 206).** The wave is in `wave-3.md`.
 
 **Demo:** in the web app, someone creates the area `search`, owned by Ada, with the code path
 `apps/api/src/store/decisions.ts` and the word "full-text". In a thread, Grace asks the bot to

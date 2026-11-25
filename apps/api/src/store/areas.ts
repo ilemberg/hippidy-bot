@@ -124,8 +124,8 @@ export async function knownName(db: Db, place: Place, actorId: string): Promise<
 }
 
 /**
- * The people the record knows (slice 3.1): who wrote to the bot, owns an area, or decided or
- * confirmed something, with the latest name seen. Nobody is looked up in the source for it.
+ * The people the record knows (slice 3.1): who wrote to the bot, owns or made an area, or
+ * decided or confirmed something, with the latest name seen. Nobody is looked up in the source for it.
  */
 export async function listPeople(
   db: Db,
@@ -138,6 +138,9 @@ export async function listPeople(
        union all
        select owner_actor_id, owner_name, updated_at from areas
        where source = $1 and workspace_id = $2 and owner_actor_id is not null
+       union all
+       select created_by_actor_id, created_by_name, created_at from areas
+       where source = $1 and workspace_id = $2
        union all
        select decided_by_actor_id, decided_by_name, decided_at from decisions
        where decided_by_source = $1 and decided_by_workspace_id = $2
@@ -172,7 +175,7 @@ function fieldsOf(area: Area): Fields {
   };
 }
 
-/** Lowercase, trimmed, without repeats, in the order given. */
+/** Trimmed, without empty ones or repeats, in the order given. */
 function distinct(values: readonly string[]): string[] {
   return [...new Set(values.map((v) => storable(v).trim()).filter((v) => v !== ""))];
 }
@@ -226,7 +229,7 @@ export async function createArea(
         ownerId,
         ownerName,
         distinct(request.paths ?? []),
-        distinct(request.words ?? []),
+        distinct((request.words ?? []).map((w) => w.toLowerCase())),
         actor.actorId,
         actor.name,
       ],
@@ -275,7 +278,10 @@ export async function editArea(
             ? current.owner
             : { actorId: ownerId, name: await knownName(tx, actor, ownerId) },
       paths: request.paths === undefined ? current.paths : distinct(request.paths),
-      words: request.words === undefined ? current.words : distinct(request.words),
+      words:
+        request.words === undefined
+          ? current.words
+          : distinct(request.words.map((w) => w.toLowerCase())),
     };
     if (JSON.stringify(after) === JSON.stringify(before)) {
       return { status: "unchanged", area: current };

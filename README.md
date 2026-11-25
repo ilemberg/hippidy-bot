@@ -64,6 +64,11 @@ Vercel does and checks it starts (`pnpm build && pnpm smoke`).
 | `GET /v1/listening`                | token or person     | Every channel listening was switched on in, and how many days messages are kept                                                                                                          |
 | `POST /v1/observations`            | service token       | A message posted, edited or deleted in a channel. Kept as text only if the channel is listened to                                                                                        |
 | `GET /v1/decisions`                | token or person     | Decisions, best match or newest first. `q`, `status`, `origin` (`thread`, `import`, `capture`), `limit` (1 to 100, default 50)                                                           |
+| `GET /v1/areas`                    | token or person     | Every area of the workspace with its owner, paths and words, and who decides for anything unowned (slice 3.1)                                                                            |
+| `GET /v1/areas/:name`              | token or person     | One area and its history                                                                                                                                                                 |
+| `POST /v1/areas`                   | person              | Creates an area, as the signed-in person                                                                                                                                                 |
+| `PATCH /v1/areas/:id`              | person              | Changes an area, on the version the person saw; every change is kept                                                                                                                     |
+| `GET /v1/people`                   | token or person     | The people the record knows, for choosing an owner                                                                                                                                       |
 | `POST /v1/projects`                | service token       | Creates a project in `plan`, returns 201                                                                                                                                                 |
 | `GET /v1/projects`                 | service token       | Every project, newest first                                                                                                                                                              |
 | `GET /v1/projects/:id`             | service token       | One project, its approvals and whether the plan is approved                                                                                                                              |
@@ -661,6 +666,17 @@ select date_trunc('day', finished_at) as day, count(*) as calls,
        sum(cost_micros) / 1e6 as dollars, sum(proposals) as proposals
 from capture_runs group by 1 order by 1 desc;
 ```
+
+## Slice 3.1 setup: areas and owners
+
+Areas are managed in the web app (**Areas**). A brief, a pull request or a proposed decision
+that touches one names its owner in the thread (`docs/planning/slice-3-1.md`).
+
+1. **The fallback.** In the API's Vercel project, add `FALLBACK_OWNER`: your Slack user id
+   (`U…`; in Slack, your profile, the three dots, **Copy member ID**), Production only. It is
+   named for any area with no owner. Without it, such an area is named with no one to ask.
+2. **The teammate** gets the new `areas` field of `start_change` when CI syncs the agents on
+   merge; nothing to do by hand.
 
 ## Planning docs
 
