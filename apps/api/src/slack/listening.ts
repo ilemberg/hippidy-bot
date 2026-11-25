@@ -46,7 +46,7 @@ export function listeningNote(
   }
   return [
     `<@${actorId}> switched listening on: I now read this channel, without replying to anything that doesn't mention me.`,
-    `When a thread has been quiet for half an hour I may note decisions from it as proposals, each with a link to the message. People in the thread confirm them; I never record one on my own.`,
+    `When a thread has been quiet for half an hour I may note decisions from it as proposals, each with a link to the message. People in the thread confirm them; I never record one on my own. Proposals are listed in the web app, which everyone in the workspace can open, even for a private channel.`,
     `I keep the text of messages here for ${String(OBSERVED_MESSAGE_RETENTION_DAYS)} days. Deleting a message in Slack deletes my copy too. Say "@hippidy stop listening" to switch it off.${page}`,
   ].join("\n");
 }
@@ -135,6 +135,7 @@ const messageEnvelopeSchema = z.object({
         bot_id: z.string().optional(),
         text: z.string().optional(),
         ts: slackTs,
+        subtype: z.string().optional(),
         edited: z.object({ ts: slackTs }).optional(),
       })
       .optional(),
@@ -167,6 +168,11 @@ export function toObservation(body: unknown): Observation | undefined {
   }
   if (event.subtype === "message_changed") {
     const changed = event.message;
+    // Deleting a thread's first message leaves it as a "tombstone": Slack sends a change, not
+    // a deletion, and the text is gone from Slack. So it goes here too.
+    if (changed?.subtype === "tombstone") {
+      return { kind: "deleted", ...where, messageId: changed.ts };
+    }
     // An unfurl or a bot's update changes a message without anyone editing it.
     if (changed?.edited === undefined || changed.bot_id !== undefined) return undefined;
     return {
@@ -192,12 +198,13 @@ export function toObservation(body: unknown): Observation | undefined {
   };
 }
 
-export type ChannelMessageOutcome = "observed" | "ignored" | "dropped_retry" | "api_rejected";
+export type ChannelMessageOutcome = "observed" | "ignored" | "api_rejected";
 
 /**
  * Handles one `message` event: forwards a person's channel message to the API, which keeps it
- * only if the channel is listened to. A retry after a timeout is dropped, as for mentions; any
- * other retry is safe, since a message is kept once. Never throws.
+ * only if the channel is listened to. Every retry is handled, unlike a mention's: a message is
+ * kept once and an edit or deletion is the same twice, and a deletion must not be lost.
+ * Never throws.
  */
 export async function handleChannelMessage(
   delivery: { body: unknown; retryNum: number; retryReason: string },
@@ -207,7 +214,6 @@ export async function handleChannelMessage(
     log: Logger;
   },
 ): Promise<ChannelMessageOutcome> {
-  if (delivery.retryNum > 0 && delivery.retryReason === "http_timeout") return "dropped_retry";
   const observation = toObservation(delivery.body);
   if (observation === undefined) return "ignored";
   const eventId = z.object({ event_id: z.string() }).safeParse(delivery.body).data?.event_id;

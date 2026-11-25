@@ -80,6 +80,15 @@ describe("toObservation", () => {
     expect(
       toObservation(envelope({ subtype: "message_deleted", deleted_ts: "1699.000002" })),
     ).toMatchObject({ kind: "deleted", messageId: "1699.000002" });
+    // A thread's first message, deleted, stays as a tombstone: Slack sends a change.
+    expect(
+      toObservation(
+        envelope({
+          subtype: "message_changed",
+          message: { subtype: "tombstone", text: "This message was deleted.", ts: "1699.000001" },
+        }),
+      ),
+    ).toMatchObject({ kind: "deleted", messageId: "1699.000001" });
   });
 
   it.each([
@@ -99,7 +108,7 @@ describe("handleChannelMessage", () => {
     return { observe } as unknown as ApiClient;
   }
 
-  it("forwards a message with its sender's name, and drops a retry after a timeout", async () => {
+  it("forwards a message with its sender's name, and a retry too: a deletion must not be lost", async () => {
     const sent: unknown[] = [];
     const deps = {
       api: api((observation) => {
@@ -116,14 +125,14 @@ describe("handleChannelMessage", () => {
     expect(sent).toMatchObject([{ actor: { id: "U1", displayName: "Ada" } }]);
     expect(
       await handleChannelMessage({ body, retryNum: 1, retryReason: "http_timeout" }, deps),
-    ).toBe("dropped_retry");
+    ).toBe("observed");
     expect(
       await handleChannelMessage(
         { body: envelope({ bot_id: "B1" }), retryNum: 0, retryReason: "" },
         deps,
       ),
     ).toBe("ignored");
-    expect(sent).toHaveLength(1);
+    expect(sent).toHaveLength(2);
   });
 
   it("logs a refusal and never throws", async () => {

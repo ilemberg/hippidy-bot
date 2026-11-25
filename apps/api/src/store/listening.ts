@@ -50,6 +50,11 @@ export async function setListening(
   request: SetListeningRequest,
 ): Promise<{ changed: boolean; channel: ListeningChannel }> {
   return db.transaction(async (tx) => {
+    // `for update` locks nothing before the channel's first row exists: two first "listen"
+    // commands at once would both post a note. A lock on the channel's key serializes them.
+    await tx.query(`select pg_advisory_xact_lock(hashtext($1))`, [
+      `listening:${request.source}:${request.workspaceId}:${request.channelId}`,
+    ]);
     const existing = await tx.query(
       `select ${channelColumns} from listening_channels
        where source = $1 and workspace_id = $2 and channel_id = $3 for update`,
@@ -127,22 +132,50 @@ export async function recordObservation(
   switch (observation.kind) {
     case "deleted": {
       // Followed whether or not the channel is still listened to: what was kept goes.
-      const rows = await db.query(
-        `delete from observed_messages
-         where source = $1 and workspace_id = $2 and channel_id = $3 and message_id = $4
-         returning id`,
-        key,
-      );
-      return rows.length > 0 ? "deleted" : "not_found";
+      return db.transaction(async (tx) => {
+        const rows = await tx.query(
+          `delete from observed_messages
+           where source = $1 and workspace_id = $2 and channel_id = $3 and message_id = $4
+           returning thread_id`,
+          key,
+        );
+        const threadId = rows[0]?.thread_id;
+        if (typeof threadId !== "string") return "not_found";
+        await tx.query(
+          `update observed_threads set message_count = greatest(message_count - 1, 0),
+             updated_at = now()
+           where source = $1 and workspace_id = $2 and channel_id = $3 and thread_id = $4`,
+          [observation.source, observation.workspaceId, observation.channelId, threadId],
+        );
+        return "deleted";
+      });
     }
     case "edited": {
-      const rows = await db.query(
-        `update observed_messages set text = $5, edited_at = $6
-         where source = $1 and workspace_id = $2 and channel_id = $3 and message_id = $4
-         returning id`,
-        [...key, storable(observation.text), observation.editedAt],
-      );
-      return rows.length > 0 ? "updated" : "not_found";
+      // An edit is new activity: the thread is read again once it is quiet, so a decision
+      // changed by an edit is not missed.
+      return db.transaction(async (tx) => {
+        const rows = await tx.query(
+          `update observed_messages set text = $5, edited_at = $6
+           where source = $1 and workspace_id = $2 and channel_id = $3 and message_id = $4
+           returning thread_id`,
+          [...key, storable(observation.text), observation.editedAt],
+        );
+        const threadId = rows[0]?.thread_id;
+        if (typeof threadId !== "string") return "not_found";
+        await tx.query(
+          `update observed_threads
+           set last_message_at = greatest(last_message_at, $5), updated_at = now()
+           where source = $1 and workspace_id = $2 and channel_id = $3 and thread_id = $4`,
+          [
+            observation.source,
+            observation.workspaceId,
+            observation.channelId,
+            threadId,
+            observation.editedAt,
+          ],
+        );
+        return "updated";
+      });
     }
     case "posted": {
       return db.transaction(async (tx) => {
@@ -170,11 +203,16 @@ export async function recordObservation(
         if (inserted.length === 0) return "already_kept";
         await tx.query(
           `insert into observed_threads (source, workspace_id, channel_id, thread_id,
-             last_message_at)
-           values ($1, $2, $3, $4, $5)
+             last_message_at, message_count)
+           values ($1, $2, $3, $4, $5, 1)
            on conflict (source, workspace_id, channel_id, thread_id) do update set
              last_message_at = greatest(observed_threads.last_message_at,
                                         excluded.last_message_at),
+             message_count = observed_threads.message_count + 1,
+             -- A message that arrives late, older than what capture read, is read next time.
+             captured_through = case
+               when observed_threads.captured_through >= excluded.last_message_at then null
+               else observed_threads.captured_through end,
              capture_failures = 0,
              updated_at = now()`,
           [

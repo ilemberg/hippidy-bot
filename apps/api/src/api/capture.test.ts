@@ -126,6 +126,7 @@ describe("runCapture", () => {
 
   it("waits for a thread to go quiet, and reads it again after a new message, without repeating", async () => {
     await say("100.1", "U1", "Let's ship on Tuesdays.", 10);
+    await say("100.2", "U2", "Fine by me.", 10);
     expect((await runCapture(deps, log)).read).toBe(0);
 
     now = new Date(now.getTime() + 30 * 60_000);
@@ -134,7 +135,7 @@ describe("runCapture", () => {
     );
     expect((await runCapture(deps, log)).proposed).toBe(1);
 
-    await say("100.2", "U2", "Agreed. Tuesdays it is.", 1);
+    await say("100.3", "U2", "Agreed. Tuesdays it is.", 1);
     now = new Date(now.getTime() + 31 * 60_000);
     // The model repeats the first one and adds nothing new.
     extractor.answer(
@@ -145,10 +146,42 @@ describe("runCapture", () => {
     expect(await proposals()).toHaveLength(1);
   });
 
+  it("reads an edited thread again, and a message that arrived late", async () => {
+    await say("100.1", "U1", "Ship on Tuesdays?", 50);
+    await say("100.2", "U2", "Yes.", 40);
+    await runCapture(deps, log);
+    expect(extractor.calls).toHaveLength(1);
+    await recordObservation(db, {
+      kind: "edited",
+      ...channel,
+      messageId: "100.2",
+      text: "No: Wednesdays.",
+      editedAt: minutesAgo(35),
+    });
+    await runCapture(deps, log);
+    expect(extractor.calls[1]?.lines.map((l) => l.text)).toEqual([
+      "Ship on Tuesdays?",
+      "No: Wednesdays.",
+    ]);
+    // Sent before what capture read, delivered after it.
+    await say("100.0", "U2", "Earlier thought.", 60);
+    await runCapture(deps, log);
+    expect(extractor.calls).toHaveLength(3);
+  });
+
+  it("does not read a message nobody answered: no model runs per message", async () => {
+    await say("100.1", "U1", "We're going with Postgres.", 40);
+    await say("200.1", "U2", "Lunch?", 40, "200.1");
+    expect((await runCapture(deps, log)).read).toBe(0);
+    expect(extractor.calls).toEqual([]);
+  });
+
   it("skips a thread the bot was mentioned in, and one of a channel no longer listened to", async () => {
     await say("100.1", "U1", "We decided X.", 40);
+    await say("100.2", "U2", "Yes.", 40);
     await findOrCreateConversation(db, { ...channel, threadId: "100.1" });
     await say("200.1", "U1", "We decided Y.", 40, "200.1");
+    await say("200.2", "U2", "Yes.", 40, "200.1");
     await setListening(db, { ...channel, listening: false, actor: { id: "U1" } });
     expect((await runCapture(deps, log)).read).toBe(0);
     expect(extractor.calls).toEqual([]);
@@ -157,12 +190,14 @@ describe("runCapture", () => {
   it("stops for the day at its budget, and lets the threads it claimed go", async () => {
     deps.dailyBudgetCents = 0;
     await say("100.1", "U1", "We decided X.", 40);
+    await say("100.2", "U2", "Yes.", 40);
     expect(await runCapture(deps, log)).toMatchObject({ read: 0, budgetReached: true });
     expect(extractor.calls).toEqual([]);
 
     // A budget used up during the run: the first call spends it, the second thread waits.
     deps.dailyBudgetCents = 1;
     await say("200.1", "U1", "We decided Y.", 40, "200.1");
+    await say("200.2", "U2", "Yes.", 40, "200.1");
     extractor.answer({
       kind: "ok",
       decisions: [],
@@ -179,6 +214,7 @@ describe("runCapture", () => {
 
   it("records a refused or failed read, tries again, and gives up after three until a new message", async () => {
     await say("100.1", "U1", "We decided X.", 40);
+    await say("100.2", "U2", "Yes.", 40);
     extractor.answer({ kind: "refused", usage });
     extractor.answer({ kind: "failed", error: "timeout", usage: null });
     extractor.answer({ kind: "cut_off", usage });
@@ -190,13 +226,25 @@ describe("runCapture", () => {
       ),
     ).toEqual(expect.arrayContaining(["refused", "failed", "cut_off"]));
 
-    await say("100.2", "U2", "Still decided.", 31);
+    await say("100.3", "U2", "Still decided.", 31);
     expect((await runCapture(deps, log)).read).toBe(1);
   });
 
-  it("deletes what listening kept 30 days after it was sent", async () => {
-    await say("100.1", "U1", "old", 31 * 24 * 60);
-    expect((await runCapture(deps, log)).expiredMessages).toBe(1);
+  it("keeps a call's cost and counts a failure when writing its proposals fails (from the review)", async () => {
+    await say("100.1", "U1", "We decided X.", 40);
+    await say("100.2", "U2", "Yes.", 40);
+    extractor.answer(found({}));
+    // Writing any proposal now fails, after the call was made.
+    await db.query(
+      `alter table decisions add constraint no_capture check (origin <> 'capture') not valid`,
+    );
+    expect(await runCapture(deps, log)).toMatchObject({ read: 0, failed: 1 });
+    expect(await db.query(`select cost_micros::float8 as cost from capture_runs`)).toEqual([
+      { cost: 250 },
+    ]);
+    expect(
+      await db.query(`select capture_failures, capture_lease_until from observed_threads`),
+    ).toEqual([{ capture_failures: 1, capture_lease_until: null }]);
   });
 });
 
@@ -208,6 +256,13 @@ describe("checkDecisions", () => {
       actorName: "Ada",
       text: "x",
       sentAt: "2026-11-25T00:00:00.000Z",
+    },
+    {
+      messageId: "1.2",
+      actorId: "U2",
+      actorName: "Grace",
+      text: "y",
+      sentAt: "2026-11-25T00:01:00.000Z",
     },
   ];
 
@@ -231,6 +286,16 @@ describe("checkDecisions", () => {
           messageId: "9.9",
         },
         { statement: "  ", reason: null, area: null, decidedBy: "U1", messageId: "1.1" },
+        { statement: "\u0000\u0000", reason: null, area: null, decidedBy: "U1", messageId: "1.1" },
+        // U2 wrote in the thread, but not this message: "Ada says Grace decided X" is not
+        // Grace's decision.
+        {
+          statement: "In someone else's name",
+          reason: null,
+          area: null,
+          decidedBy: "U2",
+          messageId: "1.1",
+        },
         {
           statement: "Already on record",
           reason: null,

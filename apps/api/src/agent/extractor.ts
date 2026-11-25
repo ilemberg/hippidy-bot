@@ -111,12 +111,21 @@ const answerSchema = z.object({
   ),
 });
 
+/**
+ * One message per line, so a message cannot pass itself off as another: every kind of line
+ * break becomes " / ", and a "[message" of its own cannot look like a line's marker.
+ */
+export function oneLine(text: string): string {
+  return text
+    .replace(/\s*[\r\n\u000b\u000c\u0085\u2028\u2029]+\s*/g, " / ")
+    .replaceAll("[message", "(message");
+}
+
 /** The thread as the user message: numbered lines, then what is already on record. */
 export function captureMessage(input: ExtractInput): string {
   const lines = input.lines.map((line, index) => {
     const who = line.actorName === null ? line.actorId : `${line.actorName} (${line.actorId})`;
-    // One message per line, so a message cannot pass itself off as another.
-    const text = line.text.replace(/\s*\n\s*/g, " / ");
+    const text = oneLine(line.text);
     return `${String(index + 1)}. [message ${line.messageId}] ${who}: ${text}`;
   });
   const parts = [
@@ -126,7 +135,7 @@ export function captureMessage(input: ExtractInput): string {
     ...lines,
     "",
     "Already on record from this thread:",
-    ...(input.existing.length === 0 ? ["(none)"] : input.existing.map((s) => `- ${s}`)),
+    ...(input.existing.length === 0 ? ["(none)"] : input.existing.map((s) => `- ${oneLine(s)}`)),
   ];
   return parts.join("\n");
 }
@@ -159,7 +168,8 @@ export function createAnthropicExtractor(client: Anthropic): DecisionExtractor {
       try {
         response = await client.messages.create({
           model: CAPTURE_MODEL,
-          max_tokens: 4000,
+          // Thinking counts against this too: room enough that an answer is not cut off.
+          max_tokens: 8000,
           system: CAPTURE_SYSTEM,
           messages: [{ role: "user", content: captureMessage(input) }],
           output_config: {

@@ -138,7 +138,8 @@ describe("capture on reconcile", () => {
   it("reads a quiet thread after the conversations, and lists its proposal for a person", async () => {
     const { app, lines } = setup();
     await send(app, "PUT", "/v1/listening", { ...channel, listening: true, actor: { id: "U1" } });
-    await send(app, "POST", "/v1/observations", posted("100.1", 40));
+    await send(app, "POST", "/v1/observations", posted("100.1", 41));
+    await send(app, "POST", "/v1/observations", posted("100.2", 40));
     extractor.answer({
       kind: "ok",
       usage: { inputTokens: 100, outputTokens: 10 },
@@ -177,6 +178,26 @@ describe("capture on reconcile", () => {
         conversationId: null,
       },
     ]);
+  });
+
+  it("deletes what listening kept after 30 days even when the agent is not configured", async () => {
+    const { log, lines } = memoryLogger();
+    const app = configureApp(new Hono<ApiEnv>(), {
+      env,
+      log,
+      services: { status: { db, configured: { agent: false, slack: true, github: true } } },
+    });
+    await send(app, "PUT", "/v1/listening", { ...channel, listening: true, actor: { id: "U1" } });
+    await send(app, "POST", "/v1/observations", posted("100.1", 31 * 24 * 60));
+    const res = await app.request("/v1/reconcile", {
+      method: "POST",
+      headers: { authorization: `Bearer ${reconcileToken}` },
+    });
+    expect(res.status).toBe(503);
+    expect(lines).toContainEqual(
+      expect.objectContaining({ msg: "listening.expired", messages: 1 }),
+    );
+    expect(await db.query(`select id from observed_messages`)).toEqual([]);
   });
 
   it("does not fail reconcile when capture throws", async () => {

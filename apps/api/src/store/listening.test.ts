@@ -113,6 +113,34 @@ describe("recordObservation", () => {
   });
 });
 
+describe("thread bookkeeping (from the review)", () => {
+  it("counts a thread's messages, and makes it due again after an edit", async () => {
+    await listen(true);
+    await recordObservation(db, posted("1.1"));
+    await recordObservation(db, posted("1.2"));
+    await recordObservation(db, posted("1.2"));
+    await recordObservation(db, { kind: "deleted", ...channel, messageId: "1.1" });
+    await db.query(`update observed_threads set captured_through = last_message_at`);
+    await recordObservation(db, {
+      kind: "edited",
+      ...channel,
+      messageId: "1.2",
+      text: "changed",
+      editedAt: "2026-11-25T11:00:00.000Z",
+    });
+    expect(
+      await db.query(
+        `select message_count, captured_through < last_message_at as due from observed_threads`,
+      ),
+    ).toEqual([{ message_count: 1, due: true }]);
+  });
+
+  it("serializes two first listen commands, so only one posts a note", async () => {
+    const results = await Promise.all([listen(true, "U1"), listen(true, "U2")]);
+    expect(results.filter((r) => r.changed)).toHaveLength(1);
+  });
+});
+
 describe("deleteExpiredObservations", () => {
   it("deletes messages and threads 30 days after they were sent", async () => {
     await listen(true);

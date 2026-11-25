@@ -526,7 +526,13 @@ describe("POST /v1/reconcile", () => {
       headers: { authorization: `Bearer ${reconcileToken}` },
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ checked: 1, failed: 0, backfilled: 0, captured: 0 });
+    expect(await res.json()).toEqual({
+      checked: 1,
+      failed: 0,
+      backfilled: 0,
+      captured: 0,
+      expired: 0,
+    });
     expect(slack.replies()).toEqual(["Recovered."]);
   });
 });

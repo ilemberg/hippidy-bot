@@ -4,7 +4,9 @@ import type { Logger } from "../log.ts";
 import {
   captureSpentSince,
   claimDueThreads,
+  failCapture,
   finishCapture,
+  releaseThread,
   readObservedThread,
   threadDecisionStatements,
   threadWriters,
@@ -13,17 +15,20 @@ import {
   type ObservedLine,
 } from "../store/capture.ts";
 import type { Db } from "../store/db.ts";
-import { deleteExpiredObservations, type ObservedThread } from "../store/listening.ts";
+import { storable } from "../store/json.ts";
+import type { ObservedThread } from "../store/listening.ts";
 
-// Capture (slice 2.5, decisions 198 and 199), run from reconcile after the conversations: it
-// deletes what listening keeps past 30 days, then reads a few quiet threads once each and
-// writes what it finds as proposals. It holds no sync lease and never fails reconcile.
+// Capture (slice 2.5, decisions 198 to 200), run from reconcile after the conversations: it
+// reads a few quiet threads once each and writes what it finds as proposals. It holds no sync
+// lease and never fails reconcile. Deleting what listening keeps is reconcile's own first step.
 
 /** Threads read per reconcile run. */
 export const THREADS_PER_RUN = 3;
 /** The most of a thread one call reads: its latest messages. */
 export const MAX_MESSAGES = 200;
 export const MAX_CHARACTERS = 60_000;
+/** No new call starts after this long, so capture keeps reconcile short. */
+export const CAPTURE_TIME_LIMIT_MS = 40_000;
 
 const STATEMENT_MAX = 500;
 const REASON_MAX = 2000;
@@ -37,7 +42,6 @@ export interface CaptureDeps {
 }
 
 export interface CaptureResult {
-  expiredMessages: number;
   read: number;
   proposed: number;
   failed: number;
@@ -50,13 +54,17 @@ function startOfUtcDay(now: Date): Date {
 }
 
 function clip(text: string, max: number): string {
-  const flat = text.trim();
+  // What Postgres cannot store goes first, so a statement of nothing but null characters is
+  // found empty here rather than failing the write.
+  const flat = storable(text).trim();
   return flat.length <= max ? flat : `${flat.slice(0, max - 1)}…`;
 }
 
 /**
- * Keeps only what the thread backs up: a decision naming someone who wrote in it and a message
- * in it, not already on record, at most five. Statements are clipped to the decision limits.
+ * Keeps only what the thread backs up: a decision whose message is in the thread and was
+ * written by the person it says decided, not already on record, at most five. Statements are
+ * clipped to the decision limits. Naming the message's own author means no one can put a
+ * decision in someone else's name by writing "Ada decided X" (as 195 did for threads).
  */
 export function checkDecisions(
   result: Extract<ExtractResult, { kind: "ok" }>,
@@ -71,7 +79,9 @@ export function checkDecisions(
     const message = byMessage.get(d.messageId.trim());
     const decidedBy = d.decidedBy.trim();
     const statement = clip(d.statement, STATEMENT_MAX);
-    if (message === undefined || !names.has(decidedBy) || statement.length === 0) continue;
+    if (message === undefined || message.actorId !== decidedBy || statement.length === 0) {
+      continue;
+    }
     if (seen.has(statement.toLowerCase())) continue;
     seen.add(statement.toLowerCase());
     const reason = d.reason === null ? "" : clip(d.reason, REASON_MAX);
@@ -149,33 +159,33 @@ async function captureThread(
   return { outcome: decisions.length > 0 ? "proposed" : "nothing", proposed, spentMicros: spent };
 }
 
-/** One capture pass: retention, then up to three quiet threads within the day's budget. */
+/** Whether the day's budget is spent. */
+function stopped(spent: number, budgetMicros: number): boolean {
+  return spent >= budgetMicros;
+}
+
+/**
+ * One capture pass: up to three quiet threads within the day's budget and the time limit. A
+ * thread whose capture throws counts a failure and is let go.
+ */
 export async function runCapture(deps: CaptureDeps, log: Logger): Promise<CaptureResult> {
   const now = deps.now?.() ?? new Date();
-  const expired = await deleteExpiredObservations(deps.db, now);
-  const result: CaptureResult = {
-    expiredMessages: expired.messages,
-    read: 0,
-    proposed: 0,
-    failed: 0,
-    budgetReached: false,
-  };
+  const result: CaptureResult = { read: 0, proposed: 0, failed: 0, budgetReached: false };
   const budgetMicros = deps.dailyBudgetCents * 10_000;
   let spent = await captureSpentSince(deps.db, startOfUtcDay(now));
-  if (spent >= budgetMicros) {
-    result.budgetReached = true;
-    log.warn("capture.budget_reached", { spentMicros: spent, budgetMicros });
-    return result;
+  if (stopped(spent, budgetMicros)) {
+    // Every reconcile while stopped: logged once an hour, not every minute.
+    if (now.getUTCMinutes() === 0) log.info("capture.stopped_for_today", { spentMicros: spent });
+    return { ...result, budgetReached: true };
   }
+  const started = Date.now();
   const threads = await claimDueThreads(deps.db, now, THREADS_PER_RUN);
   for (const thread of threads) {
     const threadLog = log.child({ observedThreadId: thread.id });
-    if (spent >= budgetMicros) {
+    if (stopped(spent, budgetMicros) || Date.now() - started > CAPTURE_TIME_LIMIT_MS) {
       // Let the rest go at once, rather than holding them until their lease ends.
-      result.budgetReached = true;
-      await deps.db.query(`update observed_threads set capture_lease_until = null where id = $1`, [
-        thread.id,
-      ]);
+      result.budgetReached ||= stopped(spent, budgetMicros);
+      await releaseThread(deps.db, thread);
       continue;
     }
     try {
@@ -188,6 +198,9 @@ export async function runCapture(deps: CaptureDeps, log: Logger): Promise<Captur
     } catch (error) {
       result.failed++;
       threadLog.error("capture.thread_failed", { error });
+      await failCapture(deps.db, thread).catch((failError: unknown) => {
+        threadLog.error("capture.release_failed", { error: failError });
+      });
     }
   }
   if (result.budgetReached)

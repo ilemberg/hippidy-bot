@@ -1,6 +1,6 @@
 # Slice 2.5: listening and capture
 
-Status: **built 2026-11-25, not merged (decisions 198 and 199).** The wave is in `wave-2.md`; the
+Status: **built 2026-11-25, not merged (decisions 198 to 200).** The wave is in `wave-2.md`; the
 direction in `team-layer.md` and decision 176. G8 to G11 are answered (198).
 
 **Demo:** someone writes "@hippidy listen" in a channel. The bot posts that it now listens
@@ -34,7 +34,9 @@ Nothing was posted in their thread.
 For each message in a listened channel that is not from a bot: the text, the sender's id
 and name if known, when it was sent, and the ids that make its link (workspace, channel,
 thread, message). Never Slack's payload. An edit replaces the text; a deletion in Slack
-deletes it here. Each message is deleted 30 days after it was sent, by reconcile. Messages in
+deletes it here, including a thread's first message, which Slack leaves as a tombstone. Each
+message is deleted 30 days after it was sent, by reconcile's first step, which needs only
+storage (200). Messages in
 a channel that is not listened to are dropped by the API before anything is written.
 
 A decision proposed from a thread keeps its statement, who decided, the link to the message,
@@ -43,8 +45,10 @@ messages themselves are gone.
 
 ## Capture
 
-- **When:** on reconcile, a thread of a listened channel whose last message is at least 30
-  minutes old and that has new messages since it was last read. At most three threads per
+- **When:** on reconcile, a thread of a listened channel with two or more messages, whose
+  last message is at least 30 minutes old and that has new messages (or an edit) since it was
+  last read. A top-level message nobody answered is never read on its own (200), so no model
+  runs per message; a decision made in unthreaded messages is not captured. At most three threads per
   run, outside any sync lease. A thread the bot was mentioned in is a conversation, and the
   teammate records decisions there (2.2), so capture skips it.
 - **How (G10):** one call to the smallest model, Claude Haiku 5.5 (`claude-haiku-5-5`),
@@ -53,7 +57,8 @@ messages themselves are gone.
   answers in a fixed JSON shape (structured outputs): at most five decisions, each a
   statement, an optional reason and area, who decided (a sender in the thread), and the
   message it was decided in (a message in the thread). Anything else in its answer is
-  dropped, and so is a decision naming someone or a message not in the thread.
+  dropped, and so is a decision whose message is not in the thread or was not written by the
+  person it names as deciding (200).
 - **What it may do:** only propose. Channel text is untrusted (176): the API writes each
   decision as `proposed`, origin `capture`. No thread is replied to (176).
 - **The thread is data.** The prompt says the messages are what people wrote, to be read,

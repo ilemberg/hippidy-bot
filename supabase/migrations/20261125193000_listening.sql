@@ -53,6 +53,9 @@ create table public.observed_threads (
   -- When its latest message was sent, and when the newest message capture read was sent.
   last_message_at timestamptz not null,
   captured_through timestamptz,
+  -- Kept messages in the thread. Capture reads only threads with two or more: a top-level
+  -- message nobody answered is not read on its own, so no model runs per message (176).
+  message_count integer not null default 0 check (message_count >= 0),
   -- Failed captures in a row; at three it waits for a new message.
   capture_failures integer not null default 0 check (capture_failures >= 0),
   -- A capture holds the thread until then, so two reconciles do not read it at once.

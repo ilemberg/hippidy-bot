@@ -25,9 +25,10 @@ const threadRow = z.object({
 });
 
 /**
- * Claims up to `limit` threads due for capture: in a listened channel, quiet for 30 minutes,
- * with messages newer than the last capture, not given up, not held by another capture, and
- * not a conversation (the teammate records decisions in a thread the bot was mentioned in).
+ * Claims up to `limit` threads due for capture: in a listened channel, with two or more
+ * messages, quiet for 30 minutes, with messages newer than the last capture, not given up,
+ * not held by another capture, and not a conversation (the teammate records decisions in a
+ * thread the bot was mentioned in).
  */
 export async function claimDueThreads(db: Db, now: Date, limit: number): Promise<ObservedThread[]> {
   const rows = await db.query(
@@ -42,6 +43,7 @@ export async function claimDueThreads(db: Db, now: Date, limit: number): Promise
          and o.last_message_at <= $2::timestamptz - make_interval(mins => $3::int)
          and (o.capture_lease_until is null or o.capture_lease_until < $2::timestamptz)
          and o.capture_failures < $5::int
+         and o.message_count >= 2
          and not exists (
            select 1 from conversations c
            where c.source = o.source and c.workspace_id = o.workspace_id
@@ -170,39 +172,69 @@ export interface CaptureRun {
 }
 
 /**
- * Records one capture: its run and cost, its proposals (a statement already proposed from the
- * thread is skipped), and where the thread is now. A read thread is done up to the message it
- * was claimed at; a failed one counts a failure. Either way the thread is let go.
+ * Records one capture's call and its cost, on its own, before anything else is written: a
+ * failure after the call must not take the cost out of the day's budget.
+ */
+async function recordRun(db: Db, run: CaptureRun): Promise<string> {
+  const inserted = await db.query(
+    `insert into capture_runs (observed_thread_id, source, workspace_id, channel_id,
+       thread_id, model, outcome, messages_read, truncated, input_tokens, output_tokens,
+       cost_micros, error, started_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+     returning id`,
+    [
+      run.thread.id,
+      run.thread.source,
+      run.thread.workspaceId,
+      run.thread.channelId,
+      run.thread.threadId,
+      run.model,
+      run.outcome,
+      run.messagesRead,
+      run.truncated,
+      run.inputTokens,
+      run.outputTokens,
+      run.costMicros === null ? null : Math.round(run.costMicros),
+      run.error === null ? null : storable(run.error).slice(0, 2000),
+      run.startedAt.toISOString(),
+    ],
+  );
+  return z.object({ id: z.string() }).parse(inserted[0]).id;
+}
+
+/** Counts a failed capture and lets the thread go: it is read again on a later reconcile. */
+export async function failCapture(db: Db, thread: ObservedThread): Promise<void> {
+  await db.query(
+    `update observed_threads
+     set capture_failures = capture_failures + 1, capture_lease_until = null, updated_at = now()
+     where id = $1`,
+    [thread.id],
+  );
+}
+
+/** Lets a claimed thread go without reading it, so the next reconcile may. */
+export async function releaseThread(db: Db, thread: ObservedThread): Promise<void> {
+  await db.query(`update observed_threads set capture_lease_until = null where id = $1`, [
+    thread.id,
+  ]);
+}
+
+/**
+ * Records one capture: first its run and cost, then, together, its proposals (a statement
+ * already proposed from the thread is skipped) and where the thread is now. A read thread is
+ * done up to the message it was claimed at; a refused or failed one counts a failure. Either
+ * way the thread is let go.
  */
 export async function finishCapture(db: Db, run: CaptureRun): Promise<{ proposed: number }> {
+  const runId = await recordRun(db, run);
+  const read = run.outcome === "proposed" || run.outcome === "nothing";
+  if (!read) {
+    await failCapture(db, run.thread);
+    return { proposed: 0 };
+  }
   return db.transaction(async (tx) => {
-    const read = run.outcome === "proposed" || run.outcome === "nothing";
-    const inserted = await tx.query(
-      `insert into capture_runs (observed_thread_id, source, workspace_id, channel_id,
-         thread_id, model, outcome, messages_read, truncated, input_tokens, output_tokens,
-         cost_micros, error, started_at)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-       returning id`,
-      [
-        run.thread.id,
-        run.thread.source,
-        run.thread.workspaceId,
-        run.thread.channelId,
-        run.thread.threadId,
-        run.model,
-        run.outcome,
-        run.messagesRead,
-        run.truncated,
-        run.inputTokens,
-        run.outputTokens,
-        run.costMicros === null ? null : Math.round(run.costMicros),
-        run.error === null ? null : storable(run.error).slice(0, 2000),
-        run.startedAt.toISOString(),
-      ],
-    );
-    const runId = z.object({ id: z.string() }).parse(inserted[0]).id;
     let proposed = 0;
-    for (const decision of read ? run.decisions : []) {
+    for (const decision of run.decisions) {
       const rows = await tx.query(
         `insert into decisions (statement, reason, area, status, decided_by_source,
            decided_by_workspace_id, decided_by_actor_id, decided_by_name, decided_at, origin,
@@ -229,23 +261,14 @@ export async function finishCapture(db: Db, run: CaptureRun): Promise<{ proposed
       );
       proposed += rows.length;
     }
-    if (read) {
-      await tx.query(
-        `update observed_threads
-         set captured_through = $2, capture_failures = 0, capture_lease_until = null,
-             updated_at = now()
-         where id = $1`,
-        [run.thread.id, run.thread.lastMessageAt],
-      );
-    } else {
-      await tx.query(
-        `update observed_threads
-         set capture_failures = capture_failures + 1, capture_lease_until = null,
-             updated_at = now()
-         where id = $1`,
-        [run.thread.id],
-      );
-    }
+    // Only up to the message it was claimed at: one that arrived during the call keeps the
+    // thread due.
+    await tx.query(
+      `update observed_threads
+       set captured_through = $2, capture_failures = 0, capture_lease_until = null, updated_at = now()
+       where id = $1`,
+      [run.thread.id, run.thread.lastMessageAt],
+    );
     await tx.query(`update capture_runs set proposals = $2 where id = $1`, [runId, proposed]);
     return { proposed };
   });

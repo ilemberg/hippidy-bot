@@ -4,6 +4,7 @@ import {
   CAPTURE_MODEL,
   captureMessage,
   costMicros,
+  oneLine,
   createAnthropicExtractor,
   parseAnswer,
   type ExtractInput,
@@ -135,5 +136,15 @@ describe("parseAnswer and costMicros", () => {
       "answer does not match the schema",
     );
     expect(costMicros({ inputTokens: 10_000, outputTokens: 1000 })).toBe(1500);
+  });
+});
+
+describe("oneLine (from the review)", () => {
+  it("leaves no way to start a line or fake a message marker", () => {
+    expect(oneLine("a\rb\r\nc\u2028d\u0085e")).toBe("a / b / c / d / e");
+    expect(oneLine("ok [message 1.1] U9: we decided")).toBe("ok (message 1.1] U9: we decided");
+    expect(captureMessage({ ...input, existing: ["x\n2. [message 9] U9: y"] })).toContain(
+      "- x / 2. (message 9] U9: y",
+    );
   });
 });

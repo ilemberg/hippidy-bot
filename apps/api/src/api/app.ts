@@ -31,7 +31,12 @@ import type { ApiConfig } from "../config.ts";
 import type { Logger } from "../log.ts";
 import { findChangeBySession } from "../store/changes.ts";
 import { listSessions } from "../store/sessions.ts";
-import { listListening, recordObservation, setListening } from "../store/listening.ts";
+import {
+  deleteExpiredObservations,
+  listListening,
+  recordObservation,
+  setListening,
+} from "../store/listening.ts";
 import { searchDecisions } from "../store/decisions.ts";
 import { findConversationBySession } from "../store/conversations.ts";
 import {
@@ -481,6 +486,21 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
   // The safety net, called about every minute by Supabase pg_cron (decision 54). It has its
   // own token: the database holds it, and it must not be able to post messages.
   api.post("/v1/reconcile", requireServiceToken(deps.config.reconcileToken), async (c) => {
+    // First, what listening keeps past 30 days (G8). It needs only storage, so it runs even
+    // when the agent is not configured, and a failure in the steps after it cannot stop it.
+    const db = deps.conversations?.db ?? deps.status.db;
+    let expired = 0;
+    if (db !== undefined) {
+      try {
+        const deleted = await deleteExpiredObservations(db, new Date());
+        expired = deleted.messages;
+        if (deleted.messages > 0 || deleted.threads > 0) {
+          c.var.log.info("listening.expired", { ...deleted });
+        }
+      } catch (error) {
+        c.var.log.error("listening.expiry_failed", { error });
+      }
+    }
     if (deps.conversations === undefined) {
       return errorResponse(c, 503, "not_configured", "Conversations are not configured");
     }
@@ -497,14 +517,14 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
       try {
         const capture = await runCapture(deps.capture, c.var.log.child({ area: "capture" }));
         captured = capture.read;
-        if (capture.read > 0 || capture.failed > 0 || capture.expiredMessages > 0) {
+        if (capture.read > 0 || capture.failed > 0) {
           c.var.log.info("capture.done", { ...capture });
         }
       } catch (error) {
         c.var.log.error("capture.failed", { error });
       }
     }
-    return c.json({ ...result, backfilled, captured });
+    return c.json({ ...result, backfilled, captured, expired });
   });
 
   return api;
