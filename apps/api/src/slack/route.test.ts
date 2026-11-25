@@ -62,6 +62,7 @@ function setup(appEnv: Env = env) {
       return Promise.resolve();
     },
     userName: () => Promise.resolve(undefined),
+    postMessage: () => Promise.resolve(),
     threadReplies: () => Promise.resolve([]),
   });
   const conversations = {
@@ -134,6 +135,35 @@ describe("POST /slack/events", () => {
     expect(lines).toContainEqual(
       expect.objectContaining({ msg: "message.received", correlationId: "Ev0LAN670R" }),
     );
+  });
+
+  it("hands a channel message to the API, which keeps it in a listened channel (2.5)", async () => {
+    const { app, lines } = setup();
+    const message = (ts: string) =>
+      JSON.stringify({
+        type: "event_callback",
+        team_id: "T061EG9R6",
+        event_id: `EvMsg${ts}`,
+        authorizations: [{ user_id: "U0LAN0Z89" }],
+        event: {
+          type: "message",
+          channel: "C0LAN2Q65",
+          channel_type: "channel",
+          user: "U061F7AUR",
+          text: "We'll ship on Tuesdays.",
+          ts,
+        },
+      });
+    await db.query(
+      `insert into listening_channels (source, workspace_id, channel_id, listening, started_at,
+         changed_by_actor_id)
+       values ('slack', 'T061EG9R6', 'C0LAN2Q65', true, now(), 'U1')`,
+    );
+    expect((await app.request(signed(message("1515449600.000002")))).status).toBe(200);
+    await waitFor(() => lines.some((line) => line.msg === "observation.recorded"));
+    expect(await db.query(`select message_id, text from observed_messages`)).toEqual([
+      { message_id: "1515449600.000002", text: "We'll ship on Tuesdays." },
+    ]);
   });
 
   it("passes Slack's retry headers through: a retry after a timeout is dropped", async () => {

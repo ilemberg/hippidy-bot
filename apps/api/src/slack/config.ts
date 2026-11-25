@@ -5,6 +5,25 @@ import type { Logger } from "../log.ts";
 export interface SlackConfig {
   botToken: string;
   signingSecret: string;
+  /** The web app, linked from the listening note (slice 2.5). Optional: no link without it. */
+  webBaseUrl: string | undefined;
+}
+
+/** `WEB_BASE_URL`, an https origin, or undefined (logged when it is set but bad). */
+function readWebBaseUrl(env: Env, log: Logger): string | undefined {
+  const raw = env.WEB_BASE_URL;
+  if (raw === undefined || raw === "") return undefined;
+  try {
+    const url = new URL(raw);
+    if (url.protocol === "https:" && url.pathname === "/" && url.search === "") return url.origin;
+  } catch {
+    // Reported below.
+  }
+  log.error("config.web_base_url_invalid", {
+    variable: "WEB_BASE_URL",
+    reason: "must be an https origin, like https://hippidy-web.vercel.app",
+  });
+  return undefined;
 }
 
 const slackConfigSchema = z.object({
@@ -33,5 +52,6 @@ export function readSlackConfig(env: Env, log: Logger): SlackConfig | undefined 
   return {
     botToken: parsed.data.SLACK_BOT_TOKEN,
     signingSecret: parsed.data.SLACK_SIGNING_SECRET,
+    webBaseUrl: readWebBaseUrl(env, log),
   };
 }

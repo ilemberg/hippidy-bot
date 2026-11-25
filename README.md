@@ -60,6 +60,10 @@ Vercel does and checks it starts (`pnpm build && pnpm smoke`).
 | `GET /v1/conversations/:id`        | token or person     | One conversation: its state, usage and cost, and the transcript, oldest first                                                                                                            |
 | `GET /v1/conversations/:id/events` | token or person     | Every event the agent session reported, raw, in the order stored. `limit` (1 to 200, default 50); `after` takes the `next` of the page before                                            |
 | `GET /v1/sessions`                 | token or person     | The latest agent sessions, working ones first: each thread's own session and each change's coding worker, with state, who asked, latest activity and cost. `limit` (1 to 50, default 10) |
+| `PUT /v1/listening`                | service token       | Switches listening on or off in a channel, with who did it (slice 2.5)                                                                                                                   |
+| `GET /v1/listening`                | token or person     | Every channel listening was switched on in, and how many days messages are kept                                                                                                          |
+| `POST /v1/observations`            | service token       | A message posted, edited or deleted in a channel. Kept as text only if the channel is listened to                                                                                        |
+| `GET /v1/decisions`                | token or person     | Decisions, best match or newest first. `q`, `status`, `origin` (`thread`, `import`, `capture`), `limit` (1 to 100, default 50)                                                           |
 | `POST /v1/projects`                | service token       | Creates a project in `plan`, returns 201                                                                                                                                                 |
 | `GET /v1/projects`                 | service token       | Every project, newest first                                                                                                                                                              |
 | `GET /v1/projects/:id`             | service token       | One project, its approvals and whether the plan is approved                                                                                                                              |
@@ -631,6 +635,32 @@ localhost and Safari does not. `pnpm build:web` builds it the way Vercel does.
 Optional: in each project's settings, next to the root directory, turn on skipping
 deployments when nothing under the root directory or its dependencies changed, so a change to
 one app does not redeploy the other.
+
+## Slice 2.5 setup: listening in channels
+
+Listening reads every message in a channel someone switched it on in, and proposes decisions
+from threads gone quiet (`docs/planning/slice-2-5.md`, decisions 198 and 199). Until the steps
+below are done, nothing changes: Slack sends no channel messages.
+
+1. **The manifest.** In the Slack app's settings, **App Manifest**, paste `slack/manifest.yaml`
+   (it adds the `message.channels` and `message.groups` events), save, and reinstall the app
+   to the workspace when Slack asks.
+2. **The link in the note.** In the API's Vercel project, add `WEB_BASE_URL`, the web app's
+   address with no path, Production only. Without it the note has no link to the page.
+3. **The budget (optional).** Capture spends at most $1 a UTC day. `CAPTURE_DAILY_BUDGET_CENTS`
+   in the API's project changes that; `0` switches capture off.
+4. **Try it.** Invite the bot to a test channel and say `@hippidy listen`: it reacts ✅ and posts
+   a note. Talk in a thread without mentioning it and agree on something. About half an hour
+   after the last message, the web app's **Listening in channels** page lists the proposal,
+   with a link to the message. `@hippidy stop listening` switches it off.
+
+What each capture cost:
+
+```sql
+select date_trunc('day', finished_at) as day, count(*) as calls,
+       sum(cost_micros) / 1e6 as dollars, sum(proposals) as proposals
+from capture_runs group by 1 order by 1 desc;
+```
 
 ## Planning docs
 

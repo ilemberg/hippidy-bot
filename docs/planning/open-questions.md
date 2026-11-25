@@ -211,18 +211,21 @@ accepts a signed-in person beside it. **Answered 2026-11-25 (decision 193), as r
 
 **G8 (2.5). What does listening store, and for how long?** Changes 76 and 84.
 *Recommendation:* the text, the sender, the time and a link to the message, never Slack's
-payload. Deleted after 30 days; a decision keeps its link.
+payload. Deleted after 30 days; a decision keeps its link. **Answered 2026-11-25 (decision
+198), as recommended.**
 
 **G9 (2.5). How do people know a channel is listened to?** *Recommendation:* the note in the
 channel (176), and one page saying what is read, what is kept, and how to switch it off or
-have something deleted.
+have something deleted. **Answered 2026-11-25 (decision 198), as recommended.**
 
 **G10 (2.5). Which model captures, and what does it cost?** *Recommendation:* the smallest
 current model, one run per thread gone quiet, measured in the first days against the budget
-before more channels are switched on.
+before more channels are switched on. **Answered 2026-11-25 (decision 198), as
+recommended.**
 
 **G11 (2.5, 2.6). Who confirms a proposed decision before areas have owners?**
 *Recommendation:* anyone in the thread it came from. From slice 3.1, the owner of its area.
+**Answered 2026-11-25 (decision 198), as recommended.**
 
 **G12 (3.1, 3.2). Who wins when two people's direction conflicts?** *Recommendation:* the
 named owner of the area, with one person as the fallback for everything unowned.

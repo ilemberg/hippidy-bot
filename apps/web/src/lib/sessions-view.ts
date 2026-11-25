@@ -53,3 +53,23 @@ export function ago(at: string, now: Date): string {
   const days = Math.floor(hours / 24);
   return days === 1 ? "1 day ago" : `${days} days ago`;
 }
+
+/** A link to one message, in its thread when it is a reply. */
+export function messageLink(
+  source: SessionActivity["thread"]["source"],
+  channelId: string,
+  threadId: string | null,
+  messageId: string,
+): string | undefined {
+  if (source !== "slack") return undefined;
+  const channel = encodeURIComponent(channelId);
+  const link = `https://slack.com/archives/${channel}/p${messageId.replace(".", "")}`;
+  return threadId === null || threadId === messageId
+    ? link
+    : `${link}?thread_ts=${encodeURIComponent(threadId)}&cid=${channel}`;
+}
+
+/** A link to a channel. */
+export function channelLink(channelId: string): string {
+  return `https://slack.com/archives/${encodeURIComponent(channelId)}`;
+}

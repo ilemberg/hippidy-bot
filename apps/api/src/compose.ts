@@ -1,14 +1,16 @@
 import { Anthropic } from "@anthropic-ai/sdk";
 import type { Hono } from "hono";
 import { readAgentConfig } from "./agent/config.ts";
+import { createAnthropicExtractor } from "./agent/extractor.ts";
 import { createManagedAgentRuntime } from "./agent/managed.ts";
 import { createWebhookVerifier, type VerifyAgentWebhook } from "./agent/webhooks.ts";
 import { createApi } from "./api/app.ts";
+import type { CaptureDeps } from "./api/capture.ts";
 import type { ConversationDeps } from "./api/conversations.ts";
 import { errorResponse } from "./api/errors.ts";
 import type { StatusDeps } from "./api/status.ts";
 import type { ApiEnv } from "./api/types.ts";
-import { readApiConfig, type Env } from "./config.ts";
+import { readApiConfig, readCaptureBudgetCents, type Env } from "./config.ts";
 import type { Logger } from "./log.ts";
 import { createApiClient, type ResponseLike } from "./slack/api-client.ts";
 import { readSlackConfig } from "./slack/config.ts";
@@ -24,6 +26,7 @@ export interface AppDeps {
   /** Replace the real services in tests, so nothing reaches Anthropic, Supabase or Slack. */
   services?: {
     conversations?: ConversationDeps;
+    capture?: CaptureDeps;
     verifyAgentWebhook?: VerifyAgentWebhook;
     slackActions?: SlackRouteDeps["slackActions"];
     slackPoster?: SlackPoster;
@@ -54,6 +57,7 @@ export function configureApp(app: Hono<ApiEnv>, { env, log, services }: AppDeps)
       config,
       log,
       conversations: services?.conversations ?? real.conversations,
+      capture: services?.capture ?? real.capture,
       verifyAgentWebhook: services?.verifyAgentWebhook ?? real.verifyAgentWebhook,
       status: services?.status ?? real.status,
     }),
@@ -94,6 +98,7 @@ function realServices(
   deliverers: ConversationDeps["deliverers"],
 ): {
   conversations?: ConversationDeps;
+  capture?: CaptureDeps;
   verifyAgentWebhook?: VerifyAgentWebhook;
   status: StatusDeps;
 } {
@@ -134,7 +139,17 @@ function realServices(
           }),
         }),
   };
+  // Capture from listened channels (slice 2.5) uses the same key, on the smallest model.
+  const capture: CaptureDeps = {
+    db,
+    // Its own client: no retries and a short timeout keep three calls inside one reconcile; a
+    // thread that fails is read again on a later one.
+    extractor: createAnthropicExtractor(
+      new Anthropic({ apiKey: agentConfig.apiKey, maxRetries: 0, timeout: 25_000 }),
+    ),
+    dailyBudgetCents: readCaptureBudgetCents(env, log),
+  };
   return verifyAgentWebhook === undefined
-    ? { conversations, status }
-    : { conversations, verifyAgentWebhook, status };
+    ? { conversations, capture, status }
+    : { conversations, capture, verifyAgentWebhook, status };
 }

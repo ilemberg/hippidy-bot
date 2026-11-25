@@ -14,6 +14,12 @@ import {
   stopResultSchema,
   type StopRequest,
   type StopResult,
+  observationResultSchema,
+  setListeningResponseSchema,
+  type Observation,
+  type ObservationResult,
+  type SetListeningRequest,
+  type SetListeningResponse,
 } from "@hippidy/contracts";
 
 export type PostMessageResult =
@@ -27,6 +33,14 @@ export type StopCallResult =
 
 export type StartBriefCallResult =
   | { kind: "done"; result: StartBriefResult }
+  | { kind: "rejected"; status: number; error: ErrorResponse["error"] | undefined };
+
+export type SetListeningCallResult =
+  | { kind: "done"; result: SetListeningResponse }
+  | { kind: "rejected"; status: number; error: ErrorResponse["error"] | undefined };
+
+export type ObserveCallResult =
+  | { kind: "done"; result: ObservationResult }
   | { kind: "rejected"; status: number; error: ErrorResponse["error"] | undefined };
 
 export type ConfirmDecisionCallResult =
@@ -48,6 +62,13 @@ export interface ApiClient {
     request: ConfirmDecisionRequest,
     correlationId: string,
   ): Promise<ConfirmDecisionCallResult>;
+  /** Someone said "listen" or "stop listening" in a channel (slice 2.5). */
+  setListening(
+    request: SetListeningRequest,
+    correlationId: string,
+  ): Promise<SetListeningCallResult>;
+  /** A message was posted, edited or deleted in a channel (slice 2.5). */
+  observe(observation: Observation, correlationId: string): Promise<ObserveCallResult>;
 }
 
 /** The parts of an HTTP response the client reads. */
@@ -71,9 +92,14 @@ export function createApiClient(options: {
   baseUrl: string;
   serviceToken: string | undefined;
 }): ApiClient {
-  const post = async (path: string, payload: unknown, correlationId: string) => {
+  const send = async (
+    method: "POST" | "PUT",
+    path: string,
+    payload: unknown,
+    correlationId: string,
+  ) => {
     const request = new Request(new URL(path, options.baseUrl), {
-      method: "POST",
+      method,
       headers: {
         "content-type": "application/json",
         [CORRELATION_ID_HEADER]: correlationId,
@@ -86,6 +112,8 @@ export function createApiClient(options: {
     const body: unknown = await response.json().catch((): undefined => undefined);
     return { status: response.status, body };
   };
+  const post = (path: string, payload: unknown, correlationId: string) =>
+    send("POST", path, payload, correlationId);
 
   return {
     async postMessage(message, correlationId) {
@@ -115,6 +143,26 @@ export function createApiClient(options: {
       const { status, body } = await post(path, request, correlationId);
       if (status === 202) {
         const result = confirmDecisionResultSchema.safeParse(body);
+        if (result.success) return { kind: "done", result: result.data };
+      }
+      const error = errorResponseSchema.safeParse(body);
+      return { kind: "rejected", status, error: error.data?.error };
+    },
+
+    async setListening(request, correlationId) {
+      const { status, body } = await send("PUT", "/v1/listening", request, correlationId);
+      if (status === 200) {
+        const result = setListeningResponseSchema.safeParse(body);
+        if (result.success) return { kind: "done", result: result.data };
+      }
+      const error = errorResponseSchema.safeParse(body);
+      return { kind: "rejected", status, error: error.data?.error };
+    },
+
+    async observe(observation, correlationId) {
+      const { status, body } = await post("/v1/observations", observation, correlationId);
+      if (status === 200) {
+        const result = observationResultSchema.safeParse(body);
         if (result.success) return { kind: "done", result: result.data };
       }
       const error = errorResponseSchema.safeParse(body);

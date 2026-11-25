@@ -81,7 +81,7 @@ function View({ view }: { view: HomeView }) {
             </ul>
           )}
           <footer className="muted">
-            Signed in as {view.person.name}.{" "}
+            <a href="/listening">Listening in channels</a> · Signed in as {view.person.name}.{" "}
             <form method="post" action="/auth/signout" className="inline">
               <button className="link" type="submit">
                 Sign out

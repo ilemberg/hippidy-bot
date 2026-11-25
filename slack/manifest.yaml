@@ -37,6 +37,10 @@ settings:
       - app_mention
       # A 🛑 on a message stops the agent in that thread (decision 60).
       - reaction_added
+      # Messages in public and private channels the bot is in (slice 2.5). The API keeps only
+      # those of channels someone switched listening on in; the rest are dropped unread.
+      - message.channels
+      - message.groups
   # The Start button under a brief (slice 2.1, G17). Bolt answers button presses on the same
   # URL as events. After changing this, update the app from this manifest and reinstall it.
   interactivity:
