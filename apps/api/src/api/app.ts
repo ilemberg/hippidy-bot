@@ -5,6 +5,7 @@ import {
   listAgentEventsQuerySchema,
   listConversationsQuerySchema,
   MAX_INBOUND_MESSAGE_BYTES,
+  startBriefRequestSchema,
   stopRequestSchema,
   type AcceptedMessage,
   type AgentEventList,
@@ -17,6 +18,7 @@ import { z } from "zod";
 import type { VerifyAgentWebhook } from "../agent/webhooks.ts";
 import type { ApiConfig } from "../config.ts";
 import type { Logger } from "../log.ts";
+import { findChangeBySession } from "../store/changes.ts";
 import { findConversationBySession } from "../store/conversations.ts";
 import {
   listConversations,
@@ -25,6 +27,7 @@ import {
   readTranscript,
 } from "../store/reading.ts";
 import { requireServiceToken } from "./auth.ts";
+import { startBriefByPerson, syncChange } from "./changes.ts";
 import {
   reconcile,
   receiveMessage,
@@ -145,6 +148,40 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
     return c.json(await stopConversation(deps.conversations, parsed.data, c.var.log), 202);
   });
 
+  // A person starts a brief the start rule held back (slice 2.1, decision 181). The source
+  // says who pressed Start; the brief must belong to a thread in their source and workspace.
+  api.post(
+    "/v1/briefs/:briefId/start",
+    requireServiceToken(deps.config.serviceToken),
+    limitBody,
+    async (c) => {
+      const briefId = conversationIdSchema.safeParse(c.req.param("briefId"));
+      if (!briefId.success) {
+        return errorResponse(c, 404, "not_found", "No such brief");
+      }
+      let body: unknown;
+      try {
+        body = await c.req.json();
+      } catch {
+        return errorResponse(c, 400, "invalid_request", "Request body must be JSON");
+      }
+      const parsed = startBriefRequestSchema.safeParse(body);
+      if (!parsed.success) {
+        return errorResponse(c, 400, "invalid_request", "Request body is invalid");
+      }
+      if (deps.conversations === undefined) {
+        return errorResponse(c, 503, "not_configured", "Conversations are not configured");
+      }
+      const result = await startBriefByPerson(
+        deps.conversations,
+        briefId.data,
+        parsed.data,
+        c.var.log,
+      );
+      return c.json(result, 202);
+    },
+  );
+
   // Reading the record (decision 79). Everything below is answered from the database alone:
   // the agent runtime is not asked, so a conversation reads the same when it is unreachable.
   const readers = requireServiceToken(deps.config.serviceToken);
@@ -253,7 +290,15 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
     const log = c.var.log.child({ webhookId: event.id, webhookType: event.type });
     if (SYNC_ON_WEBHOOK.has(event.type)) {
       const conversation = await findConversationBySession(deps.conversations.db, event.resourceId);
-      if (conversation === undefined) {
+      const change =
+        conversation === undefined
+          ? await findChangeBySession(deps.conversations.db, event.resourceId)
+          : undefined;
+      if (change !== undefined) {
+        // A coding worker's session (decision 184).
+        await syncChange(deps.conversations, change, log);
+        log.info("webhook.synced", { changeId: change.id });
+      } else if (conversation === undefined) {
         log.warn("webhook.unknown_session", { sessionId: event.resourceId });
       } else {
         await syncConversation(deps.conversations, conversation, log);

@@ -300,13 +300,15 @@ export async function releaseSessionStart(
   );
 }
 
-const agentKindRow = z.object({ agent_kind: z.enum(["engineer", "product"]).nullable() });
+const agentKindRow = z.object({
+  agent_kind: z.enum(["engineer", "product", "teammate"]).nullable(),
+});
 
 /** The agent a conversation was given; null (every thread from before part E3) is the engineer. */
 export async function readAgentKind(
   db: Db,
   conversationId: string,
-): Promise<"engineer" | "product"> {
+): Promise<"engineer" | "product" | "teammate"> {
   const rows = await db.query(`select agent_kind from conversations where id = $1`, [
     conversationId,
   ]);
