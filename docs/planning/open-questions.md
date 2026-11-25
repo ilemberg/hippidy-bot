@@ -19,7 +19,9 @@ those you care about most, because it tells us where to spend effort and where t
 and keep the plumbing as thin and replaceable as possible.
 
 Z2 (factory, employee, or knowledge and task system) is answered: the unit is a project
-moving through stages. See `decisions.md` 135 and `projects.md`.
+moving through stages. See `decisions.md` 135 and `projects.md`. Changed on 2026-11-25: the
+project stays as a grouping, without stages, and the direction is the team layer
+(`decisions.md` 172, 173 and `team-layer.md`).
 
 Z3 (personas), Z4 (success measure) and Z5 (budget) are answered: see `decisions.md` 9 to 11.
 
@@ -150,6 +152,77 @@ skills.
 **F6. What happens after a bad merge?** Smoke test, automatic rollback, bot pauses itself,
 you are paged in Slack.
 
+## G. Blocks waves 2 to 4
+
+The direction changed on 2026-11-25: hippidy-bot is the team layer (`decisions.md` 172 to
+180, `team-layer.md`, `wave-2.md`). Each question names the slice it blocks.
+
+**G1 (2.1). One agent reads tickets and documents and can also push. Accept that?** Decision
+139 kept the two apart, so text in a ticket could not steer a session that can push.
+*Recommendation:* accept it for now. A person reviews and merges every pull request, and the
+agent has no tool that merges. Revisit when a worker is started by the bot and not by a
+person (wave 4).
+
+**G2 (2.1). Who can merge?** Only people with access to the GitHub repository can.
+*Recommendation:* add each invited person as a collaborator, and leave the rule on `main` as
+it is (required check, no bypass). Otherwise every pull request waits on the owner.
+
+**G3 (2.1). Spend, with several people starting sessions.** The cap is $5 a session (107)
+and the budget $100 a month (11). *Recommendation:* keep both, read spend per person from
+the record each week until slice 2.4 shows it, and decide a limit when the numbers ask for
+one.
+
+**G4 (2.2). Where does the memory live?** In the runtime's memory stores, or in our own
+table behind tools the API answers. *Recommendation:* our own table, after the probe in
+`wave-2.md` has shown what the memory stores can and cannot hold. The web app must read and
+correct a decision without calling the runtime, as the read routes do today.
+
+**G5 (2.2). Is the memory seeded from `decisions.md`?** *Recommendation:* yes. Import the
+log as the first entries, each marked with its number as its source, so recall has something
+real to answer from on the first day.
+
+**G6 (2.2). When is a decision active at once, and when only proposed?** *Recommendation:*
+active at once when a person asks the bot to record it in their own message; proposed when
+the bot inferred it.
+
+**G7 (2.3). How do people sign in to the web app?** The Dashboard v1 plan settled who may
+see it: anyone who can talk to the bot in Slack. *Recommendation:* sign in with Slack,
+limited to the workspace. The service token never reaches a browser (26, 38), so the API
+accepts a signed-in person beside it.
+
+**G8 (2.5). What does listening store, and for how long?** Changes 76 and 84.
+*Recommendation:* the text, the sender, the time and a link to the message, never Slack's
+payload. Deleted after 30 days; a decision keeps its link.
+
+**G9 (2.5). How do people know a channel is listened to?** *Recommendation:* the note in the
+channel (176), and one page saying what is read, what is kept, and how to switch it off or
+have something deleted.
+
+**G10 (2.5). Which model captures, and what does it cost?** *Recommendation:* the smallest
+current model, one run per thread gone quiet, measured in the first days against the budget
+before more channels are switched on.
+
+**G11 (2.5, 2.6). Who confirms a proposed decision before areas have owners?**
+*Recommendation:* anyone in the thread it came from. From slice 3.1, the owner of its area.
+
+**G12 (3.1, 3.2). Who wins when two people's direction conflicts?** *Recommendation:* the
+named owner of the area, with one person as the fallback for everything unowned.
+
+**G13 (3.4). May the bot act in shared spaces for a person, or only brief them?**
+*Recommendation:* brief only, at first. It tells you; you act.
+
+**G14 (3.3). How does the API reach a provider?** Today only the agent reaches Jira and
+Confluence, through Atlassian's MCP server. *Recommendation:* a small interface in the API
+for tasks and pages, with Jira and the built-in tracker as its first two providers; the
+agent keeps its direct tools (rule 4 of `wave-1.md`).
+
+**G15 (4.3). How does the bot learn of GitHub events?** Decision 108 left the webhook for
+later. *Recommendation:* read the open pull requests on reconcile first, which needs no new
+route; add the webhook when a minute's delay costs something.
+
+**G16 (4.1). May the bot change what it is responsible for?** *Recommendation:* no. The goal
+is a person's to change, and a changed goal is a recorded decision.
+
 ## Things not yet mentioned at all
 
 - **Secrets.** Where each one lives (Vercel env, Anthropic vault, GitHub App key) and how it
@@ -163,7 +236,7 @@ you are paged in Slack.
 - **Human approval path.** Tool calls can pause for approval. Slack buttons to approve or
   deny are a natural fit and may be worth a slice of their own.
 - **Agent memory across sessions.** Managed Agents has memory stores. Decide whether the
-  agent's memory lives there, in Supabase, or in the repo's docs.
+  agent's memory lives there, in Supabase, or in the repo's docs. Now G4.
 - **Rate limits and concurrency.** What happens when five requests arrive at once.
 - **The UI slice.** Supabase Realtime makes a live view cheap if slice 3's model is right,
   which is another reason to get `messages` and `agent_events` right.

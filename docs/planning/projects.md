@@ -1,5 +1,9 @@
 # Projects: how a feature moves from an idea to shipped
 
+**Superseded on 2026-11-25 by `team-layer.md` (`decisions.md` 172 to 174).** Stages, approvals,
+the rights table and the two agents are retired. What slice 5A built from this file stays live
+until slice 2.1 of `wave-2.md` changes it. Kept as the record of what was planned.
+
 Status: **draft, 2026-11-19. Planning only; nothing is built.** Written from a conversation
 that is still going, so expect changes. What is decided is in `decisions.md` 135 to 158; what
 is not is in `open-questions.md`, group E. This file describes the workflow; the slices that
