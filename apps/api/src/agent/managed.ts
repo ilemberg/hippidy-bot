@@ -4,46 +4,77 @@ import type { BetaManagedAgentsSession } from "@anthropic-ai/sdk/resources/beta/
 import type { AgentConfig } from "./config.ts";
 import {
   SessionNotFoundError,
+  type AgentKind,
   type AgentEvent,
   type AgentEventRecord,
   type AgentRuntime,
   type SessionUsage,
 } from "./runtime.ts";
 
-/** What a session starts with: its agent, the one environment and the one vault. */
+/** What a session starts with: its agent, its environment and its agent's own vault. */
 interface SessionIds {
   agentId: string;
   environmentId: string;
   vaultId: string;
 }
 
+/** The names an agent kind's sessions are looked up by, and the secret its vault needs. */
+interface KindNames {
+  agentName: string;
+  environmentName: string;
+  vaultName: string;
+  /** The secret the sync needs to fill this agent's vault, named when it is not found. */
+  secret: string;
+}
+
+function namesOf(config: AgentConfig, kind: AgentKind): KindNames {
+  switch (kind) {
+    case "engineer":
+      return {
+        agentName: config.agentName,
+        environmentName: config.environmentName,
+        vaultName: config.vaultNames.engineer,
+        secret: "AGENT_GITHUB_TOKEN",
+      };
+    case "product":
+      return {
+        agentName: config.productAgentName,
+        environmentName: config.environmentName,
+        vaultName: config.vaultNames.product,
+        secret: "ATLASSIAN_SERVICE_KEY",
+      };
+    case "teammate":
+      return {
+        agentName: config.teammateAgentName,
+        environmentName: config.teammateEnvironmentName,
+        vaultName: config.vaultNames.teammate,
+        secret: "ATLASSIAN_SERVICE_KEY",
+      };
+  }
+}
+
 /**
- * Claude Managed Agents behind the AgentRuntime interface. The agents and environment are
- * created and updated by the sync script from the files in the repo; here they are looked up
- * by name once per server instance, each agent on its own, so a missing product agent never
- * holds up the engineer.
+ * Claude Managed Agents behind the AgentRuntime interface. The agents, environments and
+ * vaults are created and updated by the sync script from the files in the repo; here they are
+ * looked up by name once per server instance, each agent kind on its own, so a missing
+ * teammate or product agent never holds up another.
  */
 export function createManagedAgentRuntime(
   config: AgentConfig,
   client = new Anthropic({ apiKey: config.apiKey, maxRetries: 2, timeout: 20_000 }),
 ): AgentRuntime {
-  let engineerIds: Promise<SessionIds> | undefined;
-  let productIds: Promise<SessionIds> | undefined;
+  const ids = new Map<AgentKind, Promise<SessionIds>>();
 
-  const resolveEngineerIds = (): Promise<SessionIds> => {
-    engineerIds ??= lookUpEngineerIds(client, config).catch((error: unknown) => {
-      engineerIds = undefined; // try again on the next call
-      throw error;
-    });
-    return engineerIds;
-  };
-
-  const resolveProductIds = (): Promise<SessionIds> => {
-    productIds ??= lookUpProductIds(client, config).catch((error: unknown) => {
-      productIds = undefined; // try again on the next call
-      throw error;
-    });
-    return productIds;
+  const resolveIds = (kind: AgentKind): Promise<SessionIds> => {
+    let found = ids.get(kind);
+    if (found === undefined) {
+      found = lookUpIds(client, namesOf(config, kind)).catch((error: unknown) => {
+        ids.delete(kind); // try again on the next call
+        throw error;
+      });
+      ids.set(kind, found);
+    }
+    return found;
   };
 
   const budget = () => ({
@@ -53,47 +84,38 @@ export function createManagedAgentRuntime(
 
   return {
     async startSession({ title, metadata, agentKind }) {
-      if (agentKind === "product") {
-        // The product agent (decisions 147, 167): the public repo mounted without a token, so
-        // it can read and clone but not push, and the vault, for Atlassian's MCP server
-        // (slice 5A part F). Fails closed like the engineer: if the agent or the vault is not
-        // found, no session starts.
-        const { agentId, environmentId, vaultId } = await resolveProductIds();
-        const session = await client.beta.sessions.create({
-          agent: agentId,
-          environment_id: environmentId,
-          title,
-          metadata,
-          resources: [{ type: "github_repository", url: config.repositoryUrl }],
-          vault_ids: [vaultId],
-          budget: budget(),
-        });
-        return {
-          sessionId: session.id,
-          agentId: session.agent.id,
-          agentVersion: session.agent.version,
-        };
+      let resources;
+      if (agentKind === "engineer") {
+        // Fails closed (decision 122): without the token, no session starts, so the message
+        // is answered with a note rather than reaching an agent that cannot see its repo.
+        if (config.repository === undefined) {
+          throw new Error(
+            "AGENT_GITHUB_TOKEN is missing or invalid; sessions cannot mount the repo",
+          );
+        }
+        // The default branch, so a session starts from the latest main (decision 109). The
+        // token stays outside the sandbox: git reaches GitHub through a proxy that adds it.
+        resources = [
+          {
+            type: "github_repository" as const,
+            url: config.repository.url,
+            authorization_token: config.repository.token,
+          },
+        ];
+      } else {
+        // The teammate and the product agent (decisions 147, 167, 181): the public repo
+        // mounted without a token, so they can read and clone but not push.
+        resources = [{ type: "github_repository" as const, url: config.repositoryUrl }];
       }
-      // Fails closed (decision 122): without the token, no session starts, so the message
-      // is answered with a note rather than reaching an agent that cannot see its repo.
-      if (config.repository === undefined) {
-        throw new Error("AGENT_GITHUB_TOKEN is missing or invalid; sessions cannot mount the repo");
-      }
-      const { agentId, environmentId, vaultId } = await resolveEngineerIds();
+      // Each kind has its own agent, environment and vault (slice 2.1, part E). Fails closed:
+      // if any of them is not found, no session starts.
+      const { agentId, environmentId, vaultId } = await resolveIds(agentKind);
       const session = await client.beta.sessions.create({
         agent: agentId,
         environment_id: environmentId,
         title,
         metadata,
-        // The default branch, so a new thread starts from the latest main (decision 109). The
-        // token stays outside the sandbox: git reaches GitHub through a proxy that adds it.
-        resources: [
-          {
-            type: "github_repository",
-            url: config.repository.url,
-            authorization_token: config.repository.token,
-          },
-        ],
+        resources,
         vault_ids: [vaultId],
         budget: budget(),
       });
@@ -214,29 +236,19 @@ async function findVaultId(client: Anthropic, name: string): Promise<string | un
   return vaultId;
 }
 
-async function lookUpEngineerIds(client: Anthropic, config: AgentConfig): Promise<SessionIds> {
-  const agentId = await findAgentId(client, config.agentName);
-  const environmentId = await findEnvironmentId(client, config.environmentName);
-  const vaultId = await findVaultId(client, config.vaultName);
+async function lookUpIds(client: Anthropic, names: KindNames): Promise<SessionIds> {
+  const agentId = await findAgentId(client, names.agentName);
+  const environmentId = await findEnvironmentId(client, names.environmentName);
+  const vaultId = await findVaultId(client, names.vaultName);
   if (agentId === undefined || environmentId === undefined || vaultId === undefined) {
+    const missing = [
+      agentId === undefined ? `agent "${names.agentName}"` : undefined,
+      environmentId === undefined ? `environment "${names.environmentName}"` : undefined,
+      vaultId === undefined ? `vault "${names.vaultName}"` : undefined,
+    ].filter((name) => name !== undefined);
     throw new Error(
-      `Agent "${config.agentName}", environment "${config.environmentName}" or vault ` +
-        `"${config.vaultName}" not found. Run the agent sync (pnpm agent:sync) with this ` +
-        "workspace's API key and AGENT_GITHUB_TOKEN.",
-    );
-  }
-  return { agentId, environmentId, vaultId };
-}
-
-async function lookUpProductIds(client: Anthropic, config: AgentConfig): Promise<SessionIds> {
-  const agentId = await findAgentId(client, config.productAgentName);
-  const environmentId = await findEnvironmentId(client, config.environmentName);
-  const vaultId = await findVaultId(client, config.vaultName);
-  if (agentId === undefined || environmentId === undefined || vaultId === undefined) {
-    throw new Error(
-      `Agent "${config.productAgentName}", environment "${config.environmentName}" or vault ` +
-        `"${config.vaultName}" not found. Run the agent sync (pnpm agent:sync) with this ` +
-        "workspace's API key and ATLASSIAN_SERVICE_KEY.",
+      `Not found: ${missing.join(", ")}. Run the agent sync (pnpm agent:sync) with this ` +
+        `workspace's API key and ${names.secret}.`,
     );
   }
   return { agentId, environmentId, vaultId };

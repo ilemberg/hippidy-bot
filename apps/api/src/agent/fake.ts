@@ -26,6 +26,13 @@ interface FakeSession {
   usage: SessionUsage;
 }
 
+/** The agent id a session of each kind reports. */
+const FAKE_AGENT_IDS: Record<AgentKind, string> = {
+  engineer: "agent_fake",
+  product: "agent_fake_product",
+  teammate: "agent_fake_teammate",
+};
+
 /** The runtime's own names for the events the API acts on, as Managed Agents spells them. */
 const TYPE_OF: Record<AgentEvent["kind"], string> = {
   user_message: "user.message",
@@ -135,7 +142,7 @@ export class FakeAgentRuntime implements AgentRuntime {
     });
     return Promise.resolve({
       sessionId,
-      agentId: input.agentKind === "product" ? "agent_fake_product" : "agent_fake",
+      agentId: FAKE_AGENT_IDS[input.agentKind],
       agentVersion: 1,
     });
   }

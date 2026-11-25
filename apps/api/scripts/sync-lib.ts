@@ -4,21 +4,28 @@ import type { Anthropic } from "@anthropic-ai/sdk";
 import type { BetaCloudConfigParams } from "@anthropic-ai/sdk/resources/beta/environments";
 import { digest, type AgentFile, type EnvironmentFile } from "./agent-files.ts";
 
-/** Must match VAULT_NAME in src/agent/config.ts: the API finds the vault by this name. */
-export const VAULT_NAME = "hippidy-bot";
-/** Where the digest of what was last sent is kept, on each agent and the environment. */
+/** Where the digest of what was last sent is kept, on each agent and environment. */
 export const DIGEST_KEY = "synced_digest";
+
+/**
+ * Each agent has a vault of its own, named after the agent (slice 2.1, part E): `hippidy-bot`
+ * for the coding worker, `hippidy-bot-product`, `hippidy-bot-teammate`. Must match the vault
+ * names in src/agent/config.ts: the API finds each by this name.
+ */
+export function vaultNameFor(agent: Pick<AgentFile, "name">): string {
+  return agent.name;
+}
 
 export interface SyncOptions {
   client: Anthropic;
   /** Every agent file in `agents/`, each synced on its own and found by its name. */
   agents: readonly AgentFile[];
-  /** The one environment every agent's sessions run in. */
-  environment: EnvironmentFile;
+  /** Every environment file in `environments/`, each synced on its own and found by its name. */
+  environments: readonly EnvironmentFile[];
   /**
    * Where the MCP servers' credentials come from: the process environment, read by the
-   * variable names in MCP_SERVER_SECRETS. A missing or empty one leaves its own credential as
-   * it is.
+   * variable names in MCP_SERVER_SECRETS. A missing or empty one leaves its own credentials as
+   * they are.
    */
   secrets: Readonly<Record<string, string | undefined>>;
   dryRun: boolean;
@@ -28,20 +35,31 @@ export interface SyncOptions {
 }
 
 /**
- * Syncs the environment, the vault and every agent: creates each the first time, updates it
- * when its file changes (an agent update is a new version), and does nothing when it already
- * matches.
+ * Syncs every environment, every agent's vault and every agent: creates each the first time,
+ * updates it when its file changes (an agent update is a new version), and does nothing when
+ * it already matches.
  */
 export async function syncAll(options: SyncOptions): Promise<void> {
-  const names = options.agents.map((agent) => agent.name);
+  refuseRepeatedNames(
+    "agent",
+    options.agents.map((agent) => agent.name),
+  );
+  refuseRepeatedNames(
+    "environment",
+    options.environments.map((environment) => environment.name),
+  );
+  for (const environment of options.environments) await syncEnvironment(options, environment);
+  // The vaults before the agents: the API needs an agent's vault the moment the agent can use
+  // its MCP tools.
+  for (const agent of options.agents) await syncVault(options, agent);
+  for (const agent of options.agents) await syncAgent(options, agent);
+}
+
+function refuseRepeatedNames(kind: string, names: readonly string[]): void {
   const repeated = names.find((name, index) => names.indexOf(name) !== index);
   if (repeated !== undefined) {
-    throw new Error(`two agent files are named "${repeated}"; each agent needs its own name`);
+    throw new Error(`two ${kind} files are named "${repeated}"; each ${kind} needs its own name`);
   }
-  await syncEnvironment(options);
-  // The vault before the agents: the API needs it the moment an agent can use MCP tools.
-  await syncVault(options);
-  for (const agent of options.agents) await syncAgent(options, agent);
 }
 
 function cloudConfig(wanted: EnvironmentFile): BetaCloudConfigParams {
@@ -53,7 +71,7 @@ function cloudConfig(wanted: EnvironmentFile): BetaCloudConfigParams {
   };
 }
 
-async function syncEnvironment({ client, environment: wanted, dryRun, say }: SyncOptions) {
+async function syncEnvironment({ client, dryRun, say }: SyncOptions, wanted: EnvironmentFile) {
   const config = cloudConfig(wanted);
   const metadata = { [DIGEST_KEY]: digest({ description: wanted.description, config }) };
   let existing;
@@ -138,15 +156,15 @@ export interface McpServerSecret {
 }
 
 export const MCP_SERVER_SECRETS: readonly McpServerSecret[] = [
-  // GitHub's MCP server, for the engineer agent (decisions 105, 116, 122).
+  // GitHub's MCP server, for the coding worker (decisions 105, 116, 122).
   {
     host: "api.githubcopilot.com",
     variable: "AGENT_GITHUB_TOKEN",
     displayName: "GitHub (AGENT_GITHUB_TOKEN)",
     readme: "Slice 4 setup: the GitHub token",
   },
-  // Atlassian's MCP server, for the product agent: the service account's key (decisions 151,
-  // 166; slice 5A part F).
+  // Atlassian's MCP server, for the teammate and the product agent: the service account's key
+  // (decisions 151, 166; slice 5A part F).
   {
     host: "mcp.atlassian.com",
     variable: "ATLASSIAN_SERVICE_KEY",
@@ -167,20 +185,22 @@ export function secretForMcpServer(url: string): McpServerSecret | undefined {
 }
 
 /**
- * Keeps one static bearer credential per MCP server URL in the one vault, for the servers of
- * every agent file, each from its own secret (MCP_SERVER_SECRETS): GitHub's from
- * AGENT_GITHUB_TOKEN, Atlassian's from ATLASSIAN_SERVICE_KEY. A stored token cannot be read
- * back, so each is written on every sync: running the sync after a secret is replaced is all
- * that rotating it takes. A missing secret leaves its own credential as it is, with a warning;
- * a server with no known secret is skipped, with a warning. Neither touches another server's
- * credential.
+ * Keeps an agent's own vault (vaultNameFor): one static bearer credential for each MCP server
+ * the agent declares, and nothing else (slice 2.1, part E), so that one agent's sessions never
+ * hold another agent's credentials. Each comes from its own secret (MCP_SERVER_SECRETS):
+ * GitHub's from AGENT_GITHUB_TOKEN, Atlassian's from ATLASSIAN_SERVICE_KEY. A stored token
+ * cannot be read back, so each is written on every sync: running the sync after a secret is
+ * replaced is all that rotating it takes. A missing secret leaves its own credential as it is,
+ * with a warning; a server with no known secret is skipped, with a warning. A credential for a
+ * server the agent does not declare is archived.
  */
-async function syncVault(options: SyncOptions) {
-  const { client, agents, secrets, dryRun, say, warn } = options;
-  const urls = [...new Set(agents.flatMap((agent) => agent.mcp_servers.map((s) => s.url)))];
+async function syncVault(options: SyncOptions, agent: AgentFile) {
+  const { client, secrets, dryRun, say, warn } = options;
+  const name = vaultNameFor(agent);
+  const urls = [...new Set(agent.mcp_servers.map((server) => server.url))];
   let vault;
   for await (const candidate of client.beta.vaults.list()) {
-    if (candidate.display_name === VAULT_NAME && candidate.archived_at === null) vault = candidate;
+    if (candidate.display_name === name && candidate.archived_at === null) vault = candidate;
   }
   const wanted: { url: string; token: string; secret: McpServerSecret }[] = [];
   for (const url of urls) {
@@ -188,16 +208,16 @@ async function syncVault(options: SyncOptions) {
     if (secret === undefined) {
       warn(
         `::warning::MCP server ${url} has no known secret, so it has no credential in vault ` +
-          `"${VAULT_NAME}". Add its host to MCP_SERVER_SECRETS in apps/api/scripts/sync-lib.ts.`,
+          `"${name}". Add its host to MCP_SERVER_SECRETS in apps/api/scripts/sync-lib.ts.`,
       );
       continue;
     }
     const token = secrets[secret.variable];
     if (token === undefined || token === "") {
-      // Without it, sessions that need this server cannot use it: say so loudly.
+      // Without it, this agent's sessions cannot use this server: say so loudly.
       warn(
         `::warning::${secret.variable} is not set, so the credential for ${url} in vault ` +
-          `"${VAULT_NAME}" was not ${vault === undefined ? "made" : "updated"}. See the ` +
+          `"${name}" was not ${vault === undefined ? "made" : "updated"}. See the ` +
           `README's "${secret.readme}".`,
       );
       continue;
@@ -206,13 +226,13 @@ async function syncVault(options: SyncOptions) {
   }
   if (vault === undefined) {
     if (wanted.length === 0) return;
-    say(`vault "${VAULT_NAME}": create`);
+    say(`vault "${name}": create`);
     if (dryRun) {
-      for (const { url } of wanted) say(`vault "${VAULT_NAME}": add credential for ${url}`);
+      for (const { url } of wanted) say(`vault "${name}": add credential for ${url}`);
       return;
     }
-    vault = await client.beta.vaults.create({ display_name: VAULT_NAME });
-    say(`vault "${VAULT_NAME}": created ${vault.id}`);
+    vault = await client.beta.vaults.create({ display_name: name });
+    say(`vault "${name}": created ${vault.id}`);
   }
   const credentials = [];
   for await (const credential of client.beta.vaults.credentials.list(vault.id)) {
@@ -224,7 +244,7 @@ async function syncVault(options: SyncOptions) {
         credential.auth.type === "static_bearer" && credential.auth.mcp_server_url === url,
     );
     if (existing === undefined) {
-      say(`vault "${VAULT_NAME}": add credential for ${url}`);
+      say(`vault "${name}": add credential for ${url}`);
       if (!dryRun) {
         await client.beta.vaults.credentials.create(vault.id, {
           display_name: secret.displayName,
@@ -232,7 +252,7 @@ async function syncVault(options: SyncOptions) {
         });
       }
     } else {
-      say(`vault "${VAULT_NAME}": refresh the token for ${url}`);
+      say(`vault "${name}": refresh the token for ${url}`);
       if (!dryRun) {
         await client.beta.vaults.credentials.update(existing.id, {
           vault_id: vault.id,
@@ -241,12 +261,12 @@ async function syncVault(options: SyncOptions) {
       }
     }
   }
-  // Only a server no agent file names any more loses its credential: a missing secret or an
-  // unknown server above never archives anything.
+  // Only a server this agent does not declare loses its credential, whether another agent
+  // uses it or none does: a missing secret or an unknown server above never archives anything.
   for (const credential of credentials) {
     const url = "mcp_server_url" in credential.auth ? credential.auth.mcp_server_url : undefined;
     if (url !== undefined && !urls.includes(url)) {
-      say(`vault "${VAULT_NAME}": archive the credential for ${url}, no longer used`);
+      say(`vault "${name}": archive the credential for ${url}, not a server of "${agent.name}"`);
       if (!dryRun) {
         await client.beta.vaults.credentials.archive(credential.id, { vault_id: vault.id });
       }

@@ -53,10 +53,13 @@ export interface AgentRuntime {
 }
 
 /**
- * Which of the bot's two agents runs a conversation (decision 139): the engineer changes code,
- * as before; the product agent writes the plan, reads the repo and changes nothing.
+ * Which of the bot's agents runs a session. The engineer is the coding worker (decision 181,
+ * `agents/hippidy.md`): it changes code, given work as a brief, and threads opened on it
+ * before slice 2.1 keep it. The teammate (`agents/teammate.md`) talks with every new thread,
+ * reads Jira, Confluence and the repo, and cannot publish. The product agent (decision 139)
+ * writes the plan, reads the repo and changes nothing; threads opened on it keep it.
  */
-export type AgentKind = "engineer" | "product";
+export type AgentKind = "engineer" | "product" | "teammate";
 
 /** The runtime no longer has this session (deleted, or past its retention). */
 export class SessionNotFoundError extends Error {

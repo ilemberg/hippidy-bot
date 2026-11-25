@@ -5,9 +5,11 @@ explore how an AI teammate fits into a SaaS product engineering team: engineers 
 team lead, senior, mid, junior), product manager, designer, QA, engineering manager and other
 stakeholders.
 
-**Status: slice 3 done; slice 4 planned, not started.** Mention `@hippidy-bot` in Slack and a Claude agent answers in the thread; reply
-there and it remembers the conversation. Every conversation is kept in Supabase, with what the agent
-did and what it cost, and can be read back through the API.
+**Status: wave 1 done; wave 2's slice 2.1 is being built.** Mention `@hippidy-bot` in Slack
+and it answers in the thread; reply there and it remembers the conversation. Anyone in the
+workspace may ask it for anything, a change to the code included (see "Slice 2.1: one bot,
+everyone trusted" below). Every conversation is kept in Supabase, with what the agents did
+and what it cost, and can be read back through the API.
 
 ## Layout
 
@@ -16,7 +18,7 @@ did and what it cost, and can be read back through the API.
 | `apps/api`               | The deployable, served by Vercel: the core API (`src/api`) and the Slack adapter (`src/slack`) |
 | `slack/manifest.yaml`    | The Slack app's definition: name, scopes, events                                               |
 | `packages/contracts`     | The API's request, response and error schemas (Zod), shared with every client                  |
-| `agents`, `environments` | The agent's definition and system prompt, and its sandbox; synced to Anthropic by CI           |
+| `agents`, `environments` | The agents' definitions and system prompts, and their sandboxes; synced to Anthropic by CI     |
 | `supabase`               | Database schema as migrations, applied by CI on merge to `main`                                |
 | `docs/planning`          | Plans and the decision log                                                                     |
 
@@ -480,6 +482,10 @@ thread. The same happens if Slack takes longer than 1.5 seconds to answer.
 
 ## Slice 5A: the product agent
 
+From slice 2.1 the product agent and the roles below no longer choose anything: every new
+thread gets the teammate (see "Slice 2.1" below), and threads opened on the product agent keep
+it. As built in slice 5A:
+
 Slack still shows one bot, but behind it are two agents (decisions 139, 167), and a reply
 never says which one answered. A thread whose first message comes from someone with the role
 `product_manager` or `designer` (set with `PUT /v1/roles`, above) gets the **product agent**,
@@ -510,10 +516,12 @@ vault, they fail closed the same way.
 
 ### The Atlassian key
 
-The agent sync keeps the service account's key in the Anthropic vault as the credential for
-Atlassian's MCP server, beside GitHub's (each server has its own secret). It reads it from
-`ATLASSIAN_SERVICE_KEY` in the `release` environment, the secret the probe uses. The key
-belongs to the bot's service account on the site, and needs these scopes:
+The agent sync keeps the service account's key as the credential for Atlassian's MCP server
+in the vaults of the agents that use it, `hippidy-bot-product` and `hippidy-bot-teammate` (each
+agent has a vault of its own from slice 2.1; GitHub's token is only in the worker's,
+`hippidy-bot`). It reads it from `ATLASSIAN_SERVICE_KEY` in the `release` environment, the
+secret the probe uses. The key belongs to the bot's service account on the site, and needs
+these scopes:
 
 - Jira's and Confluence's own read and write scopes;
 - `read:me` and `read:account`, for the identity tools;
@@ -525,7 +533,41 @@ A key's scopes cannot be changed after it is made: for different scopes, make a 
 rotate it, replace `ATLASSIAN_SERVICE_KEY` in the repo's **Settings**, **Environments**,
 `release` (never into a chat, a file or your shell history), then run **Actions**,
 **Agent sync**, **Run workflow** on `main`. Without the secret, the sync warns and leaves the
-Atlassian credential as it was; GitHub's credential is never touched by it.
+Atlassian credentials as they were; GitHub's credential is never touched by it.
+
+## Slice 2.1: one bot, everyone trusted
+
+Slack shows one bot, and everyone in the workspace is trusted alike (decisions 173, 174):
+anyone may ask it for anything, a change to the code included. Nobody needs a role, and
+nothing waits for a stage or an approval. One rule is firm: only a person merges.
+
+Behind the bot are two kinds of session, split by what they may do (decision 181,
+`docs/planning/slice-2-1.md`), and a reply never says which one answered:
+
+- **The teammate** (`agents/teammate.md`) answers every new thread. It reads the thread, Jira,
+  Confluence and the repo's `main`, and writes in Jira and Confluence (never deleting). It
+  cannot publish: it has no GitHub tools, the repo is mounted without a token, and its
+  environment (`environments/teammate.yaml`) reaches MCP servers only.
+- **The coding worker** (`agents/hippidy.md`) changes the repo and opens pull requests. It
+  never reads the thread, Jira or Confluence: it is given only a brief.
+
+When someone asks for a change to the code, the teammate writes a short brief (what, why,
+how a person will know it is done, links) and the bot posts it in the thread. If the teammate
+read a ticket or a document before writing it, someone in the thread presses **Start** under
+the brief first; anyone may press it. Otherwise the worker starts at once. The worker posts in
+the thread as it goes and ends with a pull request; a person reviews and merges it. Follow-ups
+go to the teammate, which sends the worker an updated brief.
+
+Each agent has its own Anthropic vault, named after it, holding only its own MCP servers'
+credentials: `hippidy-bot` (the worker) GitHub's, `hippidy-bot-product` and
+`hippidy-bot-teammate` Atlassian's. The agent sync makes the teammate's agent, environment and
+vault on merge, and archives the Atlassian credential from the worker's vault, which until
+now was the one vault every agent shared. Threads opened before keep the agent they have.
+
+By hand, the owner's: the Start button needs interactivity in the Slack app. Update the app
+from `slack/manifest.yaml` (at https://api.slack.com/apps, **hippidy-bot**, **App Manifest**,
+**YAML**, paste the file, **Save Changes**) and reinstall it when Slack asks (**Install App**,
+**Reinstall to Workspace**). The bot token stays the same.
 
 ## Planning docs
 
@@ -538,6 +580,7 @@ Atlassian credential as it was; GitHub's credential is never touched by it.
 | [docs/planning/slice-4.md](docs/planning/slice-4.md)                 | Slice 4 plan: the agent gets a development environment (in progress)                       |
 | [docs/planning/team-layer.md](docs/planning/team-layer.md)           | The direction from wave 2: the team layer, its records, and how people reach it            |
 | [docs/planning/wave-2.md](docs/planning/wave-2.md)                   | The wave 2 plan (draft): one team, one memory; waves 3 to 5 as sketches                    |
+| [docs/planning/slice-2-1.md](docs/planning/slice-2-1.md)             | Slice 2.1 plan: one bot, everyone trusted; the teammate and the coding worker              |
 | [docs/planning/open-questions.md](docs/planning/open-questions.md)   | The grill: decisions that are open, grouped by when they block                             |
 | [docs/planning/decisions.md](docs/planning/decisions.md)             | Decision log. Things move here from open-questions once decided                            |
 | [docs/planning/stack-and-tools.md](docs/planning/stack-and-tools.md) | Stack options, MCP servers, and off-the-shelf pieces that make this cheaper or better      |

@@ -7,8 +7,8 @@ name: hippidy-bot-product
 description: The product side of hippidy-bot, writing the plan with people in Slack threads.
 model: claude-opus-5-5
 # No GitHub tools (decision 147). Atlassian's MCP server for Jira and Confluence (decisions
-# 151, 166; slice 5A part F). Its credential, the service account's key, is in the vault the
-# sync makes, never here.
+# 151, 166; slice 5A part F). Its credential, the service account's key, is in this agent's
+# own vault, `hippidy-bot-product`, which the sync makes; never here.
 mcp_servers:
   - type: url
     name: atlassian
