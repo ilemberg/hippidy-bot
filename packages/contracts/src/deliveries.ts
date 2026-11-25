@@ -11,6 +11,21 @@ export const deliveryTargetSchema = z.strictObject({
 export type DeliveryTarget = z.infer<typeof deliveryTargetSchema>;
 
 /**
+ * People the text mentions (slice 3.1): each is written `{@id}` in the text, and the source
+ * turns it into its own mention (Slack: `<@id>`), so the person is told. Only the ids listed
+ * here are turned into mentions; any other `{@…}` stays as text.
+ */
+const mentionsSchema = z
+  .array(z.string().regex(/^[A-Z0-9]{2,40}$/))
+  .max(10)
+  .optional();
+
+/** `{@id}`, the way a delivery's text marks a mention. */
+export function mentionToken(actorId: string): string {
+  return `{@${actorId}}`;
+}
+
+/**
  * Something the API sends back to a source (decision 53): a reply in the thread, a brief, or
  * the status of the messages it answered (for Slack: reactions).
  */
@@ -20,6 +35,7 @@ export const outboundDeliverySchema = z.discriminatedUnion("kind", [
     target: deliveryTargetSchema,
     /** Markdown. Each source converts it to its own format. */
     text: z.string().min(1),
+    mentions: mentionsSchema,
   }),
   z.strictObject({
     /**
@@ -46,6 +62,7 @@ export const outboundDeliverySchema = z.discriminatedUnion("kind", [
     /** Markdown. Each source converts it to its own format. */
     text: z.string().min(1),
     needsConfirm: z.boolean(),
+    mentions: mentionsSchema,
   }),
   z.strictObject({
     kind: z.literal("status"),

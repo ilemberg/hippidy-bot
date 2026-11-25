@@ -99,3 +99,23 @@ export function readCaptureBudgetCents(env: Env, log: Logger): number {
   }
   return parsed.data;
 }
+
+/**
+ * Who decides for anything with no owner (slice 3.1, rule 10 of `wave-3.md`): a Slack user id
+ * in `FALLBACK_OWNER`. Unset or bad: logged, and lines about an area with no owner name nobody.
+ */
+export function readFallbackOwner(env: Env, log: Logger): { actorId: string } | undefined {
+  const raw = env.FALLBACK_OWNER;
+  if (raw === undefined || raw === "") {
+    log.warn("config.fallback_owner_missing", { variable: "FALLBACK_OWNER" });
+    return undefined;
+  }
+  if (!/^[UW][A-Z0-9]{2,30}$/.test(raw.trim())) {
+    log.error("config.fallback_owner_invalid", {
+      variable: "FALLBACK_OWNER",
+      reason: "must be a Slack user id, like U0123456789",
+    });
+    return undefined;
+  }
+  return { actorId: raw.trim() };
+}

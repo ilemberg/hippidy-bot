@@ -88,6 +88,8 @@ export const startChangeInputSchema = z
     why: briefText(MAX_BRIEF_CHARACTERS),
     doneWhen: briefText(MAX_BRIEF_CHARACTERS),
     links: z.array(briefText(500)).max(20).default([]),
+    /** Areas the change touches, by name (slice 3.1); the API checks them against the known. */
+    areas: z.array(z.string().trim().min(1).max(60)).max(10).optional(),
   })
   .refine(
     (input) =>

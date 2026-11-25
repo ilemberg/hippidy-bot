@@ -531,10 +531,10 @@ describe("how a decision is worded", () => {
 
   it("says why a person may not act, and that mentioning the bot counts in a teammate's thread", () => {
     expect(notAllowedText("not_in_thread", proposal)).toBe(
-      "Only people who wrote in the thread it came from can confirm or change it. Mentioning @hippidy in that thread counts.",
+      "Only people who wrote in the thread it came from, or the owner of its area, can confirm or change it. Mentioning @hippidy in that thread counts.",
     );
     expect(notAllowedText("not_in_thread", { ...proposal, origin: "capture" })).toBe(
-      "Only people who wrote in the thread it came from can confirm or change it.",
+      "Only people who wrote in the thread it came from, or the owner of its area, can confirm or change it.",
     );
     expect(notAllowedText("read_only", proposal)).toBe(
       "Imported from the decision log; change it there.",

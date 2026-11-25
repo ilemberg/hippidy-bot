@@ -17,6 +17,8 @@ import {
   type StartChangeInput,
   type StartChangeOutput,
 } from "@hippidy/contracts";
+import { areasInText, nameChangeAreas, ownerLines, type Fallback } from "./areas.ts";
+import { findAreaByName, listAreas } from "../store/areas.ts";
 import type { z } from "zod";
 import type { AgentEvent } from "../agent/runtime.ts";
 import { actorNameInConversation, createBrief } from "../store/changes.ts";
@@ -93,6 +95,7 @@ export async function answerCustomToolCall(
   call: CustomToolCall,
   messages: readonly ProcessedUserMessage[],
   events: readonly AgentEvent[] = [],
+  routing: { fallback?: Fallback | undefined } = {},
 ): Promise<CustomToolAnswer> {
   const name = customToolNameSchema.safeParse(call.name);
   if (!name.success) return error(toolErrors.unknownTool(call.name));
@@ -112,12 +115,21 @@ export async function answerCustomToolCall(
     case "start_change": {
       const input = startChangeInputSchema.safeParse(call.input);
       if (!input.success) return invalid(name.data, input.error);
-      return startChange(db, conversationId, context, call, messages, events, input.data);
+      return startChange(db, conversationId, context, call, messages, events, input.data, routing);
     }
     case "record_decision": {
       const input = recordDecisionInputSchema.safeParse(call.input);
       if (!input.success) return invalid(name.data, input.error);
-      return recordDecisionFor(db, conversationId, context, call, messages, events, input.data);
+      return recordDecisionFor(
+        db,
+        conversationId,
+        context,
+        call,
+        messages,
+        events,
+        input.data,
+        routing,
+      );
     }
     case "recall_decisions": {
       const input = recallDecisionsInputSchema.safeParse(call.input);
@@ -182,6 +194,7 @@ async function recordDecisionFor(
   messages: readonly ProcessedUserMessage[],
   events: readonly AgentEvent[],
   input: RecordDecisionInput,
+  routing: { fallback?: Fallback | undefined },
 ): Promise<CustomToolAnswer> {
   const decider = {
     source: context.source,
@@ -228,20 +241,24 @@ async function recordDecisionFor(
   }
   const { decision } = result;
   const proposed = decision.status === "proposed";
+  // In an area that exists, the post names its owner (slice 3.1), who may confirm a proposal.
+  const area =
+    decision.area === null ? undefined : await findAreaByName(db, context, decision.area);
+  const owner = area === undefined ? undefined : ownerLines([area], routing.fallback);
   // Queued under the decision's id, so answering the call again posts it once.
   const conversation = await getConversation(db, conversationId);
+  const text = decisionForThread(
+    decision,
+    proposed ? (because ?? "it is a proposal") : undefined,
+    replaced === undefined ? undefined : { number: replaced.number, statement: replaced.statement },
+  );
   await enqueueDelivery(db, conversationId, `decision:${decision.id}`, "note", {
     kind: "decision",
     target: { ...conversation.key },
     decisionId: decision.id,
-    text: decisionForThread(
-      decision,
-      proposed ? (because ?? "it is a proposal") : undefined,
-      replaced === undefined
-        ? undefined
-        : { number: replaced.number, statement: replaced.statement },
-    ),
+    text: owner === undefined || owner.text === "" ? text : `${text}\n\n${owner.text}`,
     needsConfirm: proposed,
+    ...(owner === undefined || owner.mentions.length === 0 ? {} : { mentions: owner.mentions }),
   });
   const output: RecordDecisionOutput = {
     number: decision.number,
@@ -348,6 +365,7 @@ async function startChange(
   messages: readonly ProcessedUserMessage[],
   events: readonly AgentEvent[],
   input: StartChangeInput,
+  routing: { fallback?: Fallback | undefined },
 ): Promise<CustomToolAnswer> {
   const callAt = call.processedAt === null ? Number.NaN : Date.parse(call.processedAt);
   const requesterId = Number.isNaN(callAt)
@@ -384,6 +402,32 @@ async function startChange(
     text: briefForThread(input, reason),
     needsStart: reason !== undefined,
   });
+  // The areas the brief touches, named once per change with their owners (slice 3.1). Queued
+  // after the brief, so they read under it.
+  const areas = await listAreas(db, context);
+  const named = new Set((input.areas ?? []).map((name) => name.trim().toLowerCase()));
+  const touched = [
+    ...new Map(
+      [
+        ...areas.filter((area) => named.has(area.name)),
+        ...areasInText(
+          areas,
+          [input.title, input.what, input.why, input.doneWhen, ...input.links].join("\n"),
+        ),
+      ].map((area) => [area.id, area]),
+    ).values(),
+  ];
+  await nameChangeAreas(
+    { db, deliverers: {} },
+    {
+      conversationId,
+      changeId: result.changeId,
+      areas: touched,
+      via: "brief",
+      key: `areas:${result.changeId}:brief:${result.briefId}`,
+      fallback: routing.fallback,
+    },
+  );
   const output: StartChangeOutput = {
     changeId: result.changeId,
     briefId: result.briefId,

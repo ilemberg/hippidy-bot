@@ -28,6 +28,18 @@ const SECTION_TEXT_CHARS = 3000;
 const HARMLESS = new Set(["already_reacted", "no_reaction"]);
 
 /**
+ * Turns each `{@id}` the delivery lists into a Slack mention (`<@id>`), so the person is told
+ * (slice 3.1). Any other `{@…}` in the text, from an agent's words for instance, stays as text.
+ */
+export function withMentions(text: string, mentions: readonly string[] | undefined): string {
+  let out = text;
+  for (const actorId of new Set(mentions ?? [])) {
+    out = out.replaceAll(`{@${actorId}}`, `<@${actorId}>`);
+  }
+  return out;
+}
+
+/**
  * Delivers the API's outbound messages to Slack (decision 53): replies go in the thread as
  * Slack-formatted text; a brief goes in the thread with a Start button under it when a person
  * must start it (slice 2.1, G17); and a status swaps the 👀 on each settled message for ✅, ❌
@@ -42,7 +54,9 @@ export function createSlackDeliverer(poster: SlackPoster | (() => SlackPoster)):
       const thread_ts = delivery.target.threadId;
       switch (delivery.kind) {
         case "reply":
-          for (const text of splitForSlack(markdownToSlack(delivery.text))) {
+          for (const text of splitForSlack(
+            withMentions(markdownToSlack(delivery.text), delivery.mentions),
+          )) {
             await slack.postMessage({ channel, thread_ts, text });
           }
           return;
@@ -62,7 +76,10 @@ export function createSlackDeliverer(poster: SlackPoster | (() => SlackPoster)):
           return;
         }
         case "decision": {
-          const parts = splitForSlack(markdownToSlack(delivery.text), SECTION_TEXT_CHARS);
+          const parts = splitForSlack(
+            withMentions(markdownToSlack(delivery.text), delivery.mentions),
+            SECTION_TEXT_CHARS,
+          );
           if (parts.length === 0) parts.push("(The decision is empty.)");
           for (const [index, text] of parts.entries()) {
             const blocks: types.KnownBlock[] = [

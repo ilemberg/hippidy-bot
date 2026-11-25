@@ -10,7 +10,7 @@ import type { ConversationDeps } from "./api/conversations.ts";
 import { errorResponse } from "./api/errors.ts";
 import type { StatusDeps } from "./api/status.ts";
 import type { ApiEnv } from "./api/types.ts";
-import { readApiConfig, readCaptureBudgetCents, type Env } from "./config.ts";
+import { readApiConfig, readCaptureBudgetCents, readFallbackOwner, type Env } from "./config.ts";
 import type { Logger } from "./log.ts";
 import { createApiClient, type ResponseLike } from "./slack/api-client.ts";
 import { readSlackConfig } from "./slack/config.ts";
@@ -129,6 +129,7 @@ function realServices(
     db,
     runtime: createManagedAgentRuntime(agentConfig, client),
     deliverers,
+    fallback: readFallbackOwner(env, log),
     // The same token that mounts the repo reads its pull requests' checks (decision 132).
     ...(agentConfig.repository === undefined
       ? {}

@@ -1,3 +1,4 @@
+import { namePullRequestAreas } from "./areas.ts";
 import type { StartBriefRequest, StartBriefResult } from "@hippidy/contracts";
 import { actedOn, type AgentEvent } from "../agent/runtime.ts";
 import type { Logger } from "../log.ts";
@@ -360,6 +361,16 @@ async function judgeWorkerTurn(
 ): Promise<{ status: "answered" | "failed"; note: string | undefined }> {
   const before = events.slice(0, endIndex);
   const turn = before.slice(before.findLastIndex(endsTurn) + 1);
+  // The change's latest pull request, for naming the areas its files touch after the sync
+  // (slice 3.1). Only kept here; GitHub is asked outside the lease.
+  const pullRequest = before.findLast((event) => event.kind === "pull_request");
+  if (pullRequest?.kind === "pull_request") {
+    await deps.db.query(
+      `update changes set pull_request_url = $2
+       where id = $1 and pull_request_url is distinct from $2`,
+      [change.id, pullRequest.url],
+    );
+  }
   if (!turn.some((event) => event.kind === "pushed" || event.kind === "pull_request")) {
     return { status: "answered", note: undefined };
   }
@@ -484,6 +495,8 @@ export async function reconcileChanges(
     try {
       await syncChange(deps, change, changeLog);
       await postProgress(deps, await getChange(deps.db, change.id), changeLog);
+      // After the lease: the areas its pull request's files touch (slice 3.1).
+      await namePullRequestAreas(deps, change.id, changeLog);
     } catch (error) {
       failed++;
       changeLog.error("reconcile.change_failed", { error });

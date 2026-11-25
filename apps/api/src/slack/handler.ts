@@ -72,7 +72,7 @@ export const CONFIRM_DECISION_ACTION = "confirm_decision";
 
 /** Said privately to someone whose Confirm was refused (decision 201). */
 export const notAllowedText =
-  "Only people who wrote to me in this thread can confirm this decision. Mention me here to take part, then press Confirm again.";
+  "Only people who wrote to me in this thread, or the owner of its area, can confirm this decision. Mention me here to take part, then press Confirm again.";
 
 /** What a person who pressed Confirm is told privately, when anything but done. */
 const privateConfirmTexts: Partial<Record<ConfirmDecisionResult["status"], string>> = {

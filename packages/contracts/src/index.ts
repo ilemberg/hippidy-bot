@@ -1,4 +1,5 @@
 export * from "./agent-tools.ts";
+export * from "./areas.ts";
 export * from "./changes.ts";
 export * from "./conversations.ts";
 export * from "./decisions.ts";

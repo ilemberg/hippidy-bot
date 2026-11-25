@@ -246,6 +246,15 @@ async function permission(
   if (place.source !== person.source || place.workspace_id !== person.workspaceId) {
     return undefined;
   }
+  // The owner of its area may act on it too (G11 from slice 3.1, decision 206).
+  if (place.area !== null) {
+    const owns = await db.query(
+      `select 1 from areas
+       where source = $1 and workspace_id = $2 and name = lower($3) and owner_actor_id = $4`,
+      [person.source, person.workspaceId, place.area, person.actorId],
+    );
+    if (owns.length > 0) return { kind: "may" };
+  }
   if (place.origin === "capture") {
     return (place.confirmable_by ?? []).includes(person.actorId)
       ? { kind: "may" }
