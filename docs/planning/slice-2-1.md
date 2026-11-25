@@ -1,6 +1,7 @@
 # Slice 2.1: one bot, everyone trusted
 
-Status: **planned 2026-11-25 (decisions 181 to 183). Nothing is built.** The wave is in
+Status: **planned 2026-11-25 (decisions 181 to 183). Part A, the probe, is built and waits
+to be merged and run by hand; nothing else is built.** The wave is in
 `wave-2.md`; the direction in `team-layer.md`. G1 is answered by this plan (181), G3 is
 answered (182), G2 is deferred. G17 and G18 are open and block part D.
 
@@ -60,7 +61,7 @@ role, and nobody is routed by who they are.
 | Who talks to it | Every new thread | Only the API, with a brief |
 | Reads | The thread, Jira, Confluence, the repository's `main` (tokenless mount, as the product agent today, 167) | Its brief, the repository, its own pull requests and CI logs |
 | Writes | Slack replies, Jira and Confluence (no delete), the API's custom tools | Branches and pull requests on the repository |
-| Credentials | Atlassian's, in its own vault | GitHub's: the repository resource and the vault for its MCP server, as today (130) |
+| Credentials | Atlassian's, in a vault of its own | GitHub's: the repository resource, and a vault of its own for its MCP server |
 | Environment | New, `hippidy-bot-teammate`: MCP servers only, no package registries, no hosts (part A checks this works) | `hippidy-bot`, as today |
 | Definition | `agents/teammate.md` | `agents/hippidy.md`, prompt rewritten |
 
@@ -159,7 +160,25 @@ Each is its own pull request. A to C change nothing a person sees and can merge 
 | B | **Schema**: `agent_sessions`, `changes` (thread, who asked, status, the worker's session) and `change_briefs` (append-only: the text, whether a start was needed and why, who started it, when). Additive (86) | No |
 | C | **The loop per session**: lease, sync and reconcile per `agent_sessions` row; one `legacy` row per existing conversation | No |
 | D | **The brief**: `start_change`, the start rule, posting the brief, the Start button and its route, starting the worker, the worker's reports into the teammate's next message | Yes, but nothing calls it until E |
-| E | **The agents**: `agents/teammate.md`, `environments/teammate.yaml`, the worker's prompt, new threads to the teammate, the product agent takes no new threads, the README | **Yes**: every new thread |
+| E | **The agents**: `agents/teammate.md`, `environments/teammate.yaml`, the worker's prompt, one vault per agent, new threads to the teammate, the product agent takes no new threads, the README | **Yes**: every new thread |
+
+**One vault per agent.** Today the sync keeps one vault, `hippidy-bot`, with both the GitHub
+and the Atlassian credential, and every session attaches it (`apps/api/scripts/sync-lib.ts`).
+A credential is only used for an MCP server the agent declares, so this holds rule 1 today,
+but one wrong line in an agent file would hand the teammate GitHub's token. Part E splits it:
+the teammate's sessions attach a vault with Atlassian's credential only, the worker's a vault
+with GitHub's only.
+
+**Part A as built.** `.github/workflows/teammate-probe.yml` runs
+`apps/api/scripts/teammate-probe.ts` from `main`, by hand. It makes a throwaway environment
+(MCP servers only), a vault with Atlassian's credential only and an agent with bash and one
+read-only Atlassian tool, mounts the public repository without a token, and has the session
+run a fixed script with bash: fetch `main`, fetch `refs/pull/*`, list refs, push a branch,
+clone another repository, reach eight public hosts and npm. The report is read from the tool
+results in the record, not from what the agent says, and judged against this plan: the run
+fails if a push is accepted, a host or registry is reached, or the mount is not `main`. Its
+G18 line says whether the start rule can rest on Atlassian calls alone. Everything it made is
+removed at the end, and a branch is deleted if the push it expects to be refused was not.
 
 By hand, the owner's: before D, add interactivity to the Slack app's manifest and reinstall
 it (G17).
