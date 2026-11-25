@@ -179,16 +179,21 @@ export async function finishSignIn(request: Request, deps: AuthDeps): Promise<Re
 }
 
 /**
- * `POST /auth/signout`: ends the session in this browser. Only from this app's own pages: a
- * form on another site would otherwise sign people out (the browser's `Origin`, or
- * `Sec-Fetch-Site`, says where the form was).
+ * Whether a form post came from this app's own pages: the browser's `Origin`, or
+ * `Sec-Fetch-Site`, says where the form was. A request that says neither is refused.
  */
-export function signOut(request: Request, deps: Pick<AuthDeps, "config" | "log">): Response {
+export function fromThisApp(request: Request, config: WebConfig | undefined): boolean {
   const origin = request.headers.get("origin");
   const site = request.headers.get("sec-fetch-site");
-  const sameOrigin =
-    site === "same-origin" || (origin !== null && origin === deps.config?.webBaseUrl);
-  if (!sameOrigin) {
+  return site === "same-origin" || (origin !== null && origin === config?.webBaseUrl);
+}
+
+/**
+ * `POST /auth/signout`: ends the session in this browser. Only from this app's own pages: a
+ * form on another site would otherwise sign people out.
+ */
+export function signOut(request: Request, deps: Pick<AuthDeps, "config" | "log">): Response {
+  if (!fromThisApp(request, deps.config)) {
     deps.log.warn("signin.signout_refused", { reason: "cross_origin" });
     return new Response("Sign-out must come from this app.", { status: 403 });
   }

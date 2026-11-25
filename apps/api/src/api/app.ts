@@ -14,6 +14,8 @@ import {
   MAX_INBOUND_MESSAGE_BYTES,
   confirmDecisionRequestSchema,
   listDecisionsQuerySchema,
+  editDecisionRequestSchema,
+  personDecisionActionSchema,
   startBriefRequestSchema,
   type DecisionList,
   stopRequestSchema,
@@ -48,7 +50,13 @@ import {
 import { requireServiceOrPerson, requireServiceToken } from "./auth.ts";
 import { startBriefByPerson, syncChange } from "./changes.ts";
 import { runCapture, type CaptureDeps } from "./capture.ts";
-import { confirmDecisionByPerson } from "./decisions.ts";
+import {
+  confirmDecisionByPerson,
+  decisionDetail,
+  editDecisionByPerson,
+  rejectDecisionByPerson,
+} from "./decisions.ts";
+import type { DecisionActor } from "../store/decisions.ts";
 import {
   reconcile,
   receiveMessage,
@@ -257,41 +265,126 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
     },
   );
 
-  // A person confirms a proposed decision (slice 2.2, decision 192), from the source it was
-  // posted in. The decision must belong to a thread in their source and workspace.
-  api.post(
-    "/v1/decisions/:decisionId/confirm",
-    requireServiceToken(deps.config.serviceToken),
-    limitBody,
-    async (c) => {
+  // Who may call with a person token as well as the service token (decisions 193 and 194).
+  const people = requireServiceOrPerson(deps.config.serviceToken, deps.config.personAuth);
+
+  /**
+   * Who acts on a decision: a signed-in person is who their token says, and their body must be
+   * empty of anyone else; the service token (Slack) names the person who pressed (202).
+   */
+  const actorOf = (
+    caller: ApiEnv["Variables"]["caller"],
+    body: unknown,
+  ): DecisionActor | undefined => {
+    if (caller.kind === "person") {
+      return {
+        source: "slack",
+        workspaceId: caller.workspaceId,
+        actorId: caller.actorId,
+        name: caller.name,
+      };
+    }
+    const parsed = confirmDecisionRequestSchema.safeParse(body);
+    return parsed.success
+      ? {
+          source: parsed.data.source,
+          workspaceId: parsed.data.workspaceId,
+          actorId: parsed.data.actor.id,
+          name: parsed.data.actor.displayName ?? null,
+        }
+      : undefined;
+  };
+
+  async function jsonBody(c: Context<ApiEnv>): Promise<{ body: unknown } | undefined> {
+    try {
+      return { body: await c.req.json() };
+    } catch {
+      return undefined;
+    }
+  }
+
+  // A person confirms or rejects a proposed decision (slices 2.2 and 2.6, decisions 192 and
+  // 201): from Slack, through the service token, or from the web app, signed in.
+  for (const action of ["confirm", "reject"] as const) {
+    api.post(`/v1/decisions/:decisionId/${action}`, people, limitBody, async (c) => {
       const decisionId = conversationIdSchema.safeParse(c.req.param("decisionId"));
       if (!decisionId.success) return errorResponse(c, 404, "not_found", "No such decision");
-      let body: unknown;
-      try {
-        body = await c.req.json();
-      } catch {
+      const read = await jsonBody(c);
+      if (read === undefined) {
         return errorResponse(c, 400, "invalid_request", "Request body must be JSON");
       }
-      const parsed = confirmDecisionRequestSchema.safeParse(body);
-      if (!parsed.success) {
+      const caller = c.var.caller;
+      // A person sends only the wording they saw; the service names who pressed, and a Slack
+      // button means the wording first posted, 1 (decision 203).
+      let wordingVersion: number | undefined;
+      if (caller.kind === "person") {
+        const own = personDecisionActionSchema.safeParse(read.body);
+        if (!own.success) {
+          return errorResponse(c, 400, "invalid_request", "Request body must be the wording seen");
+        }
+        wordingVersion = own.data.wordingVersion;
+      } else {
+        wordingVersion =
+          confirmDecisionRequestSchema.safeParse(read.body).data?.wordingVersion ?? 1;
+      }
+      const person = actorOf(caller, read.body);
+      if (person === undefined) {
         return errorResponse(c, 400, "invalid_request", "Request body is invalid");
       }
       if (deps.conversations === undefined) {
         return errorResponse(c, 503, "not_configured", "Conversations are not configured");
       }
-      const result = await confirmDecisionByPerson(
-        deps.conversations,
-        decisionId.data,
-        parsed.data,
-        c.var.log,
+      if (action === "confirm") {
+        const result = await confirmDecisionByPerson(
+          deps.conversations,
+          decisionId.data,
+          {
+            source: person.source,
+            workspaceId: person.workspaceId,
+            actor:
+              person.name === null
+                ? { id: person.actorId }
+                : { id: person.actorId, displayName: person.name },
+            wordingVersion,
+          },
+          c.var.log,
+        );
+        return c.json(result, 202);
+      }
+      return c.json(
+        await rejectDecisionByPerson(
+          deps.conversations,
+          decisionId.data,
+          person,
+          wordingVersion,
+          c.var.log,
+        ),
       );
-      return c.json(result, 202);
-    },
-  );
+    });
+  }
+
+  // A signed-in person rewords a proposal before it is confirmed (slice 2.6, decision 201).
+  api.patch("/v1/decisions/:decisionId", people, limitBody, async (c) => {
+    const decisionId = conversationIdSchema.safeParse(c.req.param("decisionId"));
+    if (!decisionId.success) return errorResponse(c, 404, "not_found", "No such decision");
+    const caller = c.var.caller;
+    if (caller.kind !== "person") {
+      return errorResponse(c, 400, "invalid_request", "Only a signed-in person edits a decision");
+    }
+    const read = await jsonBody(c);
+    const edit = editDecisionRequestSchema.safeParse(read?.body);
+    if (!edit.success) return errorResponse(c, 400, "invalid_request", "Request body is invalid");
+    const db = deps.conversations?.db ?? deps.status.db;
+    if (db === undefined) {
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    }
+    const person = actorOf(caller, undefined);
+    if (person === undefined) return errorResponse(c, 400, "invalid_request", "No person");
+    return c.json(await editDecisionByPerson(db, decisionId.data, person, edit.data, c.var.log));
+  });
 
   // Who the API takes the caller to be: a service, or a person signed in to the web app
   // (decisions 193 and 194). The web app reads it to show who is signed in.
-  const people = requireServiceOrPerson(deps.config.serviceToken, deps.config.personAuth);
   api.get("/v1/me", people, (c) => {
     const caller = c.var.caller;
     const body: MeResponse =
@@ -429,6 +522,29 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
 
   // The decisions on record (slice 2.2): read from the database alone, newest or best matching
   // first. The web app's wiki (slice 2.6) builds on this.
+  // One decision by its number, its history, and what the signed-in person may do (2.6).
+  api.get("/v1/decisions/:number", readers, async (c) => {
+    const number = z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(1_000_000_000)
+      .safeParse(c.req.param("number"));
+    if (!number.success) return errorResponse(c, 404, "not_found", "No such decision");
+    const db = deps.conversations?.db ?? deps.status.db;
+    if (db === undefined) {
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    }
+    const caller = c.var.caller;
+    const detail = await decisionDetail(
+      db,
+      number.data,
+      caller.kind === "person" ? actorOf(caller, undefined) : undefined,
+    );
+    if (detail === undefined) return errorResponse(c, 404, "not_found", "No such decision");
+    return c.json(detail);
+  });
+
   api.get("/v1/decisions", readers, async (c) => {
     const query = listDecisionsQuerySchema.safeParse(c.req.query());
     if (!query.success) return invalidQuery(c, query.error);
@@ -439,7 +555,12 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
     const list: DecisionList = {
       decisions: await searchDecisions(db, {
         query: query.data.q,
-        statuses: query.data.status === undefined ? undefined : [query.data.status],
+        statuses:
+          query.data.status === undefined
+            ? undefined
+            : query.data.status === "all"
+              ? ["active", "proposed", "superseded", "rejected"]
+              : [query.data.status],
         origin: query.data.origin,
         limit: query.data.limit,
       }),

@@ -127,19 +127,25 @@ describe("record_decision (decision 192)", () => {
     expect(post).toMatchObject({ needsConfirm: true });
     expect(post?.text).toContain("read with atlassian.getJiraIssue first");
 
-    const person = {
+    // Grace never wrote to the bot in this thread, so she may not confirm it (201).
+    const grace = {
       source: "slack" as const,
       workspaceId: "T1",
       actor: { id: "U2", displayName: "Grace" },
     };
+    expect(await confirmDecisionByPerson(deps, post?.decisionId ?? "", grace, log)).toEqual({
+      status: "not_allowed",
+      reason: "not_in_thread",
+    });
+    const person = { ...grace, actor: { id: "U1", displayName: "Ada" } };
     expect(await confirmDecisionByPerson(deps, post?.decisionId ?? "", person, log)).toEqual({
       status: "confirmed",
     });
     expect(await stored(output.number)).toMatchObject({
       status: "active",
-      confirmed_by_actor_id: "U2",
+      confirmed_by_actor_id: "U1",
     });
-    expect(slack.replies()).toContain(decisionTexts.confirmed(output.number, "Grace"));
+    expect(slack.replies()).toContain(decisionTexts.confirmed(output.number, "Ada"));
     expect(await confirmDecisionByPerson(deps, post?.decisionId ?? "", person, log)).toEqual({
       status: "not_proposed",
     });
@@ -244,10 +250,11 @@ describe("recall (slice 2.2)", () => {
 });
 
 describe("what the review of part C found (decision 195)", () => {
+  // Ada wrote in the thread, so she may confirm (201).
   const person = {
     source: "slack" as const,
     workspaceId: "T1",
-    actor: { id: "U2", displayName: "Grace" },
+    actor: { id: "U1", displayName: "Ada" },
   };
 
   it("only proposes a decision when other people's words came with the message", async () => {

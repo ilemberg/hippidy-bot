@@ -215,7 +215,7 @@ async function recordDecisionFor(
     messageId: turn?.actorId === input.decidedBy.actorId ? turn.messageId : null,
     statement: input.statement,
     reason: input.reason,
-    area: input.area,
+    area: input.area === undefined ? undefined : input.area.toLowerCase(),
     decidedBy: {
       ...decider,
       name: await actorNameInConversation(db, conversationId, input.decidedBy.actorId),

@@ -416,6 +416,7 @@ describe("schema", () => {
     "change_briefs",
     "changes",
     "conversations",
+    "decision_events",
     "decisions",
     "deliveries",
     "inbound_messages",
