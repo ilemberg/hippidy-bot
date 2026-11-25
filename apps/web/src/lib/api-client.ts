@@ -1,16 +1,26 @@
 import {
+  areaActionResultSchema,
+  areaDetailSchema,
+  areaListSchema,
   CORRELATION_ID_HEADER,
   decisionActionResultSchema,
   decisionDetailSchema,
   decisionListSchema,
   listeningListSchema,
+  peopleListSchema,
   sessionListSchema,
+  type AreaActionResult,
+  type AreaDetail,
+  type AreaList,
+  type CreateAreaRequest,
   type Decision,
   type DecisionActionResult,
   type DecisionDetail,
   type DecisionStatus,
+  type EditAreaRequest,
   type EditDecisionRequest,
   type ListeningList,
+  type PeopleList,
   type SessionActivity,
 } from "@hippidy/contracts";
 import type { z } from "zod";
@@ -209,4 +219,54 @@ export function editDecision(
 ): Promise<ApiResult<DecisionActionResult>> {
   const route = decisionRoute(decisionId);
   return apiSend(person, "PATCH", route, edit, decisionActionResultSchema, deps);
+}
+
+/** `GET /v1/areas` as the person: every area of the workspace, and who decides for the unowned. */
+export function fetchAreas(person: Person, deps: ApiClientDeps): Promise<ApiResult<AreaList>> {
+  return apiGet(person, "/v1/areas", areaListSchema, deps);
+}
+
+/** An area looked up by its name: found, not on record, or why the API gave nothing. */
+export type AreaLookup = ApiResult<AreaDetail> | { kind: "not_found" };
+
+/** `GET /v1/areas/:name` as the person: one area and its history, oldest first. */
+export async function fetchArea(
+  person: Person,
+  name: string,
+  deps: ApiClientDeps,
+): Promise<AreaLookup> {
+  const route = `/v1/areas/${encodeURIComponent(name)}`;
+  const result = await apiGet(person, route, areaDetailSchema, deps);
+  return result.kind === "failed" && result.reason === "status_404"
+    ? { kind: "not_found" }
+    : result;
+}
+
+/** `GET /v1/people` as the person: the people the record knows, for choosing an owner. */
+export async function fetchPeople(
+  person: Person,
+  deps: ApiClientDeps,
+): Promise<ApiResult<PeopleList["people"]>> {
+  const result = await apiGet(person, "/v1/people", peopleListSchema, deps);
+  return result.kind === "ok" ? { kind: "ok", value: result.value.people } : result;
+}
+
+/** `POST /v1/areas` as the person, whom the API takes from the token. */
+export function createArea(
+  person: Person,
+  area: CreateAreaRequest,
+  deps: ApiClientDeps,
+): Promise<ApiResult<AreaActionResult>> {
+  return apiSend(person, "POST", "/v1/areas", area, areaActionResultSchema, deps);
+}
+
+/** `PATCH /v1/areas/:id` as the person: what changes, on the version the form showed. */
+export function editArea(
+  person: Person,
+  areaId: string,
+  edit: EditAreaRequest,
+  deps: ApiClientDeps,
+): Promise<ApiResult<AreaActionResult>> {
+  const route = `/v1/areas/${encodeURIComponent(areaId)}`;
+  return apiSend(person, "PATCH", route, edit, areaActionResultSchema, deps);
 }

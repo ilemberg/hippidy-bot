@@ -133,8 +133,8 @@ function View({ view }: { view: DecisionsView }) {
             </p>
           ) : null}
           <footer className="muted">
-            <a href="/">Agents at work</a> · <a href="/listening">Listening in channels</a> · Signed
-            in as {view.person.name}.
+            <a href="/">Agents at work</a> · <a href="/areas">Areas</a> ·{" "}
+            <a href="/listening">Listening in channels</a> · Signed in as {view.person.name}.
           </footer>
         </>
       );

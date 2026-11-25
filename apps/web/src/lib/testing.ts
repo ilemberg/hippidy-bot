@@ -6,12 +6,12 @@ import {
   type CryptoKey,
   type JWTVerifyGetKey,
 } from "jose";
-import type { Decision, DecisionDetail } from "@hippidy/contracts";
+import type { Area, AreaDetail, Decision, DecisionDetail } from "@hippidy/contracts";
 import type { WebConfig } from "./config.ts";
 import { SLACK_TEAM_CLAIM } from "./slack-oidc.ts";
 
-// Test helpers: a stand-in for Slack's signing keys and its id tokens, and a decision as the
-// API returns it. Nothing here reaches the network.
+// Test helpers: a stand-in for Slack's signing keys and its id tokens, and a decision and an
+// area as the API returns them. Nothing here reaches the network.
 
 export const config: WebConfig = {
   slack: {
@@ -101,4 +101,50 @@ export const proposalDetail: DecisionDetail = {
   decision: proposal,
   history: [],
   youMay: { act: true, reason: null },
+};
+
+/** An area owned by Ada, as the API returns it (slice 3.1). */
+export const area: Area = {
+  id: "3c2b1a0f-9e8d-4c7b-8a6f-5e4d3c2b1a0f",
+  name: "search",
+  description: "Finding decisions and messages",
+  owner: { actorId: "U1", name: "Ada" },
+  paths: ["apps/api/src/store/decisions.ts"],
+  words: ["full-text", "ranking"],
+  version: 2,
+  createdBy: { actorId: "U2", name: "Grace" },
+  createdAt: "2026-11-25T09:00:00.000Z",
+  updatedAt: "2026-11-25T10:00:00.000Z",
+};
+
+/** An area's fields, as its history keeps them. */
+function fieldsOf(a: Area): AreaDetail["history"][number]["after"] {
+  return {
+    name: a.name,
+    description: a.description,
+    owner: a.owner,
+    paths: a.paths,
+    words: a.words,
+  };
+}
+
+/** `GET /v1/areas/search`: created by Grace, then given to Ada. */
+export const areaDetail: AreaDetail = {
+  area,
+  history: [
+    {
+      kind: "created",
+      actor: { actorId: "U2", name: "Grace" },
+      at: "2026-11-25T09:00:00.000Z",
+      before: null,
+      after: { ...fieldsOf(area), owner: null },
+    },
+    {
+      kind: "edited",
+      actor: { actorId: "U2", name: "Grace" },
+      at: "2026-11-25T10:00:00.000Z",
+      before: { ...fieldsOf(area), owner: null },
+      after: fieldsOf(area),
+    },
+  ],
 };

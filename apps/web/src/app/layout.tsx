@@ -45,7 +45,7 @@ const styles = `
   .status-rejected, .status-superseded { color: var(--muted); }
   .search { display: flex; gap: 0.5rem; margin: 1rem 0 0.5rem; }
   .search input { flex: 1; min-width: 0; }
-  input, textarea { font: inherit; color: inherit; background: transparent; padding: 0.4rem 0.5rem;
+  input, textarea, select { font: inherit; color: inherit; background: transparent; padding: 0.4rem 0.5rem;
     border: 1px solid rgba(127,127,127,0.5); border-radius: 6px; box-sizing: border-box; }
   .filters { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; font-size: 0.9rem; }
   .statement { font-size: 1.1rem; font-weight: 600; overflow-wrap: anywhere; }
@@ -56,7 +56,7 @@ const styles = `
   .buttons { display: flex; gap: 0.75rem; margin: 0.5rem 0; }
   .button-danger { border-color: var(--danger); color: var(--danger); }
   .edit label { display: block; margin: 0.75rem 0; }
-  .edit textarea, .edit input { display: block; width: 100%; margin-top: 0.25rem; }
+  .edit textarea, .edit input, .edit select { display: block; width: 100%; margin-top: 0.25rem; }
   .change { font-size: 0.95rem; white-space: pre-wrap; }
 `;
 

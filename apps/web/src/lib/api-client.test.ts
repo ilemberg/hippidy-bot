@@ -4,6 +4,11 @@ import { describe, expect, it } from "vitest";
 import {
   apiSend,
   confirmDecision,
+  createArea,
+  editArea,
+  fetchArea,
+  fetchAreas,
+  fetchPeople,
   editDecision,
   fetchDecision,
   fetchDecisions,
@@ -11,7 +16,13 @@ import {
 } from "./api-client.ts";
 import { memoryLogger } from "./log.ts";
 import type { Fetch } from "./slack-oidc.ts";
-import { config, proposal as decision, proposalDetail as detail } from "./testing.ts";
+import {
+  area,
+  areaDetail,
+  config,
+  proposal as decision,
+  proposalDetail as detail,
+} from "./testing.ts";
 import type { Person } from "./tokens.ts";
 
 const person: Person = { actorId: "U0123456789", workspaceId: "T0123456789", name: "Ilya" };
@@ -176,5 +187,103 @@ describe("confirm, reject and edit", () => {
     expect(
       await apiSend(person, "POST", "/v1/x", {}, decisionActionResultSchema, deps(odd.fetch)),
     ).toEqual({ kind: "failed", reason: "unexpected_response" });
+  });
+});
+
+describe("areas and people", () => {
+  it("reads every area and the people known, as the person", async () => {
+    const list = { areas: [area], fallbackOwner: { actorId: "U9", name: "Owner" } };
+    const people = { people: [{ actorId: "U1", name: "Ada" }] };
+    const api = fakeApi((call) => Response.json(call.url.endsWith("/v1/people") ? people : list));
+    expect(await fetchAreas(person, deps(api.fetch))).toEqual({ kind: "ok", value: list });
+    expect(await fetchPeople(person, deps(api.fetch))).toEqual({
+      kind: "ok",
+      value: people.people,
+    });
+    expect(api.calls.map(({ url, method }) => [method, url])).toEqual([
+      ["GET", "https://api.example.test/v1/areas"],
+      ["GET", "https://api.example.test/v1/people"],
+    ]);
+    for (const call of api.calls) expect(await tokenSubject(call.headers)).toBe("U0123456789");
+  });
+
+  it("reads one area by its name, encoded as one segment, and tells not found apart", async () => {
+    const api = fakeApi(() => Response.json(areaDetail));
+    expect(await fetchArea(person, "apps/api search", deps(api.fetch))).toEqual({
+      kind: "ok",
+      value: areaDetail,
+    });
+    expect(api.calls[0]?.url).toBe("https://api.example.test/v1/areas/apps%2Fapi%20search");
+    const missing = fakeApi(() =>
+      Response.json({ error: { code: "not_found", message: "No such area" } }, { status: 404 }),
+    );
+    expect(await fetchArea(person, "search", deps(missing.fetch))).toEqual({ kind: "not_found" });
+    const down = fakeApi(() => new Response(null, { status: 503 }));
+    expect(await fetchArea(person, "search", deps(down.fetch))).toEqual({
+      kind: "failed",
+      reason: "status_503",
+    });
+    expect(await fetchPeople(person, deps(down.fetch))).toEqual({
+      kind: "failed",
+      reason: "status_503",
+    });
+    const odd = fakeApi(() => Response.json({ areas: [{ name: "search" }] }));
+    expect(await fetchAreas(person, deps(odd.fetch))).toEqual({
+      kind: "failed",
+      reason: "unexpected_response",
+    });
+  });
+
+  it("creates with a POST and edits with a PATCH to the area's id, naming no one else", async () => {
+    const api = fakeApi((call) =>
+      call.method === "POST"
+        ? Response.json({ status: "created", area }, { status: 201 })
+        : Response.json({ status: "changed", area }),
+    );
+    expect(
+      await createArea(
+        person,
+        { name: "search", ownerActorId: "U1", words: ["full-text"] },
+        deps(api.fetch),
+      ),
+    ).toEqual({ kind: "ok", value: { status: "created", area } });
+    expect(
+      await editArea(person, area.id, { version: 2, ownerActorId: null }, deps(api.fetch)),
+    ).toEqual({ kind: "ok", value: { status: "changed", area } });
+    expect(api.calls.map(({ url, method, body }) => ({ url, method, body }))).toEqual([
+      {
+        url: "https://api.example.test/v1/areas",
+        method: "POST",
+        body: { name: "search", ownerActorId: "U1", words: ["full-text"] },
+      },
+      {
+        url: `https://api.example.test/v1/areas/${area.id}`,
+        method: "PATCH",
+        body: { version: 2, ownerActorId: null },
+      },
+    ]);
+    for (const call of api.calls) {
+      expect(call.headers.get("content-type")).toBe("application/json");
+      expect(call.headers.get("x-correlation-id")).toBe("corr-1");
+      expect(await tokenSubject(call.headers)).toBe("U0123456789");
+    }
+  });
+
+  it("reports a refused, unreachable or odd write as failed", async () => {
+    const bad = fakeApi(() => Response.json({ error: {} }, { status: 400 }));
+    expect(await createArea(person, { name: "search" }, deps(bad.fetch))).toEqual({
+      kind: "failed",
+      reason: "status_400",
+    });
+    const down: Fetch = () => Promise.reject(new Error("connection refused"));
+    expect(await editArea(person, area.id, { version: 1 }, deps(down))).toEqual({
+      kind: "failed",
+      reason: "unreachable",
+    });
+    const odd = fakeApi(() => Response.json({ status: "moved" }));
+    expect(await editArea(person, area.id, { version: 1 }, deps(odd.fetch))).toEqual({
+      kind: "failed",
+      reason: "unexpected_response",
+    });
   });
 });
