@@ -109,11 +109,11 @@ describe("confirm, reject and edit", () => {
         { status: call.url.endsWith("/confirm") ? 202 : 200 },
       ),
     );
-    expect(await confirmDecision(person, decision.id, deps(api.fetch))).toEqual({
+    expect(await confirmDecision(person, decision.id, 1, deps(api.fetch))).toEqual({
       kind: "ok",
       value: { status: "confirmed" },
     });
-    expect(await rejectDecision(person, decision.id, deps(api.fetch))).toEqual({
+    expect(await rejectDecision(person, decision.id, 1, deps(api.fetch))).toEqual({
       kind: "ok",
       value: { status: "rejected" },
     });
@@ -121,12 +121,12 @@ describe("confirm, reject and edit", () => {
       {
         url: `https://api.example.test/v1/decisions/${decision.id}/confirm`,
         method: "POST",
-        body: {},
+        body: { wordingVersion: 1 },
       },
       {
         url: `https://api.example.test/v1/decisions/${decision.id}/reject`,
         method: "POST",
-        body: {},
+        body: { wordingVersion: 1 },
       },
     ]);
     for (const call of api.calls) {
@@ -141,14 +141,14 @@ describe("confirm, reject and edit", () => {
     const result = await editDecision(
       person,
       decision.id,
-      { statement: "Use Postgres full-text search", reason: null },
+      { statement: "Use Postgres full-text search", reason: null, wordingVersion: 1 },
       deps(api.fetch),
     );
     expect(result).toEqual({ kind: "ok", value: { status: "edited" } });
     expect(api.calls[0]).toMatchObject({
       url: `https://api.example.test/v1/decisions/${decision.id}`,
       method: "PATCH",
-      body: { statement: "Use Postgres full-text search", reason: null },
+      body: { statement: "Use Postgres full-text search", reason: null, wordingVersion: 1 },
     });
   });
 
@@ -156,17 +156,19 @@ describe("confirm, reject and edit", () => {
     const refused = fakeApi(() =>
       Response.json({ status: "not_allowed", reason: "not_in_thread" }),
     );
-    expect(await confirmDecision(person, decision.id, deps(refused.fetch))).toEqual({
+    expect(await confirmDecision(person, decision.id, 1, deps(refused.fetch))).toEqual({
       kind: "ok",
       value: { status: "not_allowed", reason: "not_in_thread" },
     });
     const bad = fakeApi(() => Response.json({ error: {} }, { status: 400 }));
-    expect(await editDecision(person, decision.id, { area: null }, deps(bad.fetch))).toEqual({
+    expect(
+      await editDecision(person, decision.id, { area: null, wordingVersion: 1 }, deps(bad.fetch)),
+    ).toEqual({
       kind: "failed",
       reason: "status_400",
     });
     const down: Fetch = () => Promise.reject(new Error("connection refused"));
-    expect(await rejectDecision(person, decision.id, deps(down))).toEqual({
+    expect(await rejectDecision(person, decision.id, 1, deps(down))).toEqual({
       kind: "failed",
       reason: "unreachable",
     });

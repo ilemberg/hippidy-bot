@@ -96,10 +96,13 @@ describe("actOnProposal", () => {
           statement: "We use Postgres full-text search.",
           reason: "Small corpus.",
           area: null,
+          wordingVersion: 1,
         },
       }),
     ).toMatchObject({ status: "edited", decision: { status: "proposed", area: null } });
-    expect(await actOnProposal(db, id, person("U1", "Ada"), { kind: "reject" })).toMatchObject({
+    expect(
+      await actOnProposal(db, id, person("U1", "Ada"), { kind: "reject", wordingVersion: 2 }),
+    ).toMatchObject({
       status: "rejected",
       decision: { status: "rejected", rejectedBy: { actorId: "U1", name: "Ada" } },
     });
@@ -110,7 +113,12 @@ describe("actOnProposal", () => {
       {
         kind: "edited",
         actor: { actorId: "U2", name: "Grace" },
-        before: { statement: "We use Postgres.", reason: null, area: "search" },
+        before: {
+          statement: "We use Postgres.",
+          reason: null,
+          area: "search",
+          decidedBy: { actorId: "U1", name: "Ada" },
+        },
         after: {
           statement: "We use Postgres full-text search.",
           reason: "Small corpus.",
@@ -130,7 +138,12 @@ describe("actOnProposal", () => {
     ).toMatchObject({ status: "not_proposed" });
     const { id } = await captured(["U1"]);
     expect(
-      await actOnProposal(db, id, { ...person("U1"), workspaceId: "T9" }, { kind: "reject" }),
+      await actOnProposal(
+        db,
+        id,
+        { ...person("U1"), workspaceId: "T9" },
+        { kind: "reject", wordingVersion: 1 },
+      ),
     ).toEqual({ status: "not_found" });
   });
 
@@ -173,6 +186,69 @@ async function as(actorId: string) {
   };
 }
 
+describe("what the review of slice 2.6 found (decision 203)", () => {
+  it("refuses a Slack Confirm on wording edited since it was posted", async () => {
+    const { id } = await fromThread();
+    await actOnProposal(db, id, person("U1", "Ada"), {
+      kind: "edit",
+      edit: { statement: "Ship on Fridays.", wordingVersion: 1 },
+    });
+    // A Slack button means the wording first posted, 1.
+    expect(
+      await actOnProposal(db, id, person("U1"), { kind: "confirm", wordingVersion: 1 }),
+    ).toMatchObject({ status: "changed", decision: { status: "proposed", wordingVersion: 2 } });
+  });
+
+  it("puts reworded words in the editor's name, and keeps whose they were", async () => {
+    const { id } = await captured(["U1", "U2"]);
+    const edited = await actOnProposal(db, id, person("U2", "Mallory"), {
+      kind: "edit",
+      edit: { statement: "We skip review.", wordingVersion: 1 },
+    });
+    expect(edited).toMatchObject({
+      status: "edited",
+      decision: { decidedBy: { actorId: "U2", name: "Mallory" }, wordingVersion: 2 },
+    });
+    expect((await decisionHistory(db, id))[0]?.before).toMatchObject({
+      decidedBy: { actorId: "U1", name: "Ada" },
+    });
+    // Ada rewording her own: still hers, and no "decided by" in the history.
+    const own = await captured(["U1"]);
+    await actOnProposal(db, own.id, person("U1", "Ada"), {
+      kind: "edit",
+      edit: { reason: "Because.", wordingVersion: 1 },
+    });
+    expect((await decisionHistory(db, own.id))[0]?.before).not.toHaveProperty("decidedBy");
+  });
+
+  it("records nothing for an edit that changes nothing, and keeps a null character out", async () => {
+    const { id } = await captured(["U1"]);
+    await actOnProposal(db, id, person("U1"), {
+      kind: "edit",
+      edit: { statement: "We use Postgres.", area: "search", wordingVersion: 1 },
+    });
+    expect(await decisionHistory(db, id)).toEqual([]);
+    expect(
+      await actOnProposal(db, id, person("U1"), {
+        kind: "edit",
+        edit: { reason: "a\u0000b", area: "X\u0000", wordingVersion: 1 },
+      }),
+    ).toMatchObject({ status: "edited", decision: { reason: "ab", area: "x" } });
+  });
+
+  it("lists every status with status=all", async () => {
+    await captured(["U1"]);
+    const res = await app().request("/v1/decisions?status=all&limit=500", {
+      headers: await as("U1"),
+    });
+    const statuses = new Set(
+      ((await res.json()) as { decisions: { status: string }[] }).decisions.map((d) => d.status),
+    );
+    // The seeded log has superseded decisions too.
+    expect([...statuses].sort()).toEqual(["active", "proposed", "superseded"]);
+  });
+});
+
 describe("the wiki's routes", () => {
   it("shows a decision with its history and whether the person may act", async () => {
     const { number } = await captured(["U1"]);
@@ -198,7 +274,7 @@ describe("the wiki's routes", () => {
     const patch = await app().request(`/v1/decisions/${id}`, {
       method: "PATCH",
       headers: await as("U1"),
-      body: JSON.stringify({ statement: "Postgres it is." }),
+      body: JSON.stringify({ statement: "Postgres it is.", wordingVersion: 1 }),
     });
     expect(decisionActionResultSchema.parse(await patch.json())).toEqual({ status: "edited" });
 
@@ -213,13 +289,20 @@ describe("the wiki's routes", () => {
     const refused = await app().request(`/v1/decisions/${id}/confirm`, {
       method: "POST",
       headers: await as("U9"),
-      body: "{}",
+      body: JSON.stringify({ wordingVersion: 2 }),
     });
     expect(await refused.json()).toEqual({ status: "not_allowed", reason: "not_in_thread" });
+    // Pressed on the wording before the edit: nothing is done (decision 203).
+    const stale = await app().request(`/v1/decisions/${id}/confirm`, {
+      method: "POST",
+      headers: await as("U1"),
+      body: JSON.stringify({ wordingVersion: 1 }),
+    });
+    expect(await stale.json()).toEqual({ status: "changed" });
     const confirmed = await app().request(`/v1/decisions/${id}/confirm`, {
       method: "POST",
       headers: await as("U1"),
-      body: "{}",
+      body: JSON.stringify({ wordingVersion: 2 }),
     });
     expect(confirmed.status).toBe(202);
     expect(await confirmed.json()).toEqual({ status: "confirmed" });
@@ -230,12 +313,12 @@ describe("the wiki's routes", () => {
     const res = await app().request(`/v1/decisions/${id}/reject`, {
       method: "POST",
       headers: await as("U1"),
-      body: "{}",
+      body: JSON.stringify({ wordingVersion: 1 }),
     });
     expect(await res.json()).toEqual({ status: "rejected" });
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(slack.replies()).toContain(
-      `Decision ${String(number)} rejected by Someone. It is not on record.`,
+      `Decision ${String(number)} rejected by Someone. It stays on record as rejected and is not cited.`,
     );
   });
 
@@ -245,7 +328,7 @@ describe("the wiki's routes", () => {
     const patch = await app().request(`/v1/decisions/${id}`, {
       method: "PATCH",
       headers: service,
-      body: JSON.stringify({ statement: "x" }),
+      body: JSON.stringify({ statement: "x", wordingVersion: 1 }),
     });
     expect(patch.status).toBe(400);
     const confirm = await app().request(`/v1/decisions/${id}/confirm`, {

@@ -100,8 +100,8 @@ describe("loadDecisions", () => {
       deps(api.fetch),
     );
     expect(api.calls.map((call) => call.url).sort()).toEqual([
-      "https://api.example.test/v1/decisions?status=active&limit=100",
-      "https://api.example.test/v1/decisions?status=proposed&limit=100",
+      "https://api.example.test/v1/decisions?status=active&limit=500",
+      "https://api.example.test/v1/decisions?status=proposed&limit=500",
     ]);
     expect(view).toMatchObject({ kind: "signed_in", person, q: undefined, filter: "open" });
     if (view.kind !== "signed_in" || view.groups.kind !== "ok") throw new Error("no groups");
@@ -121,15 +121,15 @@ describe("loadDecisions", () => {
       );
     }
     expect(api.calls.map((call) => call.url)).toEqual([
-      "https://api.example.test/v1/decisions?q=postgres&status=rejected&limit=100",
-      "https://api.example.test/v1/decisions?q=postgres&limit=100",
-      "https://api.example.test/v1/decisions?q=postgres&status=active&limit=100",
-      "https://api.example.test/v1/decisions?q=postgres&status=proposed&limit=100",
+      "https://api.example.test/v1/decisions?q=postgres&status=rejected&limit=500",
+      "https://api.example.test/v1/decisions?q=postgres&status=all&limit=500",
+      "https://api.example.test/v1/decisions?q=postgres&status=active&limit=500",
+      "https://api.example.test/v1/decisions?q=postgres&status=proposed&limit=500",
     ]);
   });
 
   it("says when some may not be shown, and when the API did not answer", async () => {
-    const many = Array.from({ length: 100 }, (_, i) => decision(i + 1, { status: "rejected" }));
+    const many = Array.from({ length: 500 }, (_, i) => decision(i + 1, { status: "rejected" }));
     const full = fakeApi(() => Response.json({ decisions: many }));
     expect(
       await loadDecisions(
@@ -248,7 +248,8 @@ describe("handleDecisionAction", () => {
         ...(options.cookie === undefined ? {} : { cookie: `${SESSION_COOKIE}=${options.cookie}` }),
         ...options.headers,
       },
-      body: new URLSearchParams(options.form ?? {}),
+      // The page's forms always send the wording they showed.
+      body: new URLSearchParams({ wordingVersion: "1", ...(options.form ?? {}) }),
     });
 
   /** The API: the decision by number, and `result` for the action. */
@@ -274,7 +275,7 @@ describe("handleDecisionAction", () => {
       {
         url: `https://api.example.test/v1/decisions/${proposal.id}/confirm`,
         method: "POST",
-        body: {},
+        body: { wordingVersion: 1 },
       },
     ]);
   });
@@ -294,7 +295,7 @@ describe("handleDecisionAction", () => {
     expect(fake.calls[1]).toEqual({
       url: `https://api.example.test/v1/decisions/${proposal.id}/reject`,
       method: "POST",
-      body: {},
+      body: { wordingVersion: 1 },
     });
   });
 
@@ -413,7 +414,11 @@ describe("handleDecisionAction", () => {
     expect(fake.calls[1]).toEqual({
       url: `https://api.example.test/v1/decisions/${proposal.id}`,
       method: "PATCH",
-      body: { statement: "Use Postgres full-text search\nfor now", reason: null },
+      body: {
+        wordingVersion: 1,
+        statement: "Use Postgres full-text search\nfor now",
+        reason: null,
+      },
     });
   });
 
@@ -445,17 +450,55 @@ describe("editFromForm", () => {
   };
 
   it("clears an emptied reason or area, keeps an emptied statement, and leaves out a missing field", () => {
-    expect(editFromForm(form({ statement: "", reason: " ", area: "" }), proposal)).toEqual({
+    const v = { wordingVersion: "1" };
+    expect(editFromForm(form({ ...v, statement: "", reason: " ", area: "" }), proposal)).toEqual({
       kind: "edit",
-      edit: { reason: null, area: null },
+      edit: { wordingVersion: 1, reason: null, area: null },
     });
-    expect(editFromForm(form({ area: "Billing" }), proposal)).toEqual({
+    expect(editFromForm(form({ ...v, area: "Billing" }), proposal)).toEqual({
       kind: "edit",
-      edit: { area: "Billing" },
+      edit: { wordingVersion: 1, area: "Billing" },
     });
     expect(
-      editFromForm(form({ reason: "", area: "" }), { ...proposal, reason: null, area: null }),
+      editFromForm(form({ ...v, reason: "", area: "" }), { ...proposal, reason: null, area: null }),
     ).toEqual({ kind: "unchanged" });
+  });
+
+  it("sends the wording the form showed, and refuses a form without it (decision 203)", () => {
+    expect(editFromForm(form({ wordingVersion: "3", area: "x" }), proposal)).toEqual({
+      kind: "edit",
+      edit: { wordingVersion: 3, area: "x" },
+    });
+    expect(editFromForm(form({ area: "x" }), proposal)).toEqual({ kind: "invalid" });
+    expect(editFromForm(form({ wordingVersion: "0", area: "x" }), proposal)).toEqual({
+      kind: "invalid",
+    });
+  });
+
+  it("says when someone changed the wording meanwhile, and who a proposal was taken over from", () => {
+    expect(noticeText({ kind: "error", error: "changed" }, proposal)).toMatch(/^Someone changed/);
+    const items = historyItems({
+      ...proposalDetail,
+      decision: { ...proposal, decidedBy: { actorId: "U2", name: "Mallory" } },
+      history: [
+        {
+          kind: "edited",
+          actor: { actorId: "U2", name: "Mallory" },
+          at: "2026-11-25T10:00:00.000Z",
+          before: {
+            statement: "Old.",
+            reason: null,
+            area: null,
+            decidedBy: { actorId: "U1", name: "Ada" },
+          },
+          after: { statement: "New.", reason: null, area: null },
+        },
+      ],
+    });
+    expect(items.map((item) => item.text)).toEqual([
+      "Proposed by Ada",
+      "Reworded by Mallory, so it is in their name now",
+    ]);
   });
 });
 

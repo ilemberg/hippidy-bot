@@ -19,8 +19,12 @@ create table public.decision_events (
 
 create index decision_events_decision_idx on public.decision_events (decision_id, seq);
 
--- Who rejected a proposal, and when, on the decision itself, as for confirming.
+-- Who rejected a proposal, and when, on the decision itself, as for confirming. And which
+-- wording a proposal is at: each edit adds one, and a confirm, reject or edit names the
+-- wording it was pressed on, so no one confirms words they never saw. A button in Slack
+-- always means the wording first posted there, 1.
 alter table public.decisions
+  add column wording_version integer not null default 1 check (wording_version >= 1),
   add column rejected_by_actor_id text,
   add column rejected_by_name text,
   add column rejected_at timestamptz;

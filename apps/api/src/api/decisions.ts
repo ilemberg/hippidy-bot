@@ -10,7 +10,6 @@ import { getConversation } from "../store/conversations.ts";
 import type { Db } from "../store/db.ts";
 import {
   actOnProposal,
-  confirmDecision,
   decisionHistory,
   findDecisionByNumber,
   mayAct,
@@ -32,13 +31,37 @@ export const decisionTexts = {
         ? ` It replaces decision ${String(replaced.number)}.`
         : ` Decision ${String(replaced.number)}, which it was to replace, had already been replaced or withdrawn, so it was left as it was.`),
   rejected: (number: number, name: string) =>
-    `Decision ${String(number)} rejected by ${name}. It is not on record.`,
+    `Decision ${String(number)} rejected by ${name}. It stays on record as rejected and is not cited.`,
 } as const;
 
 function actionResult(outcome: ProposalOutcome): DecisionActionResult {
   return outcome.status === "not_allowed"
     ? { status: "not_allowed", reason: outcome.reason }
     : { status: outcome.status };
+}
+
+/**
+ * Posts a note in a thread proposal's thread, once under its key. A failure is logged and does
+ * not fail the action, which has already been saved: a second press posts it then.
+ */
+async function noteInThread(
+  deps: ConversationDeps,
+  conversationId: string,
+  key: string,
+  text: string,
+  log: Logger,
+): Promise<void> {
+  try {
+    const conversation = await getConversation(deps.db, conversationId);
+    await queue(deps, conversation, key, "note", {
+      kind: "reply",
+      target: targetOf(conversation),
+      text,
+    });
+    await flushSoon(deps, conversation.id, log);
+  } catch (error) {
+    log.error("decision.note_failed", { key, error });
+  }
 }
 
 export async function confirmDecisionByPerson(
@@ -48,56 +71,64 @@ export async function confirmDecisionByPerson(
   log: Logger,
 ): Promise<ConfirmDecisionResult> {
   const name = request.actor.displayName ?? `${request.source} user ${request.actor.id}`;
-  const result = await confirmDecision(deps.db, decisionId, {
-    source: request.source,
-    workspaceId: request.workspaceId,
-    actorId: request.actor.id,
-    name: request.actor.displayName ?? null,
-  });
+  const result = await actOnProposal(
+    deps.db,
+    decisionId,
+    {
+      source: request.source,
+      workspaceId: request.workspaceId,
+      actorId: request.actor.id,
+      name: request.actor.displayName ?? null,
+    },
+    { kind: "confirm", wordingVersion: request.wordingVersion },
+  );
   log.info("decision.confirm", { decisionId, status: result.status });
   // Said once, under a key of its own: if saying it failed after the confirmation committed, a
   // second press (which finds the decision no longer proposed) says it then.
   const decision =
     result.status === "confirmed" || result.status === "not_proposed" ? result.decision : undefined;
   if (decision?.confirmedBy != null && decision.conversationId !== null) {
-    const conversation = await getConversation(deps.db, decision.conversationId);
-    await queue(deps, conversation, `confirmed:${decisionId}`, "note", {
-      kind: "reply",
-      target: targetOf(conversation),
-      text: decisionTexts.confirmed(
-        decision.number,
-        decision.confirmedBy.name ?? name,
-        result.replaced,
-      ),
-    });
-    await flushSoon(deps, conversation.id, log);
+    await noteInThread(
+      deps,
+      decision.conversationId,
+      `confirmed:${decisionId}`,
+      decisionTexts.confirmed(decision.number, decision.confirmedBy.name ?? name, result.replaced),
+      log,
+    );
   }
   return actionResult(result);
 }
 
 /**
- * A person rejects a proposal. One the teammate recorded is noted in its thread; one from
- * listening is not, since nothing is posted in a thread that did not mention the bot (176).
+ * A person rejects a proposal, on the wording they saw. One the teammate recorded is noted in
+ * its thread; one from listening is not, since nothing is posted in a thread that did not
+ * mention the bot (176).
  */
 export async function rejectDecisionByPerson(
   deps: ConversationDeps,
   decisionId: string,
   person: DecisionActor,
+  wordingVersion: number,
   log: Logger,
 ): Promise<DecisionActionResult> {
-  const result = await actOnProposal(deps.db, decisionId, person, { kind: "reject" });
+  const result = await actOnProposal(deps.db, decisionId, person, {
+    kind: "reject",
+    wordingVersion,
+  });
   log.info("decision.reject", { decisionId, status: result.status });
-  if (result.status === "rejected" && result.decision.conversationId !== null) {
-    const conversation = await getConversation(deps.db, result.decision.conversationId);
-    await queue(deps, conversation, `rejected:${decisionId}`, "note", {
-      kind: "reply",
-      target: targetOf(conversation),
-      text: decisionTexts.rejected(
-        result.decision.number,
-        person.name ?? `${person.source} user ${person.actorId}`,
+  const decision =
+    result.status === "rejected" || result.status === "not_proposed" ? result.decision : undefined;
+  if (decision?.rejectedBy != null && decision.conversationId !== null) {
+    await noteInThread(
+      deps,
+      decision.conversationId,
+      `rejected:${decisionId}`,
+      decisionTexts.rejected(
+        decision.number,
+        decision.rejectedBy.name ?? `${person.source} user ${decision.rejectedBy.actorId}`,
       ),
-    });
-    await flushSoon(deps, conversation.id, log);
+      log,
+    );
   }
   return actionResult(result);
 }

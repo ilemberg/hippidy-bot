@@ -208,11 +208,13 @@ function Actions({ detail }: { detail: DecisionDetail }) {
       <p className="muted">Confirm it to put it on record, or reject it. Either is noted.</p>
       <div className="buttons">
         <form method="post" action={`${base}/confirm`}>
+          <input type="hidden" name="wordingVersion" value={decision.wordingVersion} />
           <button className="button" type="submit">
             Confirm
           </button>
         </form>
         <form method="post" action={`${base}/reject`}>
+          <input type="hidden" name="wordingVersion" value={decision.wordingVersion} />
           <button className="button button-danger" type="submit">
             Reject
           </button>
@@ -220,6 +222,7 @@ function Actions({ detail }: { detail: DecisionDetail }) {
       </div>
       <h3>Change its wording</h3>
       <form method="post" action={`${base}/edit`} className="edit">
+        <input type="hidden" name="wordingVersion" value={decision.wordingVersion} />
         <label>
           Statement
           <textarea name="statement" defaultValue={decision.statement} maxLength={500} rows={3} />

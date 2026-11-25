@@ -636,6 +636,13 @@ describe("handleConfirmDecisionAction (slice 2.2)", () => {
     ]);
   });
 
+  it("tells a person privately when the wording changed since it was posted (decision 203)", async () => {
+    const { deps, ephemerals } = setup({ confirmResult: { status: "changed" } });
+    const body = { ...press(), channel: { id: "C1" } };
+    expect(await handleConfirmDecisionAction(body, deps)).toBe("changed");
+    expect(ephemerals[0]?.text).toMatch(/^Its wording was changed in the web app/);
+  });
+
   it("confirms the decision as the person who pressed Confirm, with their name", async () => {
     const { deps, confirms, lines } = setup({ userName: () => Promise.resolve("Grace") });
     expect(await handleConfirmDecisionAction(press(), deps)).toBe("confirmed");

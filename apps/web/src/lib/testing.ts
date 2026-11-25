@@ -93,6 +93,7 @@ export const proposal: Decision = {
   confirmedAt: null,
   rejectedBy: null,
   rejectedAt: null,
+  wordingVersion: 1,
 };
 
 /** `GET /v1/decisions/7` for a person who may act on it. */

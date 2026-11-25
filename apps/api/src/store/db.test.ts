@@ -752,7 +752,10 @@ describe("decision history through postgres.js (slice 2.6)", () => {
       db,
       id,
       { source: "slack", workspaceId: "T", actorId: "U1", name: null },
-      { kind: "edit", edit: { statement: 'New \u0000 "quoted".', reason: null } },
+      {
+        kind: "edit",
+        edit: { statement: 'New \u0000 "quoted".', reason: null, wordingVersion: 1 },
+      },
     );
     expect(outcome.status).toBe("edited");
     expect(await db.query(`select jsonb_typeof(after) as type from decision_events`)).toEqual([

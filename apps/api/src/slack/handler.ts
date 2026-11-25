@@ -74,6 +74,14 @@ export const CONFIRM_DECISION_ACTION = "confirm_decision";
 export const notAllowedText =
   "Only people who wrote to me in this thread can confirm this decision. Mention me here to take part, then press Confirm again.";
 
+/** What a person who pressed Confirm is told privately, when anything but done. */
+const privateConfirmTexts: Partial<Record<ConfirmDecisionResult["status"], string>> = {
+  not_allowed: notAllowedText,
+  changed:
+    "Its wording was changed in the web app after it was posted here, so it was not confirmed. Read it under Decisions in the web app, and confirm it there.",
+  not_proposed: "This decision was already confirmed or rejected.",
+};
+
 /** A message that is only "stop" (after the bot's mention), never "don't stop". */
 export function isStopCommand(text: string): boolean {
   return /^stop[.!]?$/i.test(text.trim());
@@ -478,14 +486,15 @@ export async function handleConfirmDecisionAction(
       decisionId: decisionId.data,
       result: confirmed.result.status,
     });
-    // Refused (201): say why, to the person who pressed only.
-    if (confirmed.result.status === "not_allowed" && payload.channel !== undefined) {
+    // Refused, changed or already decided (201, 203): say so, to the person who pressed only.
+    const privately = privateConfirmTexts[confirmed.result.status];
+    if (privately !== undefined && payload.channel !== undefined) {
       const threadTs = payload.container?.thread_ts;
       await deps.slack
         .postEphemeral({
           channel: payload.channel.id,
           user: payload.user.id,
-          text: notAllowedText,
+          text: privately,
           ...(threadTs === undefined ? {} : { threadTs }),
         })
         .catch((error: unknown) => {

@@ -35,6 +35,8 @@ export const decisionSchema = z.strictObject({
   supersedes: z.number().int().positive().nullable(),
   confirmedBy: z.strictObject({ actorId: z.string(), name: z.string().nullable() }).nullable(),
   confirmedAt: z.iso.datetime({ offset: true }).nullable(),
+  /** Which wording it is at: 1 as recorded, one more for each edit (slice 2.6). */
+  wordingVersion: z.number().int().positive(),
   /** Who rejected a proposal, and when (slice 2.6). */
   rejectedBy: z.strictObject({ actorId: z.string(), name: z.string().nullable() }).nullable(),
   rejectedAt: z.iso.datetime({ offset: true }).nullable(),
@@ -44,9 +46,10 @@ export type Decision = z.infer<typeof decisionSchema>;
 /** Query of `GET /v1/decisions`: words to search for, a status, and how many. */
 export const listDecisionsQuerySchema = z.strictObject({
   q: z.string().trim().min(1).max(200).optional(),
-  status: decisionStatusSchema.optional(),
+  /** One status, or `all`; active when left out. */
+  status: z.union([decisionStatusSchema, z.literal("all")]).optional(),
   origin: z.enum(["thread", "import", "capture"]).optional(),
-  limit: z.coerce.number().int().min(1).max(100).default(50),
+  limit: z.coerce.number().int().min(1).max(500).default(50),
 });
 export type ListDecisionsQuery = z.infer<typeof listDecisionsQuerySchema>;
 
@@ -58,6 +61,13 @@ export const confirmDecisionRequestSchema = z.strictObject({
   source: messageSourceSchema,
   workspaceId: id,
   actor: z.strictObject({ id, displayName: z.string().min(1).max(255).optional() }),
+  /** The wording the person saw; a Slack button is the wording first posted, 1. */
+  wordingVersion: z.number().int().positive().optional(),
+});
+
+/** Body of a signed-in person's confirm or reject: only the wording they saw. */
+export const personDecisionActionSchema = z.strictObject({
+  wordingVersion: z.number().int().positive(),
 });
 export type ConfirmDecisionRequest = z.infer<typeof confirmDecisionRequestSchema>;
 
@@ -75,9 +85,18 @@ export type NotAllowedReason = z.infer<typeof notAllowedReasonSchema>;
  * `rejected`: it is rejected now. `edited`: its wording changed; it is still proposed.
  * `not_proposed`: it was already active, superseded or rejected. `not_found`: no such decision
  * in that workspace. `not_allowed`: the person may not act on it, and `reason` says why.
+ * `changed`: its wording changed since the person saw it; nothing was done.
  */
 export const decisionActionResultSchema = z.strictObject({
-  status: z.enum(["confirmed", "rejected", "edited", "not_proposed", "not_found", "not_allowed"]),
+  status: z.enum([
+    "confirmed",
+    "rejected",
+    "edited",
+    "not_proposed",
+    "not_found",
+    "not_allowed",
+    "changed",
+  ]),
   reason: notAllowedReasonSchema.optional(),
 });
 export type DecisionActionResult = z.infer<typeof decisionActionResultSchema>;
@@ -92,6 +111,8 @@ export const editDecisionRequestSchema = z
     statement: z.string().trim().min(1).max(500).optional(),
     reason: z.string().trim().max(2000).nullable().optional(),
     area: z.string().trim().max(100).nullable().optional(),
+    /** The wording the person edited from. */
+    wordingVersion: z.number().int().positive(),
   })
   .refine(
     (edit) => edit.statement !== undefined || edit.reason !== undefined || edit.area !== undefined,
@@ -103,6 +124,10 @@ const wordingSchema = z.strictObject({
   statement: z.string(),
   reason: z.string().nullable(),
   area: z.string().nullable(),
+  /** Before an edit by someone else: who it named as deciding until then (decision 203). */
+  decidedBy: z
+    .strictObject({ actorId: z.string().nullable(), name: z.string().nullable() })
+    .optional(),
 });
 
 /** One change to a decision after it was recorded. */

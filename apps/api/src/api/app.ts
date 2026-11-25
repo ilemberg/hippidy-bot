@@ -15,6 +15,7 @@ import {
   confirmDecisionRequestSchema,
   listDecisionsQuerySchema,
   editDecisionRequestSchema,
+  personDecisionActionSchema,
   startBriefRequestSchema,
   type DecisionList,
   stopRequestSchema,
@@ -70,8 +71,6 @@ import { readStatus, type StatusDeps } from "./status.ts";
 import type { ApiEnv } from "./types.ts";
 
 const conversationIdSchema = z.guid();
-/** A person's confirm or reject carries no body of its own: who acts is their token. */
-const emptyBody = z.strictObject({});
 
 export interface ApiDeps {
   config: ApiConfig;
@@ -315,8 +314,18 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
         return errorResponse(c, 400, "invalid_request", "Request body must be JSON");
       }
       const caller = c.var.caller;
-      if (caller.kind === "person" && !emptyBody.safeParse(read.body).success) {
-        return errorResponse(c, 400, "invalid_request", "Request body must be empty");
+      // A person sends only the wording they saw; the service names who pressed, and a Slack
+      // button means the wording first posted, 1 (decision 203).
+      let wordingVersion: number | undefined;
+      if (caller.kind === "person") {
+        const own = personDecisionActionSchema.safeParse(read.body);
+        if (!own.success) {
+          return errorResponse(c, 400, "invalid_request", "Request body must be the wording seen");
+        }
+        wordingVersion = own.data.wordingVersion;
+      } else {
+        wordingVersion =
+          confirmDecisionRequestSchema.safeParse(read.body).data?.wordingVersion ?? 1;
       }
       const person = actorOf(caller, read.body);
       if (person === undefined) {
@@ -336,13 +345,20 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
               person.name === null
                 ? { id: person.actorId }
                 : { id: person.actorId, displayName: person.name },
+            wordingVersion,
           },
           c.var.log,
         );
         return c.json(result, 202);
       }
       return c.json(
-        await rejectDecisionByPerson(deps.conversations, decisionId.data, person, c.var.log),
+        await rejectDecisionByPerson(
+          deps.conversations,
+          decisionId.data,
+          person,
+          wordingVersion,
+          c.var.log,
+        ),
       );
     });
   }
@@ -539,7 +555,12 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
     const list: DecisionList = {
       decisions: await searchDecisions(db, {
         query: query.data.q,
-        statuses: query.data.status === undefined ? undefined : [query.data.status],
+        statuses:
+          query.data.status === undefined
+            ? undefined
+            : query.data.status === "all"
+              ? ["active", "proposed", "superseded", "rejected"]
+              : [query.data.status],
         origin: query.data.origin,
         limit: query.data.limit,
       }),

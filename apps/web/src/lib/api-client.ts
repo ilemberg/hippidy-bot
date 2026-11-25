@@ -127,7 +127,7 @@ export function fetchListening(
 /** What `GET /v1/decisions` is asked for: words to search for, a status, where from, how many. */
 export interface DecisionsQuery {
   q?: string;
-  status?: DecisionStatus;
+  status?: DecisionStatus | "all";
   origin?: Decision["origin"];
   limit?: number;
 }
@@ -182,20 +182,22 @@ const decisionRoute = (decisionId: string) => `/v1/decisions/${encodeURIComponen
 export function confirmDecision(
   person: Person,
   decisionId: string,
+  wordingVersion: number,
   deps: ApiClientDeps,
 ): Promise<ApiResult<DecisionActionResult>> {
   const route = `${decisionRoute(decisionId)}/confirm`;
-  return apiSend(person, "POST", route, {}, decisionActionResultSchema, deps);
+  return apiSend(person, "POST", route, { wordingVersion }, decisionActionResultSchema, deps);
 }
 
 /** `POST /v1/decisions/:id/reject` as the person. */
 export function rejectDecision(
   person: Person,
   decisionId: string,
+  wordingVersion: number,
   deps: ApiClientDeps,
 ): Promise<ApiResult<DecisionActionResult>> {
   const route = `${decisionRoute(decisionId)}/reject`;
-  return apiSend(person, "POST", route, {}, decisionActionResultSchema, deps);
+  return apiSend(person, "POST", route, { wordingVersion }, decisionActionResultSchema, deps);
 }
 
 /** `PATCH /v1/decisions/:id` as the person: a proposal's new wording. */

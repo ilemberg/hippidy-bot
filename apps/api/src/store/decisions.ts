@@ -15,6 +15,8 @@ const wordingRow = z.object({
   statement: z.string(),
   reason: z.string().nullable(),
   area: z.string().nullable(),
+  /** Who it named as deciding, when an edit by someone else made it theirs. */
+  decidedBy: z.object({ actorId: z.string().nullable(), name: z.string().nullable() }).optional(),
 });
 
 // Decisions on record (slice 2.2, decisions 190 to 192). The API decides whether a recorded
@@ -30,7 +32,7 @@ const columns = `
   coalesce(d.thread_id, c.thread_id) as thread_id, d.message_id,
   s.number::float8 as supersedes,
   d.confirmed_by_actor_id, d.confirmed_by_name, d.confirmed_at,
-  d.rejected_by_actor_id, d.rejected_by_name, d.rejected_at`;
+  d.rejected_by_actor_id, d.rejected_by_name, d.rejected_at, d.wording_version`;
 const from = `decisions d left join decisions s on s.id = d.supersedes_id
   left join conversations c on c.id = d.conversation_id`;
 
@@ -57,6 +59,7 @@ const row = z.object({
   rejected_by_actor_id: z.string().nullable(),
   rejected_by_name: z.string().nullable(),
   rejected_at: z.date().nullable(),
+  wording_version: z.number().int().positive(),
 });
 
 function toDecision(r: Row): Decision {
@@ -87,6 +90,7 @@ function toDecision(r: Row): Decision {
         ? null
         : { actorId: d.rejected_by_actor_id, name: d.rejected_by_name },
     rejectedAt: d.rejected_at === null ? null : d.rejected_at.toISOString(),
+    wordingVersion: d.wording_version,
   };
 }
 
@@ -176,7 +180,9 @@ function emptyToNull(text: string | null): string | null {
 
 /** Confirm, reject or reword a proposal (slices 2.2 and 2.6). */
 export type ProposalAction =
-  { kind: "confirm" } | { kind: "reject" } | { kind: "edit"; edit: EditDecisionRequest };
+  | { kind: "confirm"; wordingVersion?: number | undefined }
+  | { kind: "reject"; wordingVersion: number }
+  | { kind: "edit"; edit: EditDecisionRequest };
 
 export type ProposalOutcome =
   | {
@@ -185,7 +191,11 @@ export type ProposalOutcome =
       /** The decision it replaces, and whether that one was still active to replace. */
       replaced?: { number: number; stillActive: boolean } | undefined;
     }
-  | { status: "rejected" | "edited" | "not_proposed"; decision: Decision; replaced?: undefined }
+  | {
+      status: "rejected" | "edited" | "not_proposed" | "changed";
+      decision: Decision;
+      replaced?: undefined;
+    }
   | { status: "not_allowed"; reason: NotAllowedReason; decision: Decision; replaced?: undefined }
   | { status: "not_found"; decision?: undefined; replaced?: undefined };
 
@@ -200,6 +210,9 @@ const placeRow = z.object({
   statement: z.string(),
   reason: z.string().nullable(),
   area: z.string().nullable(),
+  wording_version: z.number().int().positive(),
+  decided_by_actor_id: z.string().nullable(),
+  decided_by_name: z.string().nullable(),
 });
 type Place = z.infer<typeof placeRow>;
 
@@ -209,7 +222,8 @@ async function readPlace(db: Db, decisionId: string, lock: boolean): Promise<Pla
     `select d.status, d.origin, d.supersedes_id, d.conversation_id, d.confirmable_by,
             coalesce(v.source, d.decided_by_source) as source,
             coalesce(v.workspace_id, d.decided_by_workspace_id) as workspace_id,
-            d.statement, d.reason, d.area
+            d.statement, d.reason, d.area, d.wording_version, d.decided_by_actor_id,
+            d.decided_by_name
      from decisions d left join conversations v on v.id = d.conversation_id
      where d.id = $1 ${lock ? "for update of d" : ""}`,
     [decisionId],
@@ -309,23 +323,62 @@ export async function actOnProposal(
       return { status: "not_allowed", reason: allowed.reason, decision: await current() };
     }
 
+    // Pressed on a wording that has changed since (1 for a Slack button): nothing is done, so
+    // no one confirms or rejects words they never saw (decision 203).
+    const pressedOn = action.kind === "edit" ? action.edit.wordingVersion : action.wordingVersion;
+    if (pressedOn !== undefined && pressedOn !== place.wording_version) {
+      return { status: "changed", decision: await current() };
+    }
+
     if (action.kind === "edit") {
       const before = { statement: place.statement, reason: place.reason, area: place.area };
       const after = {
-        statement: action.edit.statement ?? place.statement,
+        statement: storable(action.edit.statement ?? place.statement),
         // An empty reason or area clears it.
-        reason: action.edit.reason === undefined ? place.reason : emptyToNull(action.edit.reason),
+        reason:
+          action.edit.reason === undefined
+            ? place.reason
+            : emptyToNull(storable(action.edit.reason ?? "")),
         area:
           action.edit.area === undefined
             ? place.area
-            : emptyToNull(action.edit.area?.toLowerCase() ?? null),
+            : emptyToNull(storable(action.edit.area ?? "").toLowerCase()),
       };
+      if (
+        after.statement === before.statement &&
+        after.reason === before.reason &&
+        after.area === before.area
+      ) {
+        return { status: "edited", decision: await current() };
+      }
+      // Reworded by someone other than who it names as deciding: the words are theirs now, so
+      // it is in their name, and the history keeps whose it was (decision 203).
+      const takesOver = place.decided_by_actor_id !== person.actorId;
       await tx.query(
-        `update decisions set statement = $2, reason = $3, area = $4, updated_at = now()
+        `update decisions
+         set statement = $2, reason = $3, area = $4, wording_version = wording_version + 1,
+             updated_at = now()
          where id = $1`,
-        [decisionId, storable(after.statement), after.reason, after.area],
+        [decisionId, after.statement, after.reason, after.area],
       );
-      await recordEvent(tx, decisionId, "edited", person, { before, after });
+      if (takesOver) {
+        await tx.query(
+          `update decisions
+           set decided_by_source = $2, decided_by_workspace_id = $3, decided_by_actor_id = $4,
+               decided_by_name = $5, decided_at = now()
+           where id = $1`,
+          [decisionId, person.source, person.workspaceId, person.actorId, person.name],
+        );
+      }
+      await recordEvent(tx, decisionId, "edited", person, {
+        before: takesOver
+          ? {
+              ...before,
+              decidedBy: { actorId: place.decided_by_actor_id, name: place.decided_by_name },
+            }
+          : before,
+        after,
+      });
       return { status: "edited", decision: await current() };
     }
 

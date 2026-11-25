@@ -1,6 +1,6 @@
 # Slice 2.6: the wiki
 
-Status: **built 2026-11-25, not merged (decisions 201 and 202).** The wave is in `wave-2.md`; the
+Status: **built 2026-11-25, not merged (decisions 201 to 203).** The wave is in `wave-2.md`; the
 direction in `team-layer.md`, "Its records". G11 is answered (198); who may reject, edit and
 supersede is answered by 201.
 
@@ -37,6 +37,12 @@ not write there sees the proposal but no buttons, and is told why.
 The statement (at most 500 characters), the reason (2,000) and the area (100). Each edit is
 kept in `decision_events` with the text before and after, who, and when. Editing does not
 confirm: a person confirms separately, and may be the one who edited it.
+
+Every confirm, reject and edit names the wording it was pressed on (a version, one more per
+edit), and is refused if the wording moved on, so no one confirms words they did not see; a
+button in Slack means the wording first posted there (203). A proposal reworded by someone
+other than the person it names as deciding is in the editor's name from then on, and its
+history keeps whose it was (203).
 
 ## The web app writes for the first time
 

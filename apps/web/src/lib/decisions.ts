@@ -30,7 +30,7 @@ import type { Person } from "./tokens.ts";
 // so it is tested without Next.js; the pages and route files only pass the real dependencies in.
 
 /** The most the API gives in one list. */
-export const DECISIONS_LIMIT = 100;
+export const DECISIONS_LIMIT = 500;
 
 /** Which decisions the list shows. `open` is the default: the active ones and the proposals. */
 export const statusFilters = [
@@ -93,14 +93,16 @@ export function searchWords(q: string | undefined): string | undefined {
 
 /** Decisions by area, areas in alphabetical order and "No area" last, newest first in each. */
 export function groupByArea(decisions: Decision[]): AreaGroup[] {
-  const byArea = new Map<string | null, Decision[]>();
+  // "Search" and "search" are one area, shown as first written.
+  const byArea = new Map<string | null, { area: string | null; list: Decision[] }>();
   for (const decision of decisions) {
-    const group = byArea.get(decision.area);
-    if (group === undefined) byArea.set(decision.area, [decision]);
-    else group.push(decision);
+    const key = decision.area === null ? null : decision.area.toLowerCase();
+    const group = byArea.get(key);
+    if (group === undefined) byArea.set(key, { area: decision.area, list: [decision] });
+    else group.list.push(decision);
   }
-  return [...byArea.entries()]
-    .map(([area, list]) => ({
+  return [...byArea.values()]
+    .map(({ area, list }) => ({
       area,
       label: area ?? "No area",
       decisions: list.sort((a, b) => b.number - a.number),
@@ -139,15 +141,15 @@ export async function loadDecisions(
   const client = clientDeps(person, config, deps, now);
   const q = searchWords(input.q);
   const filter = isFilter(input.status) ? input.status : "open";
-  const statuses: (DecisionStatus | undefined)[] =
-    filter === "open" ? ["active", "proposed"] : [filter === "all" ? undefined : filter];
+  const statuses: (DecisionStatus | "all")[] =
+    filter === "open" ? ["active", "proposed"] : [filter];
   const results = await Promise.all(
     statuses.map((status) =>
       fetchDecisions(
         person,
         {
           ...(q === undefined ? {} : { q }),
-          ...(status === undefined ? {} : { status }),
+          status,
           limit: DECISIONS_LIMIT,
         },
         client,
@@ -183,6 +185,7 @@ export const actionErrors = [
   "read_only",
   "invalid",
   "unchanged",
+  "changed",
   "signed_out",
   "unavailable",
   "failed",
@@ -280,15 +283,24 @@ const field = (form: FormData, name: string): string | undefined => {
   return typeof value === "string" ? value.replace(/\r\n?/g, "\n").trim() : undefined;
 };
 
+/** The wording the form was shown, which every action sends (decision 203). */
+export function wordingVersionOf(form: FormData): number | undefined {
+  const value = Number(field(form, "wordingVersion"));
+  return Number.isInteger(value) && value >= 1 ? value : undefined;
+}
+
 /**
  * The edit body from the form's fields: an empty statement leaves it as it is; an empty reason
- * or area clears it. A field the same as the decision's now is left out.
+ * or area clears it. A field the same as the decision's now is left out. It names the wording
+ * the form showed, so an edit made meanwhile by someone else is not overwritten.
  */
 export function editFromForm(form: FormData, current: Decision): FormEdit {
   const statement = field(form, "statement");
   const reason = field(form, "reason");
   const area = field(form, "area");
-  const edit: EditDecisionRequest = {};
+  const wordingVersion = wordingVersionOf(form);
+  if (wordingVersion === undefined) return { kind: "invalid" };
+  const edit: EditDecisionRequest = { wordingVersion };
   if (statement !== undefined && statement !== "" && statement !== current.statement) {
     edit.statement = statement;
   }
@@ -315,6 +327,7 @@ function outcomeOf(result: ApiResult<DecisionActionResult>): ActionNotice {
       return { kind: "error", error: result.value.reason ?? "not_allowed" };
     case "not_proposed":
     case "not_found":
+    case "changed":
       return { kind: "error", error: status };
   }
 }
@@ -362,14 +375,14 @@ export async function handleDecisionAction(
     return back({ kind: "error", error: "signed_out" });
   }
 
-  let form: FormData | undefined;
-  if (action === "edit") {
-    try {
-      form = await request.formData();
-    } catch {
-      return back({ kind: "error", error: "invalid" });
-    }
+  let form: FormData;
+  try {
+    form = await request.formData();
+  } catch {
+    return back({ kind: "error", error: "invalid" });
   }
+  const wordingVersion = wordingVersionOf(form);
+  if (wordingVersion === undefined) return back({ kind: "error", error: "invalid" });
 
   const client = clientDeps(person, config, deps, now);
   const lookup = await fetchDecision(person, number, client);
@@ -379,11 +392,11 @@ export async function handleDecisionAction(
 
   let result: ApiResult<DecisionActionResult>;
   if (action === "confirm") {
-    result = await confirmDecision(person, decision.id, client);
+    result = await confirmDecision(person, decision.id, wordingVersion, client);
   } else if (action === "reject") {
-    result = await rejectDecision(person, decision.id, client);
+    result = await rejectDecision(person, decision.id, wordingVersion, client);
   } else {
-    const edit = editFromForm(form ?? new FormData(), decision);
+    const edit = editFromForm(form, decision);
     if (edit.kind !== "edit") return back({ kind: "error", error: edit.kind });
     result = await editDecision(person, decision.id, edit.edit, client);
   }
@@ -485,12 +498,14 @@ export function noticeText(notice: ActionNotice, decision: Decision | undefined)
       return "Not saved: the statement can be at most 500 characters, the reason 2,000 and the area 100.";
     case "unchanged":
       return "Nothing was changed.";
+    case "changed":
+      return "Someone changed its wording after you opened it, so nothing was done. Read it again below, then try again.";
     case "signed_out":
       return "Your sign-in has ended. Sign in again, then try again.";
     case "unavailable":
       return "Sign-in is not set up yet.";
     case "failed":
-      return "The API did not answer, so nothing was changed. Try again.";
+      return "The API did not answer in time. Reload the page to see whether it was saved, then try again if not.";
   }
 }
 
@@ -518,15 +533,21 @@ const wordingFields = [
 /** The history to show: its recording first, then each change, with what an edit changed. */
 export function historyItems(detail: DecisionDetail): HistoryItem[] {
   const decision = detail.decision;
+  // An edit by someone else put it in their name; the first proposer is in that edit.
+  const first = detail.history.find((event) => event.before?.decidedBy !== undefined)?.before
+    ?.decidedBy;
   const recorded =
     decision.origin === "import"
       ? `Imported from the decision log, decided by ${nameOf(decision.decidedBy)}`
-      : `Proposed by ${nameOf(decision.decidedBy)}`;
+      : `Proposed by ${nameOf(first ?? decision.decidedBy)}`;
   return [
     { key: "recorded", text: recorded, at: decision.decidedAt, changes: [] },
     ...detail.history.map((event, index) => ({
       key: `${index}:${event.kind}`,
-      text: `${eventText[event.kind]} by ${nameOf(event.actor)}`,
+      text:
+        event.before?.decidedBy === undefined
+          ? `${eventText[event.kind]} by ${nameOf(event.actor)}`
+          : `Reworded by ${nameOf(event.actor)}, so it is in their name now`,
       at: event.at,
       changes:
         event.kind === "edited" && event.before !== null && event.after !== null
