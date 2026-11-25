@@ -12,8 +12,25 @@ describe("readAgentConfig", () => {
       log,
     );
     expect(config?.repository).toEqual({ url: REPOSITORY_URL, token: "github_pat_11ABC_def" });
-    expect(config?.vaultName).toBe("hippidy-bot");
     expect(lines.map((line) => line.msg)).not.toContain("config.agent_github_token_missing");
+  });
+
+  it("names each agent kind's agent, environment and own vault (slice 2.1, part E)", () => {
+    const { log } = memoryLogger();
+    const config = readAgentConfig({ ANTHROPIC_API_KEY: apiKey }, log);
+    expect(config).toMatchObject({
+      agentName: "hippidy-bot",
+      productAgentName: "hippidy-bot-product",
+      teammateAgentName: "hippidy-bot-teammate",
+      environmentName: "hippidy-bot",
+      teammateEnvironmentName: "hippidy-bot-teammate",
+      // Named after the agents, as the agent sync names them (vaultNameFor).
+      vaultNames: {
+        engineer: "hippidy-bot",
+        product: "hippidy-bot-product",
+        teammate: "hippidy-bot-teammate",
+      },
+    });
   });
 
   it("keeps the agent configured without the token, but with no repo to mount", () => {

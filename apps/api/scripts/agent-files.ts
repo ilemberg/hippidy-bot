@@ -111,6 +111,14 @@ export function readEnvironmentFile(path: string): EnvironmentFile {
   return parseEnvironmentFile(readFileSync(join(repoRoot, path), "utf8"));
 }
 
+/** Reads every environment file (`*.yaml`) in a directory of the repo, in name order. */
+export function readEnvironmentFiles(directory: string): EnvironmentFile[] {
+  return readdirSync(join(repoRoot, directory))
+    .filter((file) => file.endsWith(".yaml"))
+    .sort()
+    .map((file) => readEnvironmentFile(`${directory}/${file}`));
+}
+
 export function parseEnvironmentFile(text: string): EnvironmentFile {
   return environmentFile.parse(parse(text));
 }

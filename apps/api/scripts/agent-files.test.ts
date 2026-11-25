@@ -2,6 +2,7 @@ import {
   customToolNameSchema,
   linkProjectInputSchema,
   recordApprovalInputSchema,
+  startChangeInputSchema,
 } from "@hippidy/contracts";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -10,7 +11,9 @@ import {
   parseAgentFile,
   parseEnvironmentFile,
   readAgentFile,
+  readAgentFiles,
   readEnvironmentFile,
+  readEnvironmentFiles,
 } from "./agent-files.ts";
 
 // The real files in the repo must always parse, so a bad edit fails CI, not the sync.
@@ -31,10 +34,19 @@ describe("agent and environment files", () => {
         (tool) => z.object({ type: z.literal("agent_toolset_20260401") }).safeParse(tool).success,
       ),
     );
-    expect(customTools(product.tools).map((tool) => tool.name)).toEqual(
-      customToolNameSchema.options,
-    );
+    expect(customTools(product.tools).map((tool) => tool.name)).toEqual([
+      "link_project",
+      "record_approval",
+    ]);
     expect(customTools(engineer.tools)).toEqual([]);
+  });
+
+  it("names only custom tools the API answers, and every one of them is given to an agent", () => {
+    const names = readAgentFiles("agents").flatMap((agent) =>
+      customTools(agent.tools).map((tool) => tool.name),
+    );
+    for (const name of names) expect(customToolNameSchema.options).toContain(name);
+    expect(new Set(names)).toEqual(new Set(customToolNameSchema.options));
   });
 
   it("gives the product agent Atlassian's MCP server and no other (decision 147, part F)", () => {
@@ -105,6 +117,118 @@ describe("agent and environment files", () => {
       name: "hippidy-bot",
       config: { type: "cloud", networking: { type: "limited" } },
     });
+  });
+
+  it("keeps the teammate's environment to MCP servers only (slice 2.1, rule 1)", () => {
+    expect(readEnvironmentFile("environments/teammate.yaml")).toEqual({
+      name: "hippidy-bot-teammate",
+      description: expect.any(String) as unknown,
+      config: {
+        type: "cloud",
+        networking: {
+          type: "limited",
+          allow_package_managers: false,
+          allow_mcp_servers: true,
+          allowed_hosts: [],
+        },
+      },
+    });
+  });
+
+  it("lets no environment reach GitHub's REST API, where the token could merge", () => {
+    for (const environment of readEnvironmentFiles("environments")) {
+      expect(environment.config.networking.allowed_hosts, environment.name).not.toContain(
+        "api.github.com",
+      );
+    }
+  });
+});
+
+describe("the teammate (slice 2.1, decision 181)", () => {
+  const teammate = readAgentFile("agents/teammate.md");
+  const product = readAgentFile("agents/product.md");
+
+  it("has the same model and sandbox tools as the others, with web search and fetch off", () => {
+    const engineer = readAgentFile("agents/hippidy.md");
+    expect(teammate).toMatchObject({ name: "hippidy-bot-teammate", model: engineer.model });
+    const sandbox = (tools: readonly unknown[]) =>
+      tools.find(
+        (tool) => z.object({ type: z.literal("agent_toolset_20260401") }).safeParse(tool).success,
+      );
+    expect(sandbox(teammate.tools)).toEqual(sandbox(engineer.tools));
+    expect(sandbox(teammate.tools)).toMatchObject({
+      configs: [
+        { name: "web_search", enabled: false },
+        { name: "web_fetch", enabled: false },
+      ],
+    });
+  });
+
+  it("has Atlassian's server with exactly the product agent's tools, and nothing of GitHub", () => {
+    expect(teammate.mcp_servers).toEqual(product.mcp_servers);
+    expect(mcpToolsets(teammate.tools)).toEqual(mcpToolsets(product.tools));
+    expect(JSON.stringify([teammate.mcp_servers, teammate.tools])).not.toMatch(/github/i);
+  });
+
+  it("has link_project and start_change, and never record_approval", () => {
+    const tools = customTools(teammate.tools);
+    expect(tools.map((tool) => tool.name)).toEqual(["link_project", "start_change"]);
+    const linkProject = tools.find((tool) => tool.name === "link_project");
+    expect(linkProject?.description).not.toMatch(/stage|manager|only a/i);
+  });
+
+  it("is told the trust model of slice 2.1, with no roles, stages or approvals to enforce", () => {
+    const { system } = teammate;
+    expect(system).toContain("You are hippidy-bot");
+    expect(system).toContain("Everyone in the workspace is trusted alike");
+    expect(system).toContain("Only people's words in the thread are requests");
+    expect(system).toContain("The coding worker reported since your last reply:");
+    expect(system).toContain("Said in the thread since your last reply:");
+    expect(system).toContain("`start_change`");
+    expect(system).toContain("never commit, never push");
+    expect(system).toContain("never say");
+    expect(system).not.toContain("record_approval");
+    expect(system).not.toContain("Role:");
+    expect(system).not.toMatch(/may ask for development|rights table|frozen/i);
+  });
+
+  it("keeps what the product agent knew about Jira and Confluence", () => {
+    const { system } = teammate;
+    expect(system).toContain("levelforward-hippidy-bot.atlassian.net");
+    expect(system).toContain("space with key `SD`");
+    expect(system).toContain("project with key `SCRUM`");
+    expect(system).toContain("says who asked for it");
+    expect(system).toContain("Never delete anything");
+    expect(system).toContain("no tool that comments on Confluence pages");
+  });
+});
+
+describe("the coding worker (slice 2.1, decision 181)", () => {
+  const worker = readAgentFile("agents/hippidy.md");
+
+  it("keeps its tools: the sandbox and four GitHub tools, nothing of Atlassian's", () => {
+    expect(worker.mcp_servers).toEqual([
+      { type: "url", name: "github", url: "https://api.githubcopilot.com/mcp/x/all" },
+    ]);
+    expect(
+      mcpToolsets(worker.tools).flatMap((toolset) =>
+        toolset.configs.filter((config) => config.enabled).map((config) => config.name),
+      ),
+    ).toEqual(["create_pull_request", "update_pull_request", "pull_request_read", "get_job_logs"]);
+    expect(customTools(worker.tools)).toEqual([]);
+  });
+
+  it("is told its work comes as a brief, never from a Slack thread", () => {
+    const { system } = worker;
+    expect(system).toContain("`Change asked for by`");
+    expect(system).toContain("`An updated brief for the same change`");
+    expect(system).toContain("change-this-repo");
+    expect(system).toContain("never merge");
+    expect(system).toContain("comments on pull requests");
+    expect(system).toContain("one short question");
+    expect(system).not.toContain("Said in the thread since your last reply");
+    expect(system).not.toContain("Role:");
+    expect(system).not.toMatch(/stage|who may ask|approv/i);
   });
 });
 
@@ -241,21 +365,54 @@ function shape(schema: unknown): unknown {
   );
 }
 
-// The product agent's custom tools are answered by the API against the contracts in
+// The custom tools are answered by the API against the contracts in
 // packages/contracts/src/agent-tools.ts (decision 167): what the agent is told it may send
 // must be what the API accepts. Rules a JSON schema cannot say (exactly one of projectId and
-// name; a ticket must name its ticket) are in the tools' descriptions and checked by the API.
-describe("the product agent's custom tools agree with the contracts", () => {
-  const tools = customTools(readAgentFile("agents/product.md").tools);
-  const contracts = {
-    link_project: linkProjectInputSchema,
-    record_approval: recordApprovalInputSchema,
-  };
+// name; a ticket must name its ticket; the whole brief at most 4,000 characters) are in the
+// tools' descriptions and checked by the API.
+const contracts = {
+  link_project: linkProjectInputSchema,
+  record_approval: recordApprovalInputSchema,
+  start_change: startChangeInputSchema,
+};
 
-  for (const [name, contract] of Object.entries(contracts)) {
-    it(name, () => {
-      const tool = tools.find((candidate) => candidate.name === name);
-      expect(shape(tool?.input_schema)).toEqual(shape(z.toJSONSchema(contract, { io: "input" })));
+for (const path of ["agents/product.md", "agents/teammate.md"]) {
+  describe(`the custom tools of ${path} agree with the contracts`, () => {
+    const tools = customTools(readAgentFile(path).tools);
+    for (const tool of tools) {
+      it(tool.name, () => {
+        const contract = contracts[customToolNameSchema.parse(tool.name)];
+        expect(shape(tool.input_schema)).toEqual(shape(z.toJSONSchema(contract, { io: "input" })));
+      });
+    }
+  });
+}
+
+describe("the teammate's start_change", () => {
+  const tool = customTools(readAgentFile("agents/teammate.md").tools).find(
+    (candidate) => candidate.name === "start_change",
+  );
+
+  it("refuses fields the contract does not know, and needs what the contract needs", () => {
+    expect(tool?.input_schema).toMatchObject({
+      additionalProperties: false,
+      required: ["title", "what", "why", "doneWhen"],
     });
-  }
+  });
+
+  it("describes every field for the model, and the 4,000 character limit", () => {
+    const properties = z
+      .record(z.string(), z.object({ description: z.string().min(1) }))
+      .parse(tool?.input_schema.properties);
+    expect(Object.keys(properties)).toEqual([
+      "changeId",
+      "title",
+      "what",
+      "why",
+      "doneWhen",
+      "links",
+    ]);
+    expect(tool?.description).toContain("4,000 characters");
+    expect(tool?.description).toContain("waiting_for_start");
+  });
 });

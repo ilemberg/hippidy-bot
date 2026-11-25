@@ -13,6 +13,7 @@ import {
   actedOn,
   type AgentEvent,
   type AgentEventRecord,
+  type AgentKind,
   type AgentRuntime,
 } from "../agent/runtime.ts";
 import type { PullRequestChecks } from "../github/checks.ts";
@@ -59,8 +60,10 @@ import {
   type ProcessedUserMessage,
   type SenderAndProject,
 } from "../store/projects.ts";
+import { stopChanges, workerReportsSince, type WorkerReport } from "../store/changes.ts";
 import { latestActivity, latestStoredEventTime, storedEventsToActOn } from "../store/record.ts";
 import { answerCustomToolCall, type CustomToolCall } from "./agent-tools.ts";
+import { reconcileChanges, syncChangesWithUnsentBriefs } from "./changes.ts";
 import { progressDue, progressText } from "./progress.ts";
 import { keepEvents, keepUsage } from "./record.ts";
 
@@ -76,6 +79,8 @@ export interface ConversationDeps {
    * that pushed or opened a pull request cannot be called done.
    */
   checks?: PullRequestChecks;
+  /** The agent every new thread gets: the teammate unless a test says otherwise (181). */
+  newThreadAgent?: AgentKind;
 }
 
 /** How long a message may wait for the agent before reconcile looks at it. */
@@ -172,6 +177,7 @@ export async function receiveMessage(
     }
     // Outside any sync lease: receiving a message never holds one.
     const about = await senderAndProject(deps, conversation.id, message.actor.id, log);
+    const reports = await reportsSinceLastReply(deps, conversation.id, log);
     const agentEventId = await deps.runtime.sendMessage(
       sessionId,
       formatForAgent(
@@ -180,6 +186,7 @@ export async function receiveMessage(
         message.actor.displayName,
         message.context,
         about,
+        reports,
       ),
     );
     await markForwarded(deps.db, recorded.id, agentEventId);
@@ -199,6 +206,8 @@ export async function receiveMessage(
 
 /** The line that introduces what was said in the conversation since the agent's last reply. */
 export const CONTEXT_LEAD = "Said in the thread since your last reply:";
+/** The line that introduces what the thread's coding workers reported (decision 184). */
+export const REPORTS_LEAD = "The coding worker reported since your last reply:";
 
 /** A role as the agent reads it in the `From:` line. */
 export const roleInWords: Record<Role, string> = {
@@ -217,8 +226,9 @@ const oneLine = (text: string) => text.replace(/\r\n|[\r\n\u2028\u2029\u0085]/g,
  * The text the agent sees: what was said in the thread since its last reply, when the source
  * sent any (decision 140), then who sent this message (by name when known, with their role
  * when they hold one), the thread's project and stage when it has one, and what they wrote
- * (slice 5A, part D). Without context, role or project it is exactly the sender and the
- * message.
+ * (slice 5A, part D). Before all of it, what the thread's coding workers posted since the
+ * agent's last reply, marked as theirs (slice 2.1, decision 184). Without context, reports,
+ * role or project it is exactly the sender and the message.
  */
 export function formatForAgent(
   actorId: string,
@@ -226,6 +236,7 @@ export function formatForAgent(
   displayName?: string,
   context: readonly ContextMessage[] = [],
   about: Partial<SenderAndProject> = {},
+  reports: readonly WorkerReport[] = [],
 ): string {
   const body = text.trim() === "" ? "(no text, just a mention)" : text;
   // The display name is chosen by the sender, so it is kept to one line, and the role goes on
@@ -244,16 +255,42 @@ export function formatForAgent(
       ? ""
       : `\nProject: ${oneLine(about.project.name)} (stage: ${about.project.stage})`;
   const message = `From: ${sender}${role}${project}\n\n${body}`;
-  if (context.length === 0) return message;
-  const lines = context.map((said) => {
-    const time = new Date(said.sentAt).toISOString().slice(11, 16);
-    // Lines after the first are indented, so a message of several lines stays one item.
-    // Every kind of line break counts, so no message can start a line of its own and pose as
-    // the lead line or a `From:` line.
-    const words = said.text.replace(/\r\n|[\r\n\u2028\u2029\u0085]/g, "\n  ");
-    return `- ${said.actorName ?? said.actorId} (${time} UTC): ${words}`;
-  });
-  return `${CONTEXT_LEAD}\n${lines.join("\n")}\n\n${message}`;
+  // Lines after the first are indented, so a message of several lines stays one item. Every
+  // kind of line break counts, so no message can start a line of its own and pose as a lead
+  // line or a `From:` line.
+  const indented = (words: string) => words.replace(/\r\n|[\r\n\u2028\u2029\u0085]/g, "\n  ");
+  const parts: string[] = [];
+  if (reports.length > 0) {
+    const lines = reports.map(
+      (report) => `- On "${oneLine(report.title)}": ${indented(report.text)}`,
+    );
+    parts.push(`${REPORTS_LEAD}\n${lines.join("\n")}`);
+  }
+  if (context.length > 0) {
+    const lines = context.map((said) => {
+      const time = new Date(said.sentAt).toISOString().slice(11, 16);
+      return `- ${said.actorName ?? said.actorId} (${time} UTC): ${indented(said.text)}`;
+    });
+    parts.push(`${CONTEXT_LEAD}\n${lines.join("\n")}`);
+  }
+  return [...parts, message].join("\n\n");
+}
+
+/**
+ * What the thread's coding workers posted since a message was last handed to the thread's own
+ * session. Optional: if it cannot be read, it is logged and the message goes without it.
+ */
+async function reportsSinceLastReply(
+  deps: ConversationDeps,
+  conversationId: string,
+  log: Logger,
+): Promise<WorkerReport[]> {
+  try {
+    return await workerReportsSince(deps.db, conversationId);
+  } catch (error) {
+    log.warn("conversation.worker_reports_failed", { conversationId, error });
+    return [];
+  }
 }
 
 /**
@@ -289,8 +326,12 @@ async function ensureSession(
       let session;
       let agentKind;
       try {
-        // Chosen once, from the thread's first message, and kept (decision 167).
-        agentKind = await chooseAgentKind(deps.db, conversation.id);
+        // Chosen once, when the thread's first session starts, and kept (decisions 59, 181).
+        agentKind = await chooseAgentKind(
+          deps.db,
+          conversation.id,
+          deps.newThreadAgent ?? "teammate",
+        );
         session = await deps.runtime.startSession({
           agentKind,
           title: `${conversation.key.source} ${conversation.key.channelId} ${conversation.key.threadId}`,
@@ -370,6 +411,8 @@ export async function syncConversation(
   // After the conversation is free again: a slow usage read must not hold up the next sync,
   // a stop, or this answer. Late or overlapping readings are safe (usage only grows).
   if (sessionId !== undefined) await keepUsage(deps, conversation.id, sessionId, log);
+  // A brief written in this turn goes to its worker now, not at the next reconcile.
+  await syncChangesWithUnsentBriefs(deps, conversation.id, log);
 }
 
 /**
@@ -500,7 +543,7 @@ async function readAgent(
  * from the record. If storing fails, the next sync starts further back and catches up, so the
  * loop never depends on the record having been written.
  */
-async function readSessionEvents(
+export async function readSessionEvents(
   deps: ConversationDeps,
   conversationId: string,
   sessionId: string,
@@ -561,10 +604,27 @@ async function judgeTurn(
   const turn = before.slice(before.findLastIndex(endsTurn) + 1);
   if (!turn.some((event) => event.kind === "pushed" || event.kind === "pull_request")) return done;
   if ((await pendingMessageCount(deps.db, conversationId)) === 0) return done;
-  // The product agent cannot open pull requests; a GitHub link inside an Atlassian page it
-  // read must not make its turn wait for someone else's CI (decision 169).
-  if ((await readAgentKind(deps.db, conversationId)) === "product") return done;
+  // Only the engineer opens pull requests; a GitHub link inside an Atlassian page the product
+  // agent or the teammate read must not make its turn wait for someone else's CI (169, 181).
+  if ((await readAgentKind(deps.db, conversationId)) !== "engineer") return done;
+  return pullRequestVerdict(deps, conversationId, before, log);
+}
 
+/**
+ * The verdict on a turn that pushed or opened a pull request: done only when the latest pull
+ * request in `before` (the session's events up to the turn's end) has passed CI (132). Also
+ * used for a change's coding worker (decision 184).
+ */
+export async function pullRequestVerdict(
+  deps: ConversationDeps,
+  conversationId: string,
+  before: readonly AgentEvent[],
+  log: Logger,
+): Promise<{ status: SettledStatus; note: string | undefined }> {
+  const done: { status: SettledStatus; note: string | undefined } = {
+    status: "answered",
+    note: undefined,
+  };
   const pullRequest = before.findLast((event) => event.kind === "pull_request");
   if (pullRequest?.kind !== "pull_request") {
     return { status: "failed", note: notes.no_pull_request };
@@ -587,14 +647,14 @@ async function judgeTurn(
 }
 
 /** Whether an event ends a turn. Waiting for a tool call's approval does not (decision 119). */
-function endsTurn(event: AgentEvent): boolean {
+export function endsTurn(event: AgentEvent): boolean {
   return (
     event.kind === "terminated" || (event.kind === "idle" && event.reason !== "requires_action")
   );
 }
 
 /** When the latest of the events was processed, by the runtime's clock. */
-function latestTime(records: readonly AgentEventRecord[]): Date | undefined {
+export function latestTime(records: readonly AgentEventRecord[]): Date | undefined {
   let latest: number | undefined;
   for (const record of records) {
     if (record.processedAt === null) continue;
@@ -646,7 +706,7 @@ async function answerWaitingCalls(
     const call = customCalls.get(id);
     if (call === undefined) continue;
     try {
-      const answer = await answerCustomToolCall(deps.db, conversationId, call, messages);
+      const answer = await answerCustomToolCall(deps.db, conversationId, call, messages, events);
       await deps.runtime.answerCustomTool(sessionId, call.id, answer);
       log.info("conversation.custom_tool_answered", {
         conversationId,
@@ -673,7 +733,7 @@ async function answerWaitingCalls(
  * Settles the selected messages and queues what tells the user: an optional note in the
  * thread, then the status of each settled message.
  */
-async function settleAndQueue(
+export async function settleAndQueue(
   deps: ConversationDeps,
   conversation: Conversation,
   status: SettledStatus,
@@ -701,7 +761,7 @@ async function settleAndQueue(
   });
 }
 
-function queue(
+export function queue(
   deps: ConversationDeps,
   conversation: Conversation,
   key: string,
@@ -764,7 +824,7 @@ async function flushDeliveries(
   }
 }
 
-function targetOf(conversation: Conversation): DeliveryTarget {
+export function targetOf(conversation: Conversation): DeliveryTarget {
   return { ...conversation.key };
 }
 
@@ -943,6 +1003,15 @@ export async function stopConversation(
   }
   // A 🛑 on a finished thread does nothing: no note for every stray reaction.
 
+  // Then nothing more goes to the thread's coding workers, and those started are interrupted.
+  // After the messages are settled: a brief being written meanwhile either was linked to them
+  // before (and its change is stopped here) or finds them stopped and starts nothing.
+  for (const workerId of await stopChanges(deps.db, conversation.id)) {
+    await deps.runtime.interrupt(workerId).catch((error: unknown) => {
+      log.warn("conversation.worker_interrupt_failed", { sessionId: workerId, error });
+    });
+  }
+
   await flushSoon(deps, conversation.id, log);
   log.info("conversation.stopped", { conversationId: conversation.id, working });
   return { status: working ? "stopped" : "nothing_to_stop" };
@@ -952,7 +1021,7 @@ export async function stopConversation(
  * Sends queued deliveries now, waiting briefly if a sync holds the conversation; if it is
  * still busy after that, the running sync or the next reconcile sends them.
  */
-async function flushSoon(deps: ConversationDeps, conversationId: string, log: Logger) {
+export async function flushSoon(deps: ConversationDeps, conversationId: string, log: Logger) {
   const sleep = deps.sleep ?? defaultSleep;
   for (let attempt = 0; attempt < 10; attempt++) {
     const lease = await claimSyncLease(deps.db, conversationId);
@@ -1025,5 +1094,6 @@ export async function reconcile(deps: ConversationDeps, log: Logger): Promise<Re
       conversationLog.error("reconcile.conversation_failed", { error });
     }
   }
-  return { checked: conversations.length, failed };
+  const changes = await reconcileChanges(deps, log);
+  return { checked: conversations.length + changes.checked, failed: failed + changes.failed };
 }

@@ -300,13 +300,15 @@ export async function releaseSessionStart(
   );
 }
 
-const agentKindRow = z.object({ agent_kind: z.enum(["engineer", "product"]).nullable() });
+const agentKindRow = z.object({
+  agent_kind: z.enum(["engineer", "product", "teammate"]).nullable(),
+});
 
 /** The agent a conversation was given; null (every thread from before part E3) is the engineer. */
 export async function readAgentKind(
   db: Db,
   conversationId: string,
-): Promise<"engineer" | "product"> {
+): Promise<"engineer" | "product" | "teammate"> {
   const rows = await db.query(`select agent_kind from conversations where id = $1`, [
     conversationId,
   ]);
@@ -315,32 +317,23 @@ export async function readAgentKind(
 }
 
 /**
- * The agent that runs the conversation's sessions (decisions 153, 167), stored on the
- * conversation the first time a session is started for it, and kept from then on. A thread
- * gets the product agent when the sender of its first message is a product manager or a
- * designer in `actor_roles` (exact source, workspace and person); everyone else, and anyone
- * with no role, gets the engineer. A conversation that had a session before this was stored
- * keeps null, which is the engineer. Called by the holder of the session start claim.
+ * The agent that runs the conversation's sessions, stored the first time a session is started
+ * for it and kept from then on (decision 59). Every new thread gets `newThreads`, whoever sent
+ * its first message: the teammate from slice 2.1 (decision 181), not an agent picked by role.
+ * A conversation that had a session before the kind was stored keeps null, which is the
+ * engineer. Called by the holder of the session start claim.
  */
-export async function chooseAgentKind(db: Db, conversationId: string): Promise<AgentKind> {
+export async function chooseAgentKind(
+  db: Db,
+  conversationId: string,
+  newThreads: AgentKind,
+): Promise<AgentKind> {
   const rows = await db.query(
     `update conversations c
-     set agent_kind = coalesce(
-       c.agent_kind,
-       case when c.agent_id is null then (
-         select case when (select r.role from actor_roles r
-                           where r.source = m.source
-                             and r.workspace_id = m.workspace_id
-                             and r.actor_id = m.actor_id) in ('product_manager', 'designer')
-                     then 'product' else 'engineer' end
-         from inbound_messages m
-         where m.conversation_id = c.id
-         order by m.sent_at, m.created_at, m.id
-         limit 1
-       ) end)
+     set agent_kind = coalesce(c.agent_kind, case when c.agent_id is null then $2 end)
      where c.id = $1
      returning c.agent_kind`,
-    [conversationId],
+    [conversationId, newThreads],
   );
   return agentKindRow.parse(one(rows)).agent_kind ?? "engineer";
 }
@@ -498,7 +491,11 @@ export async function pendingForwards(
   });
 }
 
-/** Which pending messages to settle. */
+/**
+ * Which pending messages to settle. The first three are the thread's own session's: they
+ * leave out messages that led to a brief, which a coding worker's turn settles instead
+ * (slice 2.1, decision 184).
+ */
 export type Settlement =
   /** Messages whose agent events are listed: the agent processed them. */
   | { kind: "agent_events"; ids: string[] }
@@ -509,7 +506,17 @@ export type Settlement =
   /** Every pending message, handed over or not (a stop). */
   | { kind: "all_pending" }
   /** Specific inbound messages, by their id here. */
-  | { kind: "inbound"; ids: string[] };
+  | { kind: "inbound"; ids: string[] }
+  /** Messages that led to briefs the worker has processed, by the briefs' worker event ids. */
+  | { kind: "briefs"; workerEventIds: string[] }
+  /** Messages that led to any brief of this change already handed to its worker. */
+  | { kind: "handed_over"; changeId: string }
+  /** Messages that led to briefs of this change handed over without an event id. */
+  | { kind: "untracked_briefs"; changeId: string }
+  /** Messages that led to one brief. */
+  | { kind: "brief"; briefId: string }
+  /** Every message that led to a brief of this change (its worker can do no more). */
+  | { kind: "change"; changeId: string };
 
 /**
  * Settles the selected pending messages. The conversation stays waiting while any message
@@ -527,18 +534,39 @@ export async function settleMessages(
   return db.transaction(async (tx) => {
     await lockConversation(tx, conversationId);
     const where = {
-      agent_events: "agent_event_id = any($3::text[])",
+      agent_events: "agent_event_id = any($3::text[]) and change_brief_id is null",
       forwarded_without_event:
-        "agent_event_id is null and forwarded_at is not null and forwarded_at <= $3",
-      all_forwarded: "forwarded_at is not null",
+        "agent_event_id is null and forwarded_at is not null and forwarded_at <= $3 " +
+        "and change_brief_id is null",
+      all_forwarded: "forwarded_at is not null and change_brief_id is null",
       all_pending: "true",
       inbound: "id = any($3::uuid[])",
+      briefs:
+        "change_brief_id in (select id from change_briefs where worker_event_id = any($3::text[]))",
+      handed_over:
+        "change_brief_id in (select id from change_briefs " +
+        "where change_id = $3::uuid and worker_event_id is not null)",
+      untracked_briefs:
+        "change_brief_id in (select id from change_briefs " +
+        "where change_id = $3::uuid and worker_event_id like 'untracked:%')",
+      brief: "change_brief_id = $3::uuid",
+      change: "change_brief_id in (select id from change_briefs where change_id = $3::uuid)",
     }[settlement.kind];
     const params: unknown[] = [conversationId, status];
     if (settlement.kind === "agent_events" || settlement.kind === "inbound") {
       params.push(settlement.ids);
     } else if (settlement.kind === "forwarded_without_event") {
       params.push(settlement.cutoff);
+    } else if (settlement.kind === "briefs") {
+      params.push(settlement.workerEventIds);
+    } else if (
+      settlement.kind === "change" ||
+      settlement.kind === "handed_over" ||
+      settlement.kind === "untracked_briefs"
+    ) {
+      params.push(settlement.changeId);
+    } else if (settlement.kind === "brief") {
+      params.push(settlement.briefId);
     }
     const settled = await tx.query(
       `update inbound_messages set status = $2
@@ -546,13 +574,16 @@ export async function settleMessages(
        returning message_id, sent_at`,
       params,
     );
+    // The thread waits on its own session only for messages that led to no brief: a coding
+    // worker keeps its own clock (decision 184).
     await tx.query(
       `update conversations c
        set status = case when p.oldest is null then $2 else 'waiting' end,
            waiting_since = p.oldest,
            updated_at = now()
        from (select min(coalesce(forwarded_at, created_at)) as oldest from inbound_messages
-             where conversation_id = $1 and status = 'received') p
+             where conversation_id = $1 and status = 'received'
+               and change_brief_id is null) p
        where c.id = $1 and c.status in ('new', 'waiting')`,
       [conversationId, status],
     );

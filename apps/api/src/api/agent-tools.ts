@@ -2,13 +2,19 @@ import {
   customToolNameSchema,
   linkProjectInputSchema,
   recordApprovalInputSchema,
+  startChangeInputSchema,
   type LinkProjectInput,
   type LinkProjectOutput,
   type Project,
   type RecordApprovalInput,
   type RecordApprovalOutput,
+  type StartChangeInput,
+  type StartChangeOutput,
 } from "@hippidy/contracts";
 import type { z } from "zod";
+import type { AgentEvent } from "../agent/runtime.ts";
+import { actorNameInConversation, createBrief } from "../store/changes.ts";
+import { enqueueDelivery, getConversation } from "../store/conversations.ts";
 import type { Db } from "../store/db.ts";
 import {
   createProject,
@@ -52,19 +58,27 @@ export const toolErrors = {
     "the project for",
   notInThread: "only people who have written in this thread can be recorded as approving",
   noProject: (id: string) => `there is no project with id ${id}`,
+  noChange: (id: string) => `this thread has no change with id ${id}`,
+  changeStopped:
+    "that change was stopped; leave out changeId to start a new change if it is still wanted",
+  noRequester:
+    "cannot tell which message in this thread this call answers, so there is no one the " +
+    "change is for",
   unknownTool: (name: string) => `unknown tool "${clip(name, 100)}"`,
 } as const;
 
 /**
  * Answers one custom tool call. `messages` are the user messages the session has processed
- * so far, to tell whose message the call's turn is answering. Throws only if the database
- * cannot be read or written.
+ * so far, to tell whose message the call's turn is answering; `events` are the session's
+ * events the loop acts on, for what it did before the call. Throws only if the database cannot
+ * be read or written.
  */
 export async function answerCustomToolCall(
   db: Db,
   conversationId: string,
   call: CustomToolCall,
   messages: readonly ProcessedUserMessage[],
+  events: readonly AgentEvent[] = [],
 ): Promise<CustomToolAnswer> {
   const name = customToolNameSchema.safeParse(call.name);
   if (!name.success) return error(toolErrors.unknownTool(call.name));
@@ -81,7 +95,123 @@ export async function answerCustomToolCall(
       if (!input.success) return invalid(name.data, input.error);
       return recordApprovalFor(db, conversationId, context, call.id, input.data);
     }
+    case "start_change": {
+      const input = startChangeInputSchema.safeParse(call.input);
+      if (!input.success) return invalid(name.data, input.error);
+      return startChange(db, conversationId, context, call, messages, events, input.data);
+    }
   }
+}
+
+/**
+ * The start rule (slice 2.1, decision 181; G18): a brief needs a person to start it when the
+ * session called any MCP tool (Jira, Confluence) or read git refs other than `main` (decision
+ * 189) before writing it, since what it read there may have shaped the brief. Undefined when no one needs to. Read from the session's events,
+ * not from the agent; if the call is not among them, a person must start it (fail closed).
+ */
+export function startReason(events: readonly AgentEvent[], callId: string): string | undefined {
+  const index = events.findIndex((event) => event.id === callId);
+  if (index < 0) return "could not tell what was read before this brief";
+  const tools = [
+    ...new Set(
+      events.slice(0, index).flatMap((event) => {
+        if (event.kind === "mcp_tool_use") return [`${event.server}.${event.name}`];
+        // Refs anyone on GitHub can write: a fork's pull request, say (G18, decision 189).
+        if (event.kind === "git_read") return ["git (refs other than main)"];
+        return [];
+      }),
+    ),
+  ];
+  return tools.length === 0 ? undefined : `read with ${tools.join(", ")}`;
+}
+
+/**
+ * The user messages of the call's own turn: processed after the last turn that ended before
+ * the call. A message from an earlier turn that is still waiting (its turn's end not yet
+ * synced) is not the call's, so it is not linked to the brief.
+ */
+export function turnMessages(events: readonly AgentEvent[], callId: string): string[] {
+  const index = events.findIndex((event) => event.id === callId);
+  if (index < 0) return [];
+  const before = events.slice(0, index);
+  const lastEnd = before.findLastIndex(
+    (event) =>
+      event.kind === "terminated" || (event.kind === "idle" && event.reason !== "requires_action"),
+  );
+  return before
+    .slice(lastEnd + 1)
+    .flatMap((event) => (event.kind === "user_message" && event.processed ? [event.id] : []));
+}
+
+/** The brief as people read it in the thread, with whether someone must start it. */
+export function briefForThread(brief: StartChangeInput, reason: string | undefined): string {
+  const links = brief.links.length === 0 ? "" : `\n**Links:** ${brief.links.join(", ")}`;
+  const status =
+    reason === undefined
+      ? "_Handed to the coding worker._"
+      : `_I ${reason} before writing this, so someone needs to press Start before the ` +
+        "coding worker gets it._";
+  return (
+    `**Brief for the coding worker: ${brief.title}**\n\n**What:** ${brief.what}\n\n` +
+    `**Why:** ${brief.why}\n\n**Done when:** ${brief.doneWhen}${links}\n\n${status}`
+  );
+}
+
+/**
+ * Writes a brief for a coding worker and posts it in the thread (decisions 181, 184). The
+ * change is for the sender of the message the turn is answering; the messages of that turn
+ * wait for the worker. A brief that needs no person goes to the worker after this sync.
+ */
+async function startChange(
+  db: Db,
+  conversationId: string,
+  context: ToolCallContext,
+  call: CustomToolCall,
+  messages: readonly ProcessedUserMessage[],
+  events: readonly AgentEvent[],
+  input: StartChangeInput,
+): Promise<CustomToolAnswer> {
+  const callAt = call.processedAt === null ? Number.NaN : Date.parse(call.processedAt);
+  const requesterId = Number.isNaN(callAt)
+    ? undefined
+    : await readTurnSender(db, conversationId, call.processedAt ?? "", messages);
+  if (requesterId === undefined) return error(toolErrors.noRequester);
+  const reason = startReason(events, call.id);
+  const result = await createBrief(db, {
+    conversationId,
+    customToolUseId: call.id,
+    changeId: input.changeId,
+    requestedBy: {
+      source: context.source,
+      workspaceId: context.workspaceId,
+      actorId: requesterId,
+      name: await actorNameInConversation(db, conversationId, requesterId),
+    },
+    brief: input,
+    startReason: reason,
+    turnEventIds: turnMessages(events, call.id).filter((eventId) =>
+      messages.some(
+        (message) => message.eventId === eventId && Date.parse(message.processedAt) <= callAt,
+      ),
+    ),
+  });
+  if (result.kind === "no_change") return error(toolErrors.noChange(input.changeId ?? ""));
+  if (result.kind === "stopped") return error(toolErrors.changeStopped);
+  // Queued under the brief's id, so answering the call again posts it once.
+  const conversation = await getConversation(db, conversationId);
+  await enqueueDelivery(db, conversationId, `brief:${result.briefId}`, "note", {
+    kind: "brief",
+    target: { ...conversation.key },
+    briefId: result.briefId,
+    text: briefForThread(input, reason),
+    needsStart: reason !== undefined,
+  });
+  const output: StartChangeOutput = {
+    changeId: result.changeId,
+    briefId: result.briefId,
+    status: result.started ? "started" : "waiting_for_start",
+  };
+  return { text: JSON.stringify(output), isError: false };
 }
 
 /**

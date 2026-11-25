@@ -375,6 +375,90 @@ describe("POST /v1/webhooks/agent", () => {
   });
 });
 
+describe("a brief and its coding worker (slice 2.1)", () => {
+  const brief = { title: "Rename", what: "Rename x.", why: "Asked.", doneWhen: "CI passes." };
+
+  /** A person asks; the teammate reads a ticket, then writes a brief that needs a start. */
+  async function briefNeedingStart(app: ReturnType<typeof setup>["app"]) {
+    await postMessage(app, message);
+    const teammate = runtime.onlySessionId();
+    runtime.work(teammate);
+    runtime.mcpToolUse(teammate, "atlassian", "getJiraIssue");
+    runtime.callCustomTools(teammate, [{ name: "start_change", input: brief }]);
+    await app.request("/v1/webhooks/agent", {
+      method: "POST",
+      body: JSON.stringify({
+        signed: true,
+        id: "whe_b",
+        type: "session.status_idled",
+        sessionId: teammate,
+      }),
+    });
+    const posted = slack.delivered.find((d) => d.kind === "brief");
+    if (posted?.kind !== "brief") throw new Error("no brief posted");
+    return posted.briefId;
+  }
+
+  function start(
+    app: ReturnType<typeof setup>["app"],
+    briefId: string,
+    body: unknown,
+    auth = `Bearer ${token}`,
+  ) {
+    return app.request(`/v1/briefs/${briefId}/start`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: auth },
+      body: JSON.stringify(body),
+    });
+  }
+  const person = {
+    source: "slack",
+    workspaceId: message.conversation.workspaceId,
+    actor: { id: "U2", displayName: "Grace" },
+  };
+
+  it("starts a brief for the person who pressed Start, once", async () => {
+    const { app } = setup();
+    const briefId = await briefNeedingStart(app);
+    expect(runtime.sessions.size).toBe(1);
+    const res = await start(app, briefId, person);
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ status: "started" });
+    expect(runtime.sessions.size).toBe(2);
+    expect(await (await start(app, briefId, person)).json()).toEqual({ status: "already_started" });
+  });
+
+  it("checks the token, the body and the brief's id", async () => {
+    const { app } = setup();
+    const briefId = await briefNeedingStart(app);
+    await expectError(await start(app, briefId, person, "Bearer nope"), 401, "unauthorized");
+    await expectError(await start(app, briefId, { ...person, actor: {} }), 400, "invalid_request");
+    await expectError(await start(app, "not-a-brief", person), 404, "not_found");
+    expect(await (await start(app, "6f1c2b9e-1d2a-4c3b-9e8f-0a1b2c3d4e5f", person)).json()).toEqual(
+      { status: "not_found" },
+    );
+  });
+
+  it("syncs a coding worker when a webhook names its session", async () => {
+    const { app } = setup();
+    const briefId = await briefNeedingStart(app);
+    await start(app, briefId, person);
+    const worker = [...runtime.sessions.keys()][1] ?? "";
+    runtime.reply(worker, "Opened the pull request.");
+    const res = await app.request("/v1/webhooks/agent", {
+      method: "POST",
+      body: JSON.stringify({
+        signed: true,
+        id: "whe_w",
+        type: "session.status_idled",
+        sessionId: worker,
+      }),
+    });
+    expect(res.status).toBe(204);
+    expect(slack.replies()).toContain("Opened the pull request.");
+  });
+});
+
 describe("POST /v1/reconcile", () => {
   it("requires the reconcile token, and refuses the service token", async () => {
     const { app } = setup();

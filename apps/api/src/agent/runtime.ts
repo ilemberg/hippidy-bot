@@ -53,10 +53,13 @@ export interface AgentRuntime {
 }
 
 /**
- * Which of the bot's two agents runs a conversation (decision 139): the engineer changes code,
- * as before; the product agent writes the plan, reads the repo and changes nothing.
+ * Which of the bot's agents runs a session. The engineer is the coding worker (decision 181,
+ * `agents/hippidy.md`): it changes code, given work as a brief, and threads opened on it
+ * before slice 2.1 keep it. The teammate (`agents/teammate.md`) talks with every new thread,
+ * reads Jira, Confluence and the repo, and cannot publish. The product agent (decision 139)
+ * writes the plan, reads the repo and changes nothing; threads opened on it keep it.
  */
-export type AgentKind = "engineer" | "product";
+export type AgentKind = "engineer" | "product" | "teammate";
 
 /** The runtime no longer has this session (deleted, or past its retention). */
 export class SessionNotFoundError extends Error {
@@ -87,6 +90,17 @@ export type AgentEvent =
   | { kind: "pull_request"; id: string; url: string }
   /** The agent ran `git push` in its sandbox. */
   | { kind: "pushed"; id: string }
+  /**
+   * The agent called a tool of an MCP server (Jira, Confluence, GitHub). The start rule of
+   * slice 2.1 reads these: a brief written after one needs a person to start it (decision 181).
+   */
+  | { kind: "mcp_tool_use"; id: string; server: string; name: string }
+  /**
+   * The agent ran a git command that reads refs other than the mounted `main` (a fetch, a
+   * pull request's branch): content anyone on GitHub can write, so it counts for the start
+   * rule too (G18, decision 189).
+   */
+  | { kind: "git_read"; id: string }
   /** An answer to a tool call that waited for approval. */
   | { kind: "tool_confirmation"; id: string; toolUseId: string }
   /**

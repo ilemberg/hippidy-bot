@@ -1,27 +1,37 @@
 import type { Deliverer, OutboundDelivery } from "@hippidy/contracts";
-import { webApi } from "@slack/bolt";
+import { type types, webApi } from "@slack/bolt";
 import type { Env } from "../config.ts";
 import type { Logger } from "../log.ts";
 import { readSlackConfig } from "./config.ts";
-import { RECEIVED_REACTION } from "./handler.ts";
+import { RECEIVED_REACTION, START_CHANGE_ACTION } from "./handler.ts";
 import { markdownToSlack, splitForSlack } from "./markdown.ts";
 
 /** The Slack Web API calls deliveries make. */
 export interface SlackPoster {
-  postMessage(input: { channel: string; thread_ts: string; text: string }): Promise<void>;
+  /** With `blocks`, Slack shows the blocks and uses `text` for notifications only. */
+  postMessage(input: {
+    channel: string;
+    thread_ts: string;
+    text: string;
+    blocks?: types.KnownBlock[];
+  }): Promise<void>;
   addReaction(input: { channel: string; timestamp: string; name: string }): Promise<void>;
   removeReaction(input: { channel: string; timestamp: string; name: string }): Promise<void>;
 }
 
 const STATUS_REACTION = { answered: "white_check_mark", failed: "x", stopped: "octagonal_sign" };
 
+/** Slack's limit on the text of a section block. */
+const SECTION_TEXT_CHARS = 3000;
+
 /** Slack errors that mean the reaction is already in the state we want. */
 const HARMLESS = new Set(["already_reacted", "no_reaction"]);
 
 /**
  * Delivers the API's outbound messages to Slack (decision 53): replies go in the thread as
- * Slack-formatted text, and a status swaps the 👀 on each settled message for ✅, ❌ or 🛑.
- * Throws if anything did not go out, so the API retries it.
+ * Slack-formatted text; a brief goes in the thread with a Start button under it when a person
+ * must start it (slice 2.1, G17); and a status swaps the 👀 on each settled message for ✅, ❌
+ * or 🛑. Throws if anything did not go out, so the API retries it.
  */
 export function createSlackDeliverer(poster: SlackPoster | (() => SlackPoster)): Deliverer {
   const getPoster = typeof poster === "function" ? poster : () => poster;
@@ -29,19 +39,59 @@ export function createSlackDeliverer(poster: SlackPoster | (() => SlackPoster)):
     async deliver(delivery: OutboundDelivery) {
       const slack = getPoster();
       const channel = delivery.target.channelId;
-      if (delivery.kind === "reply") {
-        for (const text of splitForSlack(markdownToSlack(delivery.text))) {
-          await slack.postMessage({ channel, thread_ts: delivery.target.threadId, text });
+      const thread_ts = delivery.target.threadId;
+      switch (delivery.kind) {
+        case "reply":
+          for (const text of splitForSlack(markdownToSlack(delivery.text))) {
+            await slack.postMessage({ channel, thread_ts, text });
+          }
+          return;
+        case "brief": {
+          const parts = splitForSlack(markdownToSlack(delivery.text), SECTION_TEXT_CHARS);
+          if (parts.length === 0) parts.push("(The brief is empty.)");
+          for (const [index, text] of parts.entries()) {
+            const blocks: types.KnownBlock[] = [
+              { type: "section", text: { type: "mrkdwn", text } },
+            ];
+            // The button belongs under the whole brief, so only the last part has it.
+            if (delivery.needsStart && index === parts.length - 1) {
+              blocks.push(startButton(delivery.briefId));
+            }
+            await slack.postMessage({ channel, thread_ts, text, blocks });
+          }
+          return;
         }
-        return;
-      }
-      for (const timestamp of delivery.messageIds) {
-        await ignoreHarmless(
-          slack.addReaction({ channel, timestamp, name: STATUS_REACTION[delivery.status] }),
-        );
-        await ignoreHarmless(slack.removeReaction({ channel, timestamp, name: RECEIVED_REACTION }));
+        case "status":
+          for (const timestamp of delivery.messageIds) {
+            await ignoreHarmless(
+              slack.addReaction({ channel, timestamp, name: STATUS_REACTION[delivery.status] }),
+            );
+            await ignoreHarmless(
+              slack.removeReaction({ channel, timestamp, name: RECEIVED_REACTION }),
+            );
+          }
+          return;
       }
     },
+  };
+}
+
+/**
+ * The Start button under a brief. Pressing it sends a `block_actions` payload to
+ * `/slack/events`, which `handleStartBriefAction` turns into `POST /v1/briefs/:briefId/start`.
+ */
+function startButton(briefId: string): types.ActionsBlock {
+  return {
+    type: "actions",
+    elements: [
+      {
+        type: "button",
+        text: { type: "plain_text", text: "Start" },
+        style: "primary",
+        action_id: START_CHANGE_ACTION,
+        value: briefId,
+      },
+    ],
   };
 }
 

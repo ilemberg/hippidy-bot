@@ -1,8 +1,9 @@
 # Slice 2.1: one bot, everyone trusted
 
-Status: **planned 2026-11-25 (decisions 181 to 184). Built, not merged: part A, the probe,
-which then waits to be run by hand; part B, the schema
-(`supabase/migrations/20261125000000_sessions_and_changes.sql`). C to E are not built.** The wave is in
+Status: **built 2026-11-25 (decisions 181 to 189).** Parts A and B merged in
+ilemberg/hippidy-bot 49; the probe ran (run 45632116294, decision 189). Parts C to E merge in
+ilemberg/hippidy-bot 50. Live once the Slack app is updated from its manifest and reinstalled;
+the "done when" lines below are still to be checked in production. The wave is in
 `wave-2.md`; the direction in `team-layer.md`. G1 is answered by this plan (181), G3 is
 answered (182), G2 is deferred. G17 and G18 are open and block part D.
 
@@ -165,16 +166,15 @@ Each is its own pull request. A to C change nothing a person sees and can merge 
 |---|---|---|
 | A | **Probe**, a workflow started by hand in `release`, like slice 4's experiment (118): a session in the teammate's environment reads the mounted `main`; tries `git fetch` of `refs/pull/*`, a package registry and a public host; calls one Atlassian read tool. Under $1 | No |
 | B | **Schema**: `changes` (thread, who asked, status, and the worker's session and loop state) and `change_briefs` (append-only: the text, whether a start was needed and why, who started it, when, the event it was handed over as), and `inbound_messages.change_brief_id`. Additive (86) | No |
-| C | **The worker and the brief, in the API**: `start_change` and the start rule, the worker's loop, settling messages by the worker's turn, the start route, stop, reconcile and webhooks for changes, the worker's reports in the teammate's next message | No: no agent has `start_change` until E |
-| D | **Slack**: the brief posted with a Start button; the button calls the start route | No: nothing posts a brief until E |
-| E | **The agents**: `agents/teammate.md`, `environments/teammate.yaml`, the worker's prompt, one vault per agent, new threads to the teammate, the product agent takes no new threads, the README | **Yes**: every new thread |
+| C | **The worker and the brief, in the API**: `start_change` and the start rule, the worker's loop, settling messages by the worker's turn, the start route, stop, reconcile and webhooks for changes, the worker's reports in the teammate's next message | No: no agent has `start_change` until E. Built (decisions 185, 186) |
+| D | **Slack**: the brief posted with a Start button; the button calls the start route. Built: the manifest turns on interactivity, so the app must be updated and reinstalled | No: nothing posts a brief until E |
+| E | **The agents**: `agents/teammate.md`, `environments/teammate.yaml`, the worker's prompt, one vault per agent, new threads to the teammate, the product agent takes no new threads, the README. *Built, not merged:* the teammate's agent file and environment, the worker's rewritten prompt, a sync of every file in `environments/` and one vault per agent named after it (credentials for servers the agent does not declare are archived), the runtime's `teammate` kind with its own agent, environment and vault, and the README. Routing new threads to the teammate is built separately | **Yes**: every new thread |
 
 **One vault per agent.** Today the sync keeps one vault, `hippidy-bot`, with both the GitHub
 and the Atlassian credential, and every session attaches it (`apps/api/scripts/sync-lib.ts`).
-A credential is only used for an MCP server the agent declares, so this holds rule 1 today,
-but one wrong line in an agent file would hand the teammate GitHub's token. Part E splits it:
-the teammate's sessions attach a vault with Atlassian's credential only, the worker's a vault
-with GitHub's only.
+Part E gives each agent a vault named after it, with credentials for its own MCP servers only.
+The shared vault becomes the worker's and keeps its Atlassian credential until the open
+product-agent threads that attached it are done, then it is archived by hand (decision 187).
 
 **Part A as built.** `.github/workflows/teammate-probe.yml` runs
 `apps/api/scripts/teammate-probe.ts` from `main`, by hand. It makes a throwaway environment

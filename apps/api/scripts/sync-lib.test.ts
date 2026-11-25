@@ -1,12 +1,18 @@
 import type { Anthropic } from "@anthropic-ai/sdk";
 import { describe, expect, it } from "vitest";
-import { digest, parseAgentFile, readAgentFiles, readEnvironmentFile } from "./agent-files.ts";
+import {
+  digest,
+  parseAgentFile,
+  readAgentFiles,
+  readEnvironmentFiles,
+  type AgentFile,
+} from "./agent-files.ts";
 import {
   DIGEST_KEY,
   MCP_SERVER_SECRETS,
   secretForMcpServer,
   syncAll,
-  VAULT_NAME,
+  vaultNameFor,
 } from "./sync-lib.ts";
 
 interface Stored {
@@ -18,23 +24,27 @@ interface Stored {
   body: Record<string, unknown>;
 }
 
+interface StoredCredential {
+  id: string;
+  vault: string;
+  archived_at: string | null;
+  display_name: string;
+  auth: Record<string, string>;
+}
+
 /** An in-memory stand-in for the parts of Anthropic's API the sync uses. */
 function fakeClient() {
   const agents: Stored[] = [];
   const environments: Stored[] = [];
   const vaults: { id: string; display_name: string; archived_at: string | null }[] = [];
-  const credentials: {
-    id: string;
-    archived_at: null;
-    display_name: string;
-    auth: Record<string, string>;
-  }[] = [];
+  const credentials: StoredCredential[] = [];
   const calls: string[] = [];
   let next = 1;
   const list = <T>(items: T[]) =>
     async function* () {
       for (const item of items) yield await Promise.resolve(item);
     };
+  const vaultName = (id: string) => vaults.find((vault) => vault.id === id)?.display_name ?? id;
   const store = (items: Stored[], kind: string) => ({
     list: () => list(items)(),
     create: (
@@ -62,6 +72,25 @@ function fakeClient() {
       return Promise.resolve(stored);
     },
   });
+  const addVault = (displayName: string) => {
+    const vault = { id: `vlt_${next++}`, display_name: displayName, archived_at: null };
+    vaults.push(vault);
+    return vault;
+  };
+  const addCredential = (vault: string, displayName: string, auth: Record<string, string>) => {
+    credentials.push({
+      id: `cred_${next++}`,
+      vault,
+      archived_at: null,
+      display_name: displayName,
+      auth,
+    });
+  };
+  const credentialIn = (id: string, vault: string) => {
+    const stored = credentials.find((credential) => credential.id === id);
+    if (stored?.vault !== vault) throw new Error(`no ${id} in ${vault}`);
+    return stored;
+  };
   const client = {
     beta: {
       agents: store(agents, "agent"),
@@ -69,50 +98,68 @@ function fakeClient() {
       vaults: {
         list: () => list(vaults)(),
         create: (body: { display_name: string }) => {
-          const vault = { id: `vlt_${next++}`, display_name: body.display_name, archived_at: null };
-          vaults.push(vault);
           calls.push(`vault.create ${body.display_name}`);
-          return Promise.resolve(vault);
+          return Promise.resolve(addVault(body.display_name));
         },
         credentials: {
-          list: () => list(credentials)(),
-          create: (
-            _vault: string,
-            body: { display_name: string; auth: Record<string, string> },
-          ) => {
-            credentials.push({
-              id: `cred_${next++}`,
-              archived_at: null,
-              display_name: body.display_name,
-              auth: body.auth,
-            });
-            calls.push(`credential.create ${String(body.auth.mcp_server_url)}`);
+          list: (vault: string) =>
+            list(credentials.filter((credential) => credential.vault === vault))(),
+          create: (vault: string, body: { display_name: string; auth: Record<string, string> }) => {
+            addCredential(vault, body.display_name, body.auth);
+            calls.push(`credential.create ${vaultName(vault)} ${String(body.auth.mcp_server_url)}`);
             return Promise.resolve({});
           },
-          update: (id: string, body: { auth: { token: string } }) => {
-            const stored = credentials.find((credential) => credential.id === id);
-            if (stored === undefined) throw new Error(`no ${id}`);
+          update: (id: string, body: { vault_id: string; auth: { token: string } }) => {
+            const stored = credentialIn(id, body.vault_id);
             stored.auth = { ...stored.auth, token: body.auth.token };
-            calls.push(`credential.update ${String(stored.auth.mcp_server_url)}`);
+            calls.push(
+              `credential.update ${vaultName(stored.vault)} ${String(stored.auth.mcp_server_url)}`,
+            );
             return Promise.resolve({});
           },
-          archive: (id: string) => {
-            const stored = credentials.find((credential) => credential.id === id);
-            calls.push(`credential.archive ${String(stored?.auth.mcp_server_url)}`);
+          archive: (id: string, body: { vault_id: string }) => {
+            const stored = credentialIn(id, body.vault_id);
+            stored.archived_at = "2026-11-25T00:00:00Z";
+            calls.push(
+              `credential.archive ${vaultName(stored.vault)} ${String(stored.auth.mcp_server_url)}`,
+            );
             return Promise.resolve({});
           },
         },
       },
     },
   } as unknown as Anthropic;
-  return { client, agents, environments, vaults, credentials, calls };
+  /** What each vault holds now: its live credentials' server URLs and tokens. */
+  const held = () =>
+    Object.fromEntries(
+      vaults.map((vault) => [
+        vault.display_name,
+        credentials
+          .filter((credential) => credential.vault === vault.id && credential.archived_at === null)
+          .map((credential) => [credential.auth.mcp_server_url, credential.auth.token]),
+      ]),
+    );
+  return {
+    client,
+    agents,
+    environments,
+    vaults,
+    credentials,
+    calls,
+    held,
+    addVault,
+    addCredential,
+  };
 }
 
-const environment = readEnvironmentFile("environments/hippidy.yaml");
+const environmentFiles = readEnvironmentFiles("environments");
 const agentFiles = readAgentFiles("agents");
 
 const GITHUB_URL = "https://api.githubcopilot.com/mcp/x/all";
 const ATLASSIAN_URL = "https://mcp.atlassian.com/v2/mcp";
+const WORKER = "hippidy-bot";
+const PRODUCT = "hippidy-bot-product";
+const TEAMMATE = "hippidy-bot-teammate";
 const bothSecrets = {
   AGENT_GITHUB_TOKEN: "github_pat_test",
   ATLASSIAN_SERVICE_KEY: "atlassian_key_test",
@@ -120,14 +167,15 @@ const bothSecrets = {
 
 function run(
   client: Anthropic,
-  agents = agentFiles,
+  agents: readonly AgentFile[] = agentFiles,
   secrets: Record<string, string | undefined> = bothSecrets,
+  environments = environmentFiles,
 ) {
   const said: string[] = [];
   return syncAll({
     client,
     agents,
-    environment,
+    environments,
     secrets,
     dryRun: false,
     say: (line) => said.push(line),
@@ -135,35 +183,74 @@ function run(
   }).then(() => said);
 }
 
+/** The credential refreshes every run makes with both secrets set, in order. */
+const refreshes = [
+  `credential.update ${WORKER} ${GITHUB_URL}`,
+  `credential.update ${PRODUCT} ${ATLASSIAN_URL}`,
+  `credential.update ${TEAMMATE} ${ATLASSIAN_URL}`,
+];
+
+const allHeld = (github: string, atlassian: string) => ({
+  [WORKER]: [[GITHUB_URL, github]],
+  [PRODUCT]: [[ATLASSIAN_URL, atlassian]],
+  [TEAMMATE]: [[ATLASSIAN_URL, atlassian]],
+});
+
 describe("syncAll", () => {
-  it("reads every agent file in agents/, the engineer and the product agent", () => {
-    expect(agentFiles.map((agent) => agent.name)).toEqual(["hippidy-bot", "hippidy-bot-product"]);
+  it("reads every agent file in agents/ and every environment in environments/", () => {
+    expect(agentFiles.map((agent) => agent.name)).toEqual([WORKER, PRODUCT, TEAMMATE]);
+    expect(environmentFiles.map((environment) => environment.name)).toEqual([
+      "hippidy-bot",
+      "hippidy-bot-teammate",
+    ]);
   });
 
-  it("creates each agent once, by name, in the one environment, with one vault", async () => {
+  it("creates each environment, vault and agent once, by name", async () => {
     const fake = fakeClient();
     await run(fake.client);
     expect(fake.calls).toEqual([
       "env.create hippidy-bot",
-      `vault.create ${VAULT_NAME}`,
-      `credential.create ${GITHUB_URL}`,
-      `credential.create ${ATLASSIAN_URL}`,
-      "agent.create hippidy-bot",
-      "agent.create hippidy-bot-product",
+      "env.create hippidy-bot-teammate",
+      `vault.create ${WORKER}`,
+      `credential.create ${WORKER} ${GITHUB_URL}`,
+      `vault.create ${PRODUCT}`,
+      `credential.create ${PRODUCT} ${ATLASSIAN_URL}`,
+      `vault.create ${TEAMMATE}`,
+      `credential.create ${TEAMMATE} ${ATLASSIAN_URL}`,
+      `agent.create ${WORKER}`,
+      `agent.create ${PRODUCT}`,
+      `agent.create ${TEAMMATE}`,
     ]);
-    expect(fake.environments).toHaveLength(1);
-    expect(fake.vaults).toHaveLength(1);
-    const product = fake.agents.find((agent) => agent.name === "hippidy-bot-product");
-    expect(product?.body).toMatchObject({
+    const teammate = fake.agents.find((agent) => agent.name === TEAMMATE);
+    expect(teammate?.body).toMatchObject({
       model: "claude-opus-5-5",
       mcp_servers: [{ type: "url", name: "atlassian", url: ATLASSIAN_URL }],
     });
+    const environment = fake.environments.find((stored) => stored.name === TEAMMATE);
+    expect(environment?.body).toMatchObject({
+      config: {
+        type: "cloud",
+        networking: {
+          type: "limited",
+          allow_package_managers: false,
+          allow_mcp_servers: true,
+          allowed_hosts: [],
+        },
+      },
+    });
   });
 
-  it("sends the engineer exactly what it sent before there were two agents", async () => {
+  it("gives each agent a vault named after it, with its own servers' credentials only", async () => {
     const fake = fakeClient();
     await run(fake.client);
-    const wanted = agentFiles.find((agent) => agent.name === "hippidy-bot");
+    expect(agentFiles.map(vaultNameFor)).toEqual([WORKER, PRODUCT, TEAMMATE]);
+    expect(fake.held()).toEqual(allHeld("github_pat_test", "atlassian_key_test"));
+  });
+
+  it("sends the engineer exactly what its file says", async () => {
+    const fake = fakeClient();
+    await run(fake.client);
+    const wanted = agentFiles.find((agent) => agent.name === WORKER);
     if (wanted === undefined) throw new Error("no engineer agent file");
     const body = {
       name: wanted.name,
@@ -173,7 +260,7 @@ describe("syncAll", () => {
       mcp_servers: wanted.mcp_servers,
       tools: wanted.tools,
     };
-    const engineer = fake.agents.find((agent) => agent.name === "hippidy-bot");
+    const engineer = fake.agents.find((agent) => agent.name === WORKER);
     expect(engineer?.body).toEqual({ ...body, metadata: { [DIGEST_KEY]: digest(body) } });
   });
 
@@ -182,26 +269,34 @@ describe("syncAll", () => {
     await run(fake.client);
     fake.calls.length = 0;
     await run(fake.client);
-    expect(fake.calls).toEqual([
-      `credential.update ${GITHUB_URL}`,
-      `credential.update ${ATLASSIAN_URL}`,
-    ]);
+    expect(fake.calls).toEqual(refreshes);
 
     fake.calls.length = 0;
     const changed = agentFiles.map((agent) =>
-      agent.name === "hippidy-bot-product" ? { ...agent, system: `${agent.system}\nMore.` } : agent,
+      agent.name === PRODUCT ? { ...agent, system: `${agent.system}\nMore.` } : agent,
     );
     const said = await run(fake.client, changed);
-    expect(fake.calls).toEqual([
-      `credential.update ${GITHUB_URL}`,
-      `credential.update ${ATLASSIAN_URL}`,
-      "agent.update hippidy-bot-product",
-    ]);
+    expect(fake.calls).toEqual([...refreshes, `agent.update ${PRODUCT}`]);
     expect(said).toContainEqual(expect.stringMatching(/agent "hippidy-bot": unchanged/));
     expect(fake.agents.map((agent) => [agent.name, agent.version])).toEqual([
-      ["hippidy-bot", 1],
-      ["hippidy-bot-product", 2],
+      [WORKER, 1],
+      [PRODUCT, 2],
+      [TEAMMATE, 1],
     ]);
+  });
+
+  it("updates only the environment whose file changed", async () => {
+    const fake = fakeClient();
+    await run(fake.client);
+    fake.calls.length = 0;
+    const changed = environmentFiles.map((environment) =>
+      environment.name === TEAMMATE
+        ? { ...environment, description: `${environment.description} More.` }
+        : environment,
+    );
+    const said = await run(fake.client, agentFiles, bothSecrets, changed);
+    expect(fake.calls).toEqual([`env.update ${TEAMMATE}`, ...refreshes]);
+    expect(said).toContainEqual(expect.stringMatching(/environment "hippidy-bot": unchanged/));
   });
 
   it("refuses two agent files with the same name, before changing anything", async () => {
@@ -212,9 +307,19 @@ describe("syncAll", () => {
     await expect(run(fake.client, [...agentFiles, twin])).rejects.toThrow(/two agent files/);
     expect(fake.calls).toEqual([]);
   });
+
+  it("refuses two environment files with the same name, before changing anything", async () => {
+    const fake = fakeClient();
+    const [first] = environmentFiles;
+    if (first === undefined) throw new Error("no environment file");
+    await expect(
+      run(fake.client, agentFiles, bothSecrets, [...environmentFiles, first]),
+    ).rejects.toThrow(/two environment files/);
+    expect(fake.calls).toEqual([]);
+  });
 });
 
-describe("the vault: one credential per MCP server, each from its own secret", () => {
+describe("the vaults: one per agent, one credential per MCP server, each from its own secret", () => {
   it("knows the secret for each MCP server by its exact host, and no other", () => {
     expect(secretForMcpServer(GITHUB_URL)?.variable).toBe("AGENT_GITHUB_TOKEN");
     expect(secretForMcpServer(ATLASSIAN_URL)?.variable).toBe("ATLASSIAN_SERVICE_KEY");
@@ -233,48 +338,95 @@ describe("the vault: one credential per MCP server, each from its own secret", (
     ]);
   });
 
-  it("writes each server's own secret into its credential, with both present", async () => {
+  it("writes each server's own secret into its credentials, and rotates them all", async () => {
     const fake = fakeClient();
     await run(fake.client);
     expect(
-      fake.credentials.map((credential) => [
-        credential.display_name,
-        credential.auth.mcp_server_url,
-        credential.auth.token,
-      ]),
+      fake.credentials.map((credential) => [credential.display_name, credential.auth.token]),
     ).toEqual([
-      ["GitHub (AGENT_GITHUB_TOKEN)", GITHUB_URL, "github_pat_test"],
-      ["Atlassian (ATLASSIAN_SERVICE_KEY)", ATLASSIAN_URL, "atlassian_key_test"],
+      ["GitHub (AGENT_GITHUB_TOKEN)", "github_pat_test"],
+      ["Atlassian (ATLASSIAN_SERVICE_KEY)", "atlassian_key_test"],
+      ["Atlassian (ATLASSIAN_SERVICE_KEY)", "atlassian_key_test"],
     ]);
 
     await run(fake.client, agentFiles, {
       AGENT_GITHUB_TOKEN: "github_pat_new",
       ATLASSIAN_SERVICE_KEY: "atlassian_key_new",
     });
-    expect(fake.credentials.map((credential) => credential.auth.token)).toEqual([
-      "github_pat_new",
-      "atlassian_key_new",
+    expect(fake.held()).toEqual(allHeld("github_pat_new", "atlassian_key_new"));
+  });
+
+  it("refreshes the one shared vault of before as the worker's, and leaves its Atlassian credential (decision 187)", async () => {
+    const fake = fakeClient();
+    const shared = fake.addVault(WORKER);
+    fake.addCredential(shared.id, "GitHub (AGENT_GITHUB_TOKEN)", {
+      type: "static_bearer",
+      mcp_server_url: GITHUB_URL,
+      token: "github_pat_old",
+    });
+    fake.addCredential(shared.id, "Atlassian (ATLASSIAN_SERVICE_KEY)", {
+      type: "static_bearer",
+      mcp_server_url: ATLASSIAN_URL,
+      token: "atlassian_key_old",
+    });
+    const said = await run(fake.client);
+    expect(fake.calls).toContain(`credential.update ${WORKER} ${GITHUB_URL}`);
+    expect(fake.calls.filter((call) => call.startsWith("credential.archive"))).toEqual([]);
+    expect(fake.calls).not.toContain(`vault.create ${WORKER}`);
+    // Open product threads attached this vault and still reach Atlassian through it; the new
+    // product and teammate vaults hold their own credential.
+    expect(fake.held()).toEqual({
+      ...allHeld("github_pat_test", "atlassian_key_test"),
+      [WORKER]: [
+        [GITHUB_URL, "github_pat_test"],
+        [ATLASSIAN_URL, "atlassian_key_old"],
+      ],
+    });
+    expect(said).toContainEqual(
+      expect.stringMatching(
+        new RegExp(
+          `^::warning::vault "${WORKER}" holds a credential for ${ATLASSIAN_URL.replace(/[.]/g, "\\.")}`,
+        ),
+      ),
+    );
+  });
+
+  it("leaves a credential in place, with a warning, when its agent stops declaring the server", async () => {
+    const fake = fakeClient();
+    await run(fake.client);
+    fake.calls.length = 0;
+    const withoutAtlassian = agentFiles.map((agent) =>
+      agent.name === TEAMMATE ? { ...agent, mcp_servers: [], tools: [] } : agent,
+    );
+    const said = await run(fake.client, withoutAtlassian);
+    expect(fake.calls).toEqual([
+      `credential.update ${WORKER} ${GITHUB_URL}`,
+      `credential.update ${PRODUCT} ${ATLASSIAN_URL}`,
+      `agent.update ${TEAMMATE}`,
     ]);
+    expect(said).toContainEqual(
+      expect.stringMatching(/^::warning::vault "hippidy-bot-teammate" holds a credential/),
+    );
   });
 
   it("without the Atlassian key, leaves GitHub's credential working and warns", async () => {
     const fake = fakeClient();
     const said = await run(fake.client, agentFiles, { AGENT_GITHUB_TOKEN: "github_pat_test" });
-    expect(fake.calls).toContain(`credential.create ${GITHUB_URL}`);
-    expect(fake.calls).not.toContain(`credential.create ${ATLASSIAN_URL}`);
-    expect(said).toContainEqual(
-      expect.stringMatching(/^::warning::ATLASSIAN_SERVICE_KEY is not set, .* was not made/),
-    );
+    expect(fake.calls).toContain(`credential.create ${WORKER} ${GITHUB_URL}`);
+    expect(fake.vaults.map((vault) => vault.display_name)).toEqual([WORKER]);
+    for (const vault of [PRODUCT, TEAMMATE]) {
+      expect(said).toContainEqual(
+        `::warning::ATLASSIAN_SERVICE_KEY is not set, so the credential for ${ATLASSIAN_URL} in ` +
+          `vault "${vault}" was not made. See the README's "Slice 5A: the product agent".`,
+      );
+    }
 
-    // Once both exist, a run without the key refreshes GitHub's and leaves Atlassian's alone.
+    // Once all exist, a run without the key refreshes GitHub's and leaves Atlassian's alone.
     await run(fake.client);
     fake.calls.length = 0;
     const later = await run(fake.client, agentFiles, { AGENT_GITHUB_TOKEN: "github_pat_new" });
-    expect(fake.calls).toEqual([`credential.update ${GITHUB_URL}`]);
-    expect(fake.credentials.map((credential) => credential.auth.token)).toEqual([
-      "github_pat_new",
-      "atlassian_key_test",
-    ]);
+    expect(fake.calls).toEqual([`credential.update ${WORKER} ${GITHUB_URL}`]);
+    expect(fake.held()).toEqual(allHeld("github_pat_new", "atlassian_key_test"));
     expect(later).toContainEqual(
       expect.stringMatching(/^::warning::ATLASSIAN_SERVICE_KEY is not set, .* was not updated/),
     );
@@ -285,11 +437,11 @@ describe("the vault: one credential per MCP server, each from its own secret", (
     await run(fake.client);
     fake.calls.length = 0;
     const said = await run(fake.client, agentFiles, { ATLASSIAN_SERVICE_KEY: "atlassian_key_new" });
-    expect(fake.calls).toEqual([`credential.update ${ATLASSIAN_URL}`]);
-    expect(fake.credentials.map((credential) => credential.auth.token)).toEqual([
-      "github_pat_test",
-      "atlassian_key_new",
+    expect(fake.calls).toEqual([
+      `credential.update ${PRODUCT} ${ATLASSIAN_URL}`,
+      `credential.update ${TEAMMATE} ${ATLASSIAN_URL}`,
     ]);
+    expect(fake.held()).toEqual(allHeld("github_pat_test", "atlassian_key_new"));
     expect(said).toContainEqual(
       expect.stringMatching(/^::warning::AGENT_GITHUB_TOKEN is not set, .*Slice 4 setup/),
     );
@@ -299,7 +451,7 @@ describe("the vault: one credential per MCP server, each from its own secret", (
     const fake = fakeClient();
     const said = await run(fake.client, agentFiles, {});
     expect(fake.vaults).toEqual([]);
-    expect(said.filter((line) => line.startsWith("::warning::"))).toHaveLength(2);
+    expect(said.filter((line) => line.startsWith("::warning::"))).toHaveLength(3);
   });
 
   it("skips an MCP server with no known secret, with a warning, and archives nothing", async () => {
@@ -325,14 +477,8 @@ describe("the vault: one credential per MCP server, each from its own secret", (
     expect(said).toContainEqual(
       expect.stringMatching(/^::warning::MCP server https:\/\/mcp\.example\.com\/mcp has no known/),
     );
-    expect(fake.calls).toEqual([
-      `credential.update ${GITHUB_URL}`,
-      `credential.update ${ATLASSIAN_URL}`,
-      "agent.create stranger",
-    ]);
-    expect(fake.credentials.map((credential) => credential.auth.mcp_server_url)).toEqual([
-      GITHUB_URL,
-      ATLASSIAN_URL,
-    ]);
+    expect(fake.calls).toEqual([...refreshes, "agent.create stranger"]);
+    expect(fake.vaults.map((vault) => vault.display_name)).not.toContain("stranger");
+    expect(fake.credentials.every((credential) => credential.archived_at === null)).toBe(true);
   });
 });

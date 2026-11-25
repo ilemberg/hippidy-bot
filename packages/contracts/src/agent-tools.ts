@@ -10,7 +10,7 @@ const noNull = (value: string) => !value.includes("\u0000");
 const noNullMessage = { message: "Must not contain a null character" };
 
 /** The names of the custom tools the API answers. */
-export const customToolNameSchema = z.enum(["link_project", "record_approval"]);
+export const customToolNameSchema = z.enum(["link_project", "record_approval", "start_change"]);
 export type CustomToolName = z.infer<typeof customToolNameSchema>;
 
 /**
@@ -63,3 +63,43 @@ export const recordApprovalOutputSchema = z.strictObject({
   subjectApproved: z.boolean(),
 });
 export type RecordApprovalOutput = z.infer<typeof recordApprovalOutputSchema>;
+
+/** The most characters a brief may hold, links included: what a person reads before Start. */
+export const MAX_BRIEF_CHARACTERS = 4000;
+
+const briefText = (max: number) => z.string().trim().min(1).max(max).refine(noNull, noNullMessage);
+
+/**
+ * Input of `start_change` (slice 2.1, decision 181): the brief the teammate hands to a coding
+ * worker. It is the only thing the worker is told, and it is posted in the thread first. With
+ * `changeId`, a further brief for a change already asked for in this thread.
+ */
+export const startChangeInputSchema = z
+  .strictObject({
+    changeId: uuid.optional(),
+    title: briefText(200),
+    what: briefText(MAX_BRIEF_CHARACTERS),
+    why: briefText(MAX_BRIEF_CHARACTERS),
+    doneWhen: briefText(MAX_BRIEF_CHARACTERS),
+    links: z.array(briefText(500)).max(20).default([]),
+  })
+  .refine(
+    (input) =>
+      [input.title, input.what, input.why, input.doneWhen, ...input.links].reduce(
+        (total, text) => total + text.length,
+        0,
+      ) <= MAX_BRIEF_CHARACTERS,
+    { message: `The whole brief must be at most ${String(MAX_BRIEF_CHARACTERS)} characters` },
+  );
+export type StartChangeInput = z.infer<typeof startChangeInputSchema>;
+
+/**
+ * Result of `start_change`: the change and brief, and whether the worker has it now or a
+ * person must start it first.
+ */
+export const startChangeOutputSchema = z.strictObject({
+  changeId: uuid,
+  briefId: uuid,
+  status: z.enum(["started", "waiting_for_start"]),
+});
+export type StartChangeOutput = z.infer<typeof startChangeOutputSchema>;

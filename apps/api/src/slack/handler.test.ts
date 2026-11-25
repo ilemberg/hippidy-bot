@@ -1,11 +1,12 @@
-import type { InboundMessage, StopRequest } from "@hippidy/contracts";
+import type { InboundMessage, StartBriefRequest, StopRequest } from "@hippidy/contracts";
 import { describe, expect, it } from "vitest";
 import { memoryLogger } from "../testing.ts";
-import type { ApiClient, PostMessageResult } from "./api-client.ts";
+import type { ApiClient, PostMessageResult, StartBriefCallResult } from "./api-client.ts";
 import fixture from "./fixtures/app-mention.json" with { type: "json" };
 import {
   handleMention,
   handleReaction,
+  handleStartBriefAction,
   isStopCommand,
   type MentionDelivery,
   type SlackActions,
@@ -23,11 +24,13 @@ function setup(
     react?: () => Promise<void>;
     userName?: (id: string) => Promise<string | undefined>;
     threadReplies?: (channel: string, threadTs: string) => Promise<SlackThreadMessage[]>;
+    startBrief?: () => Promise<StartBriefCallResult>;
   } = {},
 ) {
   const threadReads: { channel: string; threadTs: string }[] = [];
   const posted: { message: InboundMessage; correlationId: string }[] = [];
   const stops: StopRequest[] = [];
+  const starts: { briefId: string; request: StartBriefRequest; correlationId: string }[] = [];
   const reactions: { channel: string; timestamp: string; name: string }[] = [];
   const api: ApiClient = {
     postMessage: async (message, correlationId) => {
@@ -37,6 +40,13 @@ function setup(
     stop: (request) => {
       stops.push(request);
       return Promise.resolve({ kind: "done", result: { status: "stopped" } });
+    },
+    startBrief: async (briefId, request, correlationId) => {
+      starts.push({ briefId, request, correlationId });
+      return (
+        options.startBrief ??
+        (() => Promise.resolve({ kind: "done", result: { status: "started" } }))
+      )();
     },
   };
   const slack: SlackActions = {
@@ -55,6 +65,7 @@ function setup(
     deps: { api, slack, log, threadReadTimeoutMs: 50 },
     posted,
     stops,
+    starts,
     reactions,
     lines,
     threadReads,
@@ -443,5 +454,109 @@ describe("handleReaction", () => {
     const { authorizations: _a, ...withoutBotId } = reaction();
     expect(await handleReaction(withoutBotId, deps)).toBe("ignored");
     expect(stops).toEqual([]);
+  });
+});
+
+describe("handleStartBriefAction", () => {
+  const briefId = "6f1c2a9e-4b7d-4c3a-9e2f-1a2b3c4d5e6f";
+
+  function press(overrides: { actionId?: string; value?: string; withActionTs?: boolean } = {}) {
+    return {
+      type: "block_actions",
+      token: "legacy-verification-token",
+      trigger_id: "1234.5678.abcd",
+      team: { id: "T1", domain: "acme" },
+      user: { id: "U2", username: "ilya", team_id: "T1" },
+      channel: { id: "C1", name: "general" },
+      message: { ts: "100.000002", thread_ts: "100.000001" },
+      actions: [
+        {
+          type: "button",
+          block_id: "b1",
+          action_id: overrides.actionId ?? "start_change",
+          value: overrides.value ?? briefId,
+          text: { type: "plain_text", text: "Start" },
+          ...(overrides.withActionTs === false ? {} : { action_ts: "1700000000.123456" }),
+        },
+      ],
+    };
+  }
+
+  it("starts the brief as the person who pressed Start, with their name", async () => {
+    const { deps, starts, lines } = setup({ userName: () => Promise.resolve("Ilya") });
+    expect(await handleStartBriefAction(press(), deps)).toBe("started");
+    expect(starts).toEqual([
+      {
+        briefId,
+        request: { source: "slack", workspaceId: "T1", actor: { id: "U2", displayName: "Ilya" } },
+        correlationId: "1700000000.123456",
+      },
+    ]);
+    expect(lines).toContainEqual(
+      expect.objectContaining({
+        msg: "slack.brief_start",
+        correlationId: "1700000000.123456",
+        result: "started",
+      }),
+    );
+    expect(JSON.stringify(lines)).not.toContain("legacy-verification-token");
+  });
+
+  it("uses the trigger id as the correlation id when the action has no timestamp", async () => {
+    const { deps, starts } = setup();
+    await handleStartBriefAction(press({ withActionTs: false }), deps);
+    expect(starts[0]?.correlationId).toBe("1234.5678.abcd");
+  });
+
+  it("passes on what the API says, for example that it was already started", async () => {
+    const { deps } = setup({
+      startBrief: () => Promise.resolve({ kind: "done", result: { status: "already_started" } }),
+    });
+    expect(await handleStartBriefAction(press(), deps)).toBe("already_started");
+  });
+
+  it("still starts the brief when the name lookup fails, without a name", async () => {
+    const { deps, starts, lines } = setup({
+      userName: () => Promise.reject(new Error("users_not_found")),
+    });
+    expect(await handleStartBriefAction(press(), deps)).toBe("started");
+    expect(starts[0]?.request.actor).toEqual({ id: "U2" });
+    expect(lines).toContainEqual(expect.objectContaining({ msg: "slack.user_lookup_failed" }));
+  });
+
+  it("logs the API's rejection, and does not throw", async () => {
+    const error = { code: "not_found" as const, message: "No such route" };
+    const { deps, lines } = setup({
+      startBrief: () => Promise.resolve({ kind: "rejected", status: 404, error }),
+    });
+    expect(await handleStartBriefAction(press(), deps)).toBe("api_rejected");
+    expect(lines).toContainEqual(
+      expect.objectContaining({ msg: "slack.brief_start_rejected", status: 404, error }),
+    );
+  });
+
+  it("does not throw when the API call does", async () => {
+    const { deps, lines } = setup({ startBrief: () => Promise.reject(new Error("boom")) });
+    expect(await handleStartBriefAction(press(), deps)).toBe("api_rejected");
+    expect(lines).toContainEqual(expect.objectContaining({ msg: "slack.api_call_failed" }));
+  });
+
+  it("ignores an action that is not the Start button", async () => {
+    const { deps, starts } = setup();
+    expect(await handleStartBriefAction(press({ actionId: "something_else" }), deps)).toBe(
+      "ignored",
+    );
+    expect(starts).toEqual([]);
+  });
+
+  it("rejects a payload it cannot read, and one whose value is not a brief id", async () => {
+    const { deps, starts, lines } = setup();
+    expect(await handleStartBriefAction({ type: "block_actions", actions: [] }, deps)).toBe(
+      "invalid_action",
+    );
+    expect(await handleStartBriefAction("not even an object", deps)).toBe("invalid_action");
+    expect(await handleStartBriefAction(press({ value: "../stop" }), deps)).toBe("invalid_action");
+    expect(starts).toEqual([]);
+    expect(lines.filter((line) => line.msg === "slack.brief_start.invalid")).toHaveLength(3);
   });
 });

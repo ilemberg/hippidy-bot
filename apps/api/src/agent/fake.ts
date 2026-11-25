@@ -26,6 +26,13 @@ interface FakeSession {
   usage: SessionUsage;
 }
 
+/** The agent id a session of each kind reports. */
+const FAKE_AGENT_IDS: Record<AgentKind, string> = {
+  engineer: "agent_fake",
+  product: "agent_fake_product",
+  teammate: "agent_fake_teammate",
+};
+
 /** The runtime's own names for the events the API acts on, as Managed Agents spells them. */
 const TYPE_OF: Record<AgentEvent["kind"], string> = {
   user_message: "user.message",
@@ -37,6 +44,8 @@ const TYPE_OF: Record<AgentEvent["kind"], string> = {
   tool_confirmation: "user.tool_confirmation",
   pull_request: "agent.mcp_tool_result",
   pushed: "agent.tool_use",
+  mcp_tool_use: "agent.mcp_tool_use",
+  git_read: "agent.tool_use",
   custom_tool_use: "agent.custom_tool_use",
   custom_tool_result: "user.custom_tool_result",
 };
@@ -134,7 +143,7 @@ export class FakeAgentRuntime implements AgentRuntime {
     });
     return Promise.resolve({
       sessionId,
-      agentId: input.agentKind === "product" ? "agent_fake_product" : "agent_fake",
+      agentId: FAKE_AGENT_IDS[input.agentKind],
       agentVersion: 1,
     });
   }
@@ -250,6 +259,16 @@ export class FakeAgentRuntime implements AgentRuntime {
   /** The agent opens (or reads) a pull request, in a turn already running. */
   pullRequest(sessionId: string, url: string): void {
     this.push(this.session(sessionId), { kind: "pull_request", id: this.id("sevt"), url });
+  }
+
+  /** The agent calls a tool of an MCP server, in a turn already running. */
+  mcpToolUse(sessionId: string, server: string, name: string): void {
+    this.push(this.session(sessionId), { kind: "mcp_tool_use", id: this.id("sevt"), server, name });
+  }
+
+  /** The agent fetches or reads git refs other than `main`, in a turn already running. */
+  gitRead(sessionId: string): void {
+    this.push(this.session(sessionId), { kind: "git_read", id: this.id("sevt") });
   }
 
   /** The agent runs `git push`, in a turn already running. */

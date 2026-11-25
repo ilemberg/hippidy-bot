@@ -1,0 +1,17 @@
+# The environment the teammate's sessions run in (slice 2.1, decision 181). Synced by
+# `pnpm agent:sync` with every other file in `environments/`.
+# Rule 1 of docs/planning/slice-2-1.md: the session that reads untrusted content cannot
+# publish. So it reaches MCP servers only (Atlassian's): no package registries and no hosts,
+# not even github.com. The repo is mounted without a token, so there is nothing to push with.
+# Part A's probe (apps/api/scripts/teammate-probe.ts, run by hand from
+# .github/workflows/teammate-probe.yml) checks that such an environment can read the mounted
+# `main` and reach nothing else.
+name: hippidy-bot-teammate
+description: Sandbox for the teammate's sessions, reading a tokenless clone of the repo.
+config:
+  type: cloud
+  networking:
+    type: limited
+    allow_package_managers: false
+    allow_mcp_servers: true
+    allowed_hosts: []
