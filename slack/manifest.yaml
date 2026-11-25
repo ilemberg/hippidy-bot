@@ -9,7 +9,16 @@ features:
     display_name: hippidy-bot
     always_online: true
 oauth_config:
+  # Sign in with Slack, for the web app (slice 2.3, decision 193). This is the web app's
+  # Vercel production domain; change it here, and in WEB_BASE_URL, if the domain differs.
+  redirect_urls:
+    - https://hippidy-bot-web.vercel.app/auth/slack/callback
   scopes:
+    # OpenID Connect: who signed in, and to which workspace. The web app keeps no Slack token.
+    user:
+      - openid
+      - profile
+      - email
     bot:
       - app_mentions:read
       # Read a thread's messages since the bot's last reply when it is mentioned (decision 140).

@@ -8,6 +8,8 @@ Run from the repo root. Node 26, pnpm (pinned in `package.json`).
 
 - `pnpm install`
 - `pnpm dev`: local API on http://localhost:3000 (reads `apps/api/.env`)
+- `pnpm dev:web`, `pnpm build:web`: the web app on http://localhost:3001 (reads
+  `apps/web/.env.local`), and its production build
 - `pnpm lint`, `pnpm format` (writes), `pnpm format:check`, `pnpm typecheck`, `pnpm test`
 - `pnpm build && pnpm smoke`: compiles workspace packages the way Vercel does and checks the
   app starts and answers without them being read from source
@@ -17,8 +19,15 @@ all pass. CI runs these, then `pnpm build && pnpm smoke`.
 
 ## Shape of the system
 
-- `apps/api` is the one deployable. `src/index.ts` is the Vercel entry; `src/compose.ts` is the
-  composition root, the only file that wires modules together.
+- `apps/api` is the API's deployable. `src/index.ts` is the Vercel entry; `src/compose.ts` is
+  the composition root, the only file that wires modules together.
+- `apps/web` is the web app (Next.js App Router), a second Vercel project with root
+  `apps/web`. It reaches the system only through the API's routes, from its server, as the
+  signed-in person (a short-lived person token signed with `WEB_API_SECRET`); it never holds
+  the service token, and a lint rule stops it importing the API's code. Sign-in and token
+  logic sits in `src/lib` over the standard Request and Response, so it is tested without
+  Next.js; the route files only pass the real dependencies in (`src/lib/server.ts`). Its own
+  `build` (`pnpm build:web`) is not part of CI's `pnpm build`.
 - `apps/api/src/slack` is the Slack adapter: Bolt with the `@vercel/slack-bolt` receiver at
   `POST /slack/events`. It maps Slack events to the contract and calls the API through
   `ApiClient`. A lint rule stops it importing `src/api` or `src/compose.ts`.
@@ -30,7 +39,7 @@ all pass. CI runs these, then `pnpm build && pnpm smoke`.
   reuse the thread's session, sync replies back exactly once, settle messages, reconcile.
 - `apps/api/src/api` is the core API. It is channel-agnostic: it knows sources, conversations
   and messages, never Slack threads or Slack markup.
-- Slack (and later the UI) reach the system only through the API's routes and contract. The
+- Slack and the web app reach the system only through the API's routes and contract. The
   Slack adapter imports nothing from `src/api`; it gets an API client from `compose.ts`, which
   dispatches in-process through the API's own route.
 - `packages/contracts` holds every request, response and error schema (Zod). A change to the
