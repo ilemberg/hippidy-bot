@@ -97,7 +97,8 @@ function View({ view }: { view: ListeningView }) {
             </ul>
           )}
           <p className="muted">
-            Confirming and rejecting proposals here comes with the wiki. Until then they wait.
+            Open a proposal to confirm, change or reject it. Only the people who wrote in its thread
+            can. All decisions are under <a href="/decisions">Decisions</a>.
           </p>
         </>
       );
@@ -131,7 +132,9 @@ function ProposalItem({ decision, now }: { decision: Decision; now: Date }) {
   const who = decision.decidedBy.name ?? decision.decidedBy.actorId ?? "someone";
   return (
     <li className="session">
-      <p className="session-title">{decision.statement}</p>
+      <p className="session-title">
+        <a href={`/decisions/${decision.number}`}>{decision.statement}</a>
+      </p>
       {decision.reason === null ? null : <p>{decision.reason}</p>}
       <p className="muted">
         Decided by {who}, {ago(decision.decidedAt, now)}
