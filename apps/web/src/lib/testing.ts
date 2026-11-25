@@ -6,11 +6,12 @@ import {
   type CryptoKey,
   type JWTVerifyGetKey,
 } from "jose";
+import type { Decision, DecisionDetail } from "@hippidy/contracts";
 import type { WebConfig } from "./config.ts";
 import { SLACK_TEAM_CLAIM } from "./slack-oidc.ts";
 
-// Test helpers: a stand-in for Slack's signing keys and its id tokens. Nothing here reaches
-// the network.
+// Test helpers: a stand-in for Slack's signing keys and its id tokens, and a decision as the
+// API returns it. Nothing here reaches the network.
 
 export const config: WebConfig = {
   slack: {
@@ -70,3 +71,33 @@ export function slackIdToken(
     .setExpirationTime(issuedAt + (options.lifetimeSeconds ?? 3600))
     .sign(key.privateKey);
 }
+
+/** A proposal from a teammate's thread, as the API returns it (slice 2.6). */
+export const proposal: Decision = {
+  id: "0b6f9c1e-2d3a-4b5c-8d7e-9f0a1b2c3d4e",
+  number: 7,
+  statement: "Use Postgres for search",
+  reason: "It is already there",
+  area: "Search",
+  status: "proposed",
+  decidedBy: { actorId: "U1", name: "Ada" },
+  decidedAt: "2026-11-25T10:00:00.000Z",
+  origin: "thread",
+  originRef: null,
+  conversationId: "6f1c2b9e-1d2a-4c3b-9e8f-0a1b2c3d4e5f",
+  channelId: "C1",
+  threadId: "1700.000100",
+  messageId: "1700.000200",
+  supersedes: null,
+  confirmedBy: null,
+  confirmedAt: null,
+  rejectedBy: null,
+  rejectedAt: null,
+};
+
+/** `GET /v1/decisions/7` for a person who may act on it. */
+export const proposalDetail: DecisionDetail = {
+  decision: proposal,
+  history: [],
+  youMay: { act: true, reason: null },
+};
