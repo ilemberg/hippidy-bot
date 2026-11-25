@@ -165,7 +165,7 @@ Each is its own pull request. A to C change nothing a person sees and can merge 
 |---|---|---|
 | A | **Probe**, a workflow started by hand in `release`, like slice 4's experiment (118): a session in the teammate's environment reads the mounted `main`; tries `git fetch` of `refs/pull/*`, a package registry and a public host; calls one Atlassian read tool. Under $1 | No |
 | B | **Schema**: `changes` (thread, who asked, status, and the worker's session and loop state) and `change_briefs` (append-only: the text, whether a start was needed and why, who started it, when, the event it was handed over as), and `inbound_messages.change_brief_id`. Additive (86) | No |
-| C | **The worker and the brief, in the API**: `start_change` and the start rule, the worker's loop, settling messages by the worker's turn, the start route, stop, reconcile and webhooks for changes, the worker's reports in the teammate's next message | No: no agent has `start_change` until E |
+| C | **The worker and the brief, in the API**: `start_change` and the start rule, the worker's loop, settling messages by the worker's turn, the start route, stop, reconcile and webhooks for changes, the worker's reports in the teammate's next message | No: no agent has `start_change` until E. Built (decisions 185, 186) |
 | D | **Slack**: the brief posted with a Start button; the button calls the start route. Built: the manifest turns on interactivity, so the app must be updated and reinstalled | No: nothing posts a brief until E |
 | E | **The agents**: `agents/teammate.md`, `environments/teammate.yaml`, the worker's prompt, one vault per agent, new threads to the teammate, the product agent takes no new threads, the README | **Yes**: every new thread |
 

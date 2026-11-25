@@ -67,8 +67,7 @@ export type RecordApprovalOutput = z.infer<typeof recordApprovalOutputSchema>;
 /** The most characters a brief may hold, links included: what a person reads before Start. */
 export const MAX_BRIEF_CHARACTERS = 4000;
 
-const briefText = (max: number) =>
-  z.string().trim().min(1).max(max).refine(noNull, noNullMessage);
+const briefText = (max: number) => z.string().trim().min(1).max(max).refine(noNull, noNullMessage);
 
 /**
  * Input of `start_change` (slice 2.1, decision 181): the brief the teammate hands to a coding

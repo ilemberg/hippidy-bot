@@ -138,7 +138,16 @@ describe("the start rule (decision 181)", () => {
   ];
 
   it("needs no one when nothing outside the thread was read first", () => {
-    expect(startReason(events.slice(0, 1).concat(events[3] as AgentEvent), "c1")).toBeUndefined();
+    const call: AgentEvent = {
+      kind: "custom_tool_use",
+      id: "c1",
+      name: "start_change",
+      input: {},
+      processedAt: null,
+    };
+    expect(startReason([{ kind: "user_message", id: "m1", processed: true }, call], "c1")).toBe(
+      undefined,
+    );
   });
 
   it("names each tool read with before the brief, once", () => {
@@ -157,7 +166,10 @@ describe("a brief that needs no one to start it", () => {
   it("is posted, handed to a worker, and the person's message waits for the worker's CI", async () => {
     await askForChange();
     const change = await onlyChange();
-    expect(change).toMatchObject({ status: "started", requestedBy: { actorId: "U1", name: "Ada" } });
+    expect(change).toMatchObject({
+      status: "started",
+      requestedBy: { actorId: "U1", name: "Ada" },
+    });
     expect(briefs()).toEqual([
       expect.objectContaining({ needsStart: false, text: briefForThread(brief, undefined) }),
     ]);
@@ -234,9 +246,9 @@ describe("a brief written after reading Jira or Confluence", () => {
     const change = await onlyChange();
     expect(change.status).toBe("started");
     expect(runtime.sessions.get(workerOf(change))?.sent).toHaveLength(1);
-    expect(
-      await db.query(`select started_by_actor_id, start_reason from change_briefs`),
-    ).toEqual([{ started_by_actor_id: "U2", start_reason: "read with atlassian.getJiraIssue" }]);
+    expect(await db.query(`select started_by_actor_id, start_reason from change_briefs`)).toEqual([
+      { started_by_actor_id: "U2", start_reason: "read with atlassian.getJiraIssue" },
+    ]);
 
     // A second press does nothing more.
     expect(
@@ -351,7 +363,6 @@ describe("the worker and the thread", () => {
   });
 
   it("gives up on a worker's turn gone quiet, and reconcile hands over what failed", async () => {
-    runtime.failNext.sendMessage = undefined;
     await receiveMessage(deps, message(1), log);
     const teammate = runtime.onlySessionId();
     runtime.work(teammate);
@@ -364,10 +375,9 @@ describe("the worker and the thread", () => {
     const change = await onlyChange();
     expect(runtime.sessions.get(workerOf(change))?.sent).toHaveLength(1);
 
-    await db.query(
-      `update changes set waiting_since = now() - make_interval(mins => $1)`,
-      [GIVE_UP_AFTER_MINUTES + 1],
-    );
+    await db.query(`update changes set waiting_since = now() - make_interval(mins => $1)`, [
+      GIVE_UP_AFTER_MINUTES + 1,
+    ]);
     runtime.setClock(new Date(Date.now() - (GIVE_UP_AFTER_MINUTES + 5) * 60_000));
     runtime.work(workerOf(change));
     await syncChange(deps, await getChange(db, change.id), log);

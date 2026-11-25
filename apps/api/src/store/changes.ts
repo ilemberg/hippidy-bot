@@ -158,7 +158,12 @@ export async function createBrief(
       const r = z
         .object({ id: z.string(), change_id: z.string(), started_at: z.date().nullable() })
         .parse(existing[0]);
-      return { kind: "existing", changeId: r.change_id, briefId: r.id, started: r.started_at !== null };
+      return {
+        kind: "existing",
+        changeId: r.change_id,
+        briefId: r.id,
+        started: r.started_at !== null,
+      };
     }
 
     let changeId: string;
@@ -405,10 +410,7 @@ export interface ChangeLease {
 /** A worker's sync that has not finished after this long is assumed dead. */
 export const CHANGE_LEASE_SECONDS = 120;
 
-export async function claimChangeLease(
-  db: Db,
-  changeId: string,
-): Promise<ChangeLease | undefined> {
+export async function claimChangeLease(db: Db, changeId: string): Promise<ChangeLease | undefined> {
   const rows = await db.query(
     `update changes
      set sync_lease_until = now() + make_interval(secs => $2),
@@ -442,10 +444,10 @@ export async function releaseChangeLease(db: Db, lease: ChangeLease): Promise<vo
 }
 
 export async function setChangeCursor(db: Db, changeId: string, eventId: string): Promise<void> {
-  await db.query(
-    `update changes set agent_event_cursor = $2, updated_at = now() where id = $1`,
-    [changeId, eventId],
-  );
+  await db.query(`update changes set agent_event_cursor = $2, updated_at = now() where id = $1`, [
+    changeId,
+    eventId,
+  ]);
 }
 
 export async function setChangeSessionState(
@@ -527,10 +529,7 @@ export async function changesToReconcile(
 }
 
 /** The thread's changes with a started brief not yet handed to their worker. */
-export async function changesWithUnsentBriefs(
-  db: Db,
-  conversationId: string,
-): Promise<Change[]> {
+export async function changesWithUnsentBriefs(db: Db, conversationId: string): Promise<Change[]> {
   const rows = await db.query(
     `select ${changeColumns} from changes c
      where c.conversation_id = $1 and c.status = 'started'

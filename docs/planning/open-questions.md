@@ -180,7 +180,7 @@ same URL); a ✅ reaction (the `reactions:read` scope and the `reaction_added` e
 reinstall); or a reply that mentions the bot and says "go", recognised by the API before the
 teammate sees it (no reinstall, but it matches text). *Recommendation:* the button. It is
 one click, it says plainly what it does, Slack tells the API who pressed it, and Bolt handles
-it on the same route.
+it on the same route. **Answered 2026-11-25 (decision 185): the button.**
 
 **G18 (2.1, parts A and D). Does every brief need a person to start it, or only one written
 after untrusted content was read?** Only tainted briefs keeps "nobody types approve" for

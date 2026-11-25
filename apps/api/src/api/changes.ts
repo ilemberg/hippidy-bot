@@ -99,12 +99,18 @@ export async function syncChange(
       changeLog.warn("change.sync_lease_lost", {});
       return;
     }
-    await giveUpIfStuck(deps, conversation, await getChange(deps.db, change.id), lastEventAt, changeLog);
+    await giveUpIfStuck(
+      deps,
+      conversation,
+      await getChange(deps.db, change.id),
+      lastEventAt,
+      changeLog,
+    );
     sessionId = workerSessionIdOf(current);
   } finally {
     await releaseChangeLease(deps.db, lease);
   }
-  if (conversation !== undefined) await flushSoon(deps, conversation.id, changeLog);
+  await flushSoon(deps, conversation.id, changeLog);
   if (sessionId !== undefined) {
     try {
       await recordUsage(deps.db, change.id, await deps.runtime.readUsage(sessionId), "changes");
@@ -157,16 +163,26 @@ async function handOverBriefs(
   const briefs = await unsentBriefs(deps.db, change.id);
   if (briefs.length === 0) return;
   if (change.sessionState !== "active") {
-    await settleAndQueue(deps, conversation, "failed", { kind: "change", changeId: change.id }, log, {
-      key: `change:${change.id}:closed:${briefs.map((b) => b.id).join(",")}`,
-      note: change.sessionState === "terminated" ? notes.closed_terminated : notes.closed_budget,
-    });
+    await settleAndQueue(
+      deps,
+      conversation,
+      "failed",
+      { kind: "change", changeId: change.id },
+      log,
+      {
+        key: `change:${change.id}:closed:${briefs.map((b) => b.id).join(",")}`,
+        note: change.sessionState === "terminated" ? notes.closed_terminated : notes.closed_budget,
+      },
+    );
     return;
   }
   for (const brief of briefs) {
     try {
       const sessionId = await ensureWorker(deps, change, log);
-      const eventId = await deps.runtime.sendMessage(sessionId, formatBriefForWorker(change, brief));
+      const eventId = await deps.runtime.sendMessage(
+        sessionId,
+        formatBriefForWorker(change, brief),
+      );
       // Without an event id the brief is still sent once; its messages are then settled when
       // the worker is idle with nothing queued (the `handed_over` settlement).
       await markBriefSent(deps.db, brief.id, eventId ?? `untracked:${brief.id}`);
@@ -243,10 +259,17 @@ async function readWorker(
       ending === "terminated" ? "terminated" : "budget_reached",
     );
     await clearChangeWaiting(deps.db, change.id);
-    await settleAndQueue(deps, conversation, "failed", { kind: "change", changeId: change.id }, log, {
-      key: state.id,
-      note: notes[ending],
-    });
+    await settleAndQueue(
+      deps,
+      conversation,
+      "failed",
+      { kind: "change", changeId: change.id },
+      log,
+      {
+        key: state.id,
+        note: notes[ending],
+      },
+    );
     return lastEventAt;
   }
 
@@ -269,10 +292,17 @@ async function readWorker(
     );
   }
   if (!anyQueued) {
-    await settleAndQueue(deps, conversation, status, { kind: "handed_over", changeId: change.id }, log, {
-      key: `${state.id}:handed_over`,
-      note,
-    });
+    await settleAndQueue(
+      deps,
+      conversation,
+      status,
+      { kind: "handed_over", changeId: change.id },
+      log,
+      {
+        key: `${state.id}:handed_over`,
+        note,
+      },
+    );
     if ((await unsentBriefs(deps.db, change.id)).length === 0) {
       await clearChangeWaiting(deps.db, change.id);
     }
@@ -358,7 +388,10 @@ async function giveUpIfStuck(
     "failed",
     { kind: "handed_over", changeId: change.id },
     log,
-    { key: `change:${change.id}:timeout:${change.waitingSince.toISOString()}`, note: notes.timeout },
+    {
+      key: `change:${change.id}:timeout:${change.waitingSince.toISOString()}`,
+      note: notes.timeout,
+    },
   );
   await clearChangeWaiting(deps.db, change.id);
   log.warn("change.gave_up", { quietMinutes: Math.round((now - quietSince) / 60_000) });
