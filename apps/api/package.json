@@ -15,7 +15,8 @@
     "agent:sync": "node scripts/sync-agent.ts",
     "agent:experiment": "node scripts/experiment.ts",
     "atlassian:probe": "node scripts/atlassian-probe.ts",
-    "teammate:probe": "node scripts/teammate-probe.ts"
+    "teammate:probe": "node scripts/teammate-probe.ts",
+    "decisions:seed": "node scripts/decisions-seed.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.10.0",

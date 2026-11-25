@@ -194,20 +194,20 @@ other refs, so the start rule counts git reads of them; only tainted briefs need
 **G4 (2.2). Where does the memory live?** In the runtime's memory stores, or in our own
 table behind tools the API answers. *Recommendation:* our own table, after the probe in
 `wave-2.md` has shown what the memory stores can and cannot hold. The web app must read and
-correct a decision without calling the runtime, as the read routes do today.
+correct a decision without calling the runtime, as the read routes do today. **Answered 2026-11-25 (decision 190), as recommended.**
 
 **G5 (2.2). Is the memory seeded from `decisions.md`?** *Recommendation:* yes. Import the
 log as the first entries, each marked with its number as its source, so recall has something
-real to answer from on the first day.
+real to answer from on the first day. **Answered 2026-11-25 (decision 191), as recommended.**
 
 **G6 (2.2). When is a decision active at once, and when only proposed?** *Recommendation:*
 active at once when a person asks the bot to record it in their own message; proposed when
-the bot inferred it.
+the bot inferred it. **Answered 2026-11-25 (decision 192), as recommended.**
 
 **G7 (2.3). How do people sign in to the web app?** The Dashboard v1 plan settled who may
 see it: anyone who can talk to the bot in Slack. *Recommendation:* sign in with Slack,
 limited to the workspace. The service token never reaches a browser (26, 38), so the API
-accepts a signed-in person beside it.
+accepts a signed-in person beside it. **Answered 2026-11-25 (decision 193), as recommended.**
 
 **G8 (2.5). What does listening store, and for how long?** Changes 76 and 84.
 *Recommendation:* the text, the sender, the time and a link to the message, never Slack's
