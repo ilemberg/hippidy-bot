@@ -536,6 +536,8 @@ Atlassian credential as it was; GitHub's credential is never touched by it.
 | [docs/planning/slice-2.md](docs/planning/slice-2.md)                 | Slice 2 as built: the agent loop, storage, names and stop                                  |
 | [docs/planning/slice-3.md](docs/planning/slice-3.md)                 | Slice 3 as built: Supabase as the record, the read routes, and how the slice closed        |
 | [docs/planning/slice-4.md](docs/planning/slice-4.md)                 | Slice 4 plan: the agent gets a development environment (in progress)                       |
+| [docs/planning/team-layer.md](docs/planning/team-layer.md)           | The direction from wave 2: the team layer, its records, and how people reach it            |
+| [docs/planning/wave-2.md](docs/planning/wave-2.md)                   | The wave 2 plan (draft): one team, one memory; waves 3 to 5 as sketches                    |
 | [docs/planning/open-questions.md](docs/planning/open-questions.md)   | The grill: decisions that are open, grouped by when they block                             |
 | [docs/planning/decisions.md](docs/planning/decisions.md)             | Decision log. Things move here from open-questions once decided                            |
 | [docs/planning/stack-and-tools.md](docs/planning/stack-and-tools.md) | Stack options, MCP servers, and off-the-shelf pieces that make this cheaper or better      |
@@ -544,7 +546,8 @@ How the planning docs are maintained:
 
 - Only the next slice is planned in detail. Later slices stay as sketches and are rewritten
   after each slice ships, because each one teaches something that changes the next.
-- Every slice ends with a short retro appended to `wave-1.md` (what was learned, what changed).
+- Every slice ends with a short retro appended to its wave's file (what was learned, what
+  changed).
 - A decision is not real until it is in `decisions.md` with a date and a reason.
 
 ## License

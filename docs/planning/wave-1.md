@@ -6,6 +6,9 @@ human to read every diff. After slice 4, hippidy-bot is developed through hippid
 
 Only the next slice is planned in detail. Everything after it is a sketch and will be rewritten.
 
+**Wave 1 closed on 2026-11-25 with slice 5A (`decisions.md` 179).** Slices 5B, 5C and 6 below
+are kept as they were sketched and are not built as designed. What follows is in `wave-2.md`.
+
 ## Target shape
 
 ```
@@ -234,6 +237,10 @@ Done 2026-11-19: see `slice-4.md` (its live checks at close) and the retro below
 
 ## Slice 5: a feature moves through a project
 
+Closed 2026-11-25 (`decisions.md` 179): 5A is built and live; 5B and 5C are not built as
+designed, because stages and approvals were removed (173). The walkthrough and the production
+check of 5C carry to slice 4.3 of `wave-2.md`. Retro at the end of this file.
+
 Re-sketched 2026-11-19 (`decisions.md` 135 to 158). The sketch before that was "work from a
 ticket instead of a sentence": `@hippidy-bot pick up HB-12`, with a work-item provider and a
 knowledge provider behind interfaces. That is now only the last stage of a longer workflow,
@@ -269,6 +276,9 @@ Slice 4 closed on 2026-11-19 (retro below), with four live checks still to run i
 (decision 159).
 
 ## Slice 6: auto-merge with confidence
+
+Parked 2026-11-25 (`decisions.md` 179). The independent review step carries to slice 4.3 of
+`wave-2.md`; the rest waits until that reviewer has run on real pull requests.
 
 **Demo:** a low-risk request goes from Slack message to merged and deployed with no human
 touching GitHub, and a deliberately bad request is stopped by the checks.
@@ -514,3 +524,40 @@ production `/status` answers 200. The session cost $0.75 for 7 active minutes ov
 
 **Carried forward:** a long reply that fails partway is re-posted from the start; lazy-load
 Bolt; Dependabot alerts; the GitHub token's expiry date (README).
+
+### Slice 5A (built 2026-11-19; wave 1 closed 2026-11-25)
+
+**Shipped:** ilemberg/hippidy-bot pull requests 34 and 35 (the schema and routes for
+projects, roles and approvals), 37 (reading the thread), 38 (role and project told to the
+agent), 40 to 43 (custom tool calls, the product agent and routing), 46 (Jira and
+Confluence) and 47 (several roles for one person); the Atlassian probe in 30, 33, 39, 44 and
+45. The demo ran in Slack on 2026-11-19, with the owner in both roles: the bot created the
+project Dashboard v1, wrote its plan in Confluence over four versions, recorded the plan's
+approval, created the epic SCRUM-6 with six tickets, and recorded the roadmap's approval.
+
+**What was learned** (read from the record of that thread on 2026-11-20):
+
+- **The bot plans well.** It read the repo first and grounded the plan in what exists: the
+  read routes, the progress notes, decision 22. It named the real gaps (no web app, no way to
+  accept a signed-in person, no record of which ticket a thread works on).
+- **The approval chain cost more than it protected.** The thread ran for almost four hours
+  and $2.88, and took three approval messages. The owner had to be given a second role to
+  approve alone (decision 170). It ended with a frozen plan, seven Jira issues and no code.
+- **Recording is not moving.** After both approvals the bot said the project "should now
+  move" to `ship`; in the database its stage is still `plan`, because nothing moves it (146).
+- **Questions for engineering had no owner.** The plan left the stack and sign-in "for
+  engineering to settle", and nobody was asked.
+- **The next step it asked for was a new thread per ticket**, started by one of four roles,
+  each mention by hand.
+- **A project is created by name with no check for one that exists.** Two projects named
+  Dashboard v1 are in the database, from an earlier test thread and from the demo.
+- **Atlassian's server has gaps.** The bot cannot comment on a Confluence page (171).
+
+**What changes for the next slices:** the direction. hippidy-bot becomes the team layer:
+no stages, no approvals, one agent, everyone trusted, and a shared memory of decisions
+(decisions 172 to 180, `team-layer.md`). Wave 2 is planned in `wave-2.md`.
+
+**Carried forward:** 5A's "done when" lines were not checked one by one at this close; the
+demo is the evidence. Slice 4's four live checks in Slack are still owed (decision 160). The
+second Dashboard v1 project is left as it is. The probe of decision 150 (Chromium in the
+sandbox, files out of a session) is still to run, and now blocks slice 4.3.
