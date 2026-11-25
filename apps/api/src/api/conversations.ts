@@ -61,6 +61,7 @@ import {
   type SenderAndProject,
 } from "../store/projects.ts";
 import { stopChanges, workerReportsSince, type WorkerReport } from "../store/changes.ts";
+import { searchDecisions } from "../store/decisions.ts";
 import { latestActivity, latestStoredEventTime, storedEventsToActOn } from "../store/record.ts";
 import { answerCustomToolCall, type CustomToolCall } from "./agent-tools.ts";
 import { reconcileChanges, syncChangesWithUnsentBriefs } from "./changes.ts";
@@ -178,6 +179,7 @@ export async function receiveMessage(
     // Outside any sync lease: receiving a message never holds one.
     const about = await senderAndProject(deps, conversation.id, message.actor.id, log);
     const reports = await reportsSinceLastReply(deps, conversation.id, log);
+    const decisions = await decisionsBearingOn(deps, conversation.id, message.text, log);
     const agentEventId = await deps.runtime.sendMessage(
       sessionId,
       formatForAgent(
@@ -187,6 +189,7 @@ export async function receiveMessage(
         message.context,
         about,
         reports,
+        decisions,
       ),
     );
     await markForwarded(deps.db, recorded.id, agentEventId);
@@ -206,6 +209,21 @@ export async function receiveMessage(
 
 /** The line that introduces what was said in the conversation since the agent's last reply. */
 export const CONTEXT_LEAD = "Said in the thread since your last reply:";
+/** The line that introduces the decisions on record that may bear on a message (slice 2.2). */
+export const DECISIONS_LEAD = "Decisions on record that may bear on this:";
+/** The most decisions put before one message. */
+export const DECISIONS_PER_MESSAGE = 5;
+
+/** A decision as the agent is shown it before a message: enough to cite it. */
+export interface DecisionLine {
+  number: number;
+  statement: string;
+  decidedBy: string | null;
+  decidedAt: string;
+  origin: "thread" | "import" | "capture";
+  originRef: string | null;
+}
+
 /** The line that introduces what the thread's coding workers reported (decision 184). */
 export const REPORTS_LEAD = "The coding worker reported since your last reply:";
 
@@ -237,6 +255,7 @@ export function formatForAgent(
   context: readonly ContextMessage[] = [],
   about: Partial<SenderAndProject> = {},
   reports: readonly WorkerReport[] = [],
+  decisions: readonly DecisionLine[] = [],
 ): string {
   const body = text.trim() === "" ? "(no text, just a mention)" : text;
   // The display name is chosen by the sender, so it is kept to one line, and the role goes on
@@ -260,6 +279,14 @@ export function formatForAgent(
   // line or a `From:` line.
   const indented = (words: string) => words.replace(/\r\n|[\r\n\u2028\u2029\u0085]/g, "\n  ");
   const parts: string[] = [];
+  if (decisions.length > 0) {
+    const lines = decisions.map((d) => {
+      const where = d.origin === "import" ? `, planning log entry ${d.originRef ?? "?"}` : "";
+      const who = d.decidedBy === null ? "" : ` by ${oneLine(d.decidedBy)}`;
+      return `- Decision ${String(d.number)} (decided${who} on ${d.decidedAt.slice(0, 10)}${where}): ${indented(d.statement)}`;
+    });
+    parts.push(`${DECISIONS_LEAD}\n${lines.join("\n")}`);
+  }
   if (reports.length > 0) {
     const lines = reports.map(
       (report) => `- On "${oneLine(report.title)}": ${indented(report.text)}`,
@@ -274,6 +301,39 @@ export function formatForAgent(
     parts.push(`${CONTEXT_LEAD}\n${lines.join("\n")}`);
   }
   return [...parts, message].join("\n\n");
+}
+
+/**
+ * The active decisions whose words match the message's (slice 2.2): at most five, by full-text
+ * search, no model. Only for the teammate's threads. Optional: if they cannot be read, it is
+ * logged and the message goes without them.
+ */
+async function decisionsBearingOn(
+  deps: ConversationDeps,
+  conversationId: string,
+  text: string,
+  log: Logger,
+): Promise<DecisionLine[]> {
+  try {
+    if ((await readAgentKind(deps.db, conversationId)) !== "teammate") return [];
+    if (text.trim() === "") return [];
+    const found = await searchDecisions(deps.db, {
+      query: text.slice(0, 2000),
+      limit: DECISIONS_PER_MESSAGE,
+      minShared: 2,
+    });
+    return found.map((d) => ({
+      number: d.number,
+      statement: d.statement,
+      decidedBy: d.decidedBy.name ?? d.decidedBy.actorId,
+      decidedAt: d.decidedAt,
+      origin: d.origin,
+      originRef: d.originRef,
+    }));
+  } catch (error) {
+    log.warn("conversation.decisions_failed", { conversationId, error });
+    return [];
+  }
 }
 
 /**

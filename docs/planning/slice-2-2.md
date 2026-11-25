@@ -1,6 +1,6 @@
 # Slice 2.2: decisions, stored, recalled and cited
 
-Status: **started 2026-11-25 (decisions 190 to 193).** The wave is in `wave-2.md`; the
+Status: **started 2026-11-25 (decisions 190 to 193). Parts A and B are in ilemberg/hippidy-bot 51; C to E are built and wait for review.** The wave is in `wave-2.md`; the
 direction in `team-layer.md`, "Its records".
 
 **Demo:** in one thread someone says "we'll use Postgres full-text search, not a vector store;
