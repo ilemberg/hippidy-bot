@@ -1,12 +1,14 @@
--- Slice 2.1, part B (decisions 181, 183; `docs/planning/slice-2-1.md`): a thread may now have
--- more than one agent session, a teammate and a coding worker per change, joined by briefs.
+-- Slice 2.1, part B (decisions 181, 183, 184; `docs/planning/slice-2-1.md`): a thread may now
+-- have more than one agent session. The session people talk to (the teammate, or the one
+-- session of an older thread) stays on `conversations`, as before; each change gets its own
+-- coding worker, whose session lives on the change. A brief joins the two.
 --
--- Additive only (decision 86): three new tables. The code before this never reads them; part C
--- moves the loop onto `agent_sessions`, giving each existing conversation one `legacy` row,
--- and part D writes changes and briefs. The loop's columns on `conversations` stay until a
--- later migration removes them (add first, remove later).
+-- Additive only (decision 86): two new tables and one nullable column. The code before this
+-- never reads them; part C writes them.
 
--- A change to the code, asked for in a thread and handed to a coding worker (decision 181).
+-- A change to the code, asked for in a thread and handed to a coding worker (decision 181),
+-- with the worker's session and the loop's state for it, as `conversations` holds them for the
+-- thread's own session.
 create table public.changes (
   id uuid primary key default gen_random_uuid(),
   conversation_id uuid not null references public.conversations (id) on delete cascade,
@@ -16,32 +18,19 @@ create table public.changes (
   requested_by_workspace_id text not null,
   requested_by_actor_id text not null,
   requested_by_name text,
-  -- waiting_for_start: its latest brief needs a person to start it. started: the worker has
-  -- it. stopped: someone stopped the thread.
+  -- waiting_for_start: no brief of it has been started yet. started: the worker has work.
+  -- stopped: someone stopped the thread; nothing more is sent to the worker.
   status text not null default 'waiting_for_start'
     check (status in ('waiting_for_start', 'started', 'stopped')),
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
-create index changes_conversation_idx on public.changes (conversation_id, created_at);
-
--- Every runtime session of a conversation (decision 78: split from `conversations` once a
--- second session per conversation is real). Part C moves the loop's per-session state here.
-create table public.agent_sessions (
-  id uuid primary key default gen_random_uuid(),
-  conversation_id uuid not null references public.conversations (id) on delete cascade,
-  -- legacy: a thread's one session from before slice 2.1 (slice 4's agent or the product
-  -- agent). teammate: the session every new thread talks to. worker: a change's coding worker.
-  kind text not null check (kind in ('legacy', 'teammate', 'worker')),
-  change_id uuid references public.changes (id) on delete cascade,
-  -- Null until the runtime session has been created.
+  -- The worker's session: null until started; 'starting:<uuid>' while one request claims the
+  -- start, as on `conversations`.
   agent_session_id text unique,
   agent_id text,
   agent_version integer,
-  -- The loop's state, as on `conversations` until part C.
   session_state text not null default 'active'
     check (session_state in ('active', 'budget_reached', 'terminated')),
+  -- When the worker was last given a brief it has not finished; drives reconcile and the time
+  -- limit, as on `conversations`.
   waiting_since timestamptz,
   agent_event_cursor text,
   sync_lease_until timestamptz,
@@ -56,23 +45,12 @@ create table public.agent_sessions (
   budget_list_cost_minor bigint,
   cost_currency text,
   usage_updated_at timestamptz,
-  agent_events_synced_at timestamptz,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  -- A worker belongs to a change; nothing else does.
-  check ((kind = 'worker') = (change_id is not null))
+  updated_at timestamptz not null default now()
 );
 
--- One session a thread talks to (legacy or teammate), and one worker per change.
-create unique index agent_sessions_front_idx
-  on public.agent_sessions (conversation_id)
-  where kind in ('legacy', 'teammate');
-create unique index agent_sessions_worker_idx
-  on public.agent_sessions (change_id)
-  where kind = 'worker';
-create index agent_sessions_waiting_idx
-  on public.agent_sessions (waiting_since)
-  where waiting_since is not null;
+create index changes_conversation_idx on public.changes (conversation_id, created_at);
+create index changes_waiting_idx on public.changes (waiting_since) where waiting_since is not null;
 
 -- Every brief the teammate wrote for a change, in order. Append-only apart from its start and
 -- its hand-over to the worker, each set once.
@@ -117,8 +95,17 @@ create index change_briefs_unsent_idx
   on public.change_briefs (change_id)
   where started_at is not null and worker_event_id is null;
 
+-- The brief a person's message led to. Such a message is settled by the worker's turn that
+-- handled the brief (✅ only once its pull request's CI has passed, decision 132), not by the
+-- teammate's turn that wrote it.
+alter table public.inbound_messages
+  add column change_brief_id uuid references public.change_briefs (id) on delete set null;
+
+create index inbound_messages_brief_idx
+  on public.inbound_messages (change_brief_id)
+  where change_brief_id is not null;
+
 alter table public.changes enable row level security;
-alter table public.agent_sessions enable row level security;
 alter table public.change_briefs enable row level security;
 
 -- The first migration takes default privileges away from Supabase's Data API roles; revoke
@@ -126,8 +113,7 @@ alter table public.change_briefs enable row level security;
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'anon') then
-    revoke all on public.changes, public.agent_sessions, public.change_briefs
-      from anon, authenticated;
+    revoke all on public.changes, public.change_briefs from anon, authenticated;
     revoke all on all sequences in schema public from anon, authenticated;
   end if;
 end

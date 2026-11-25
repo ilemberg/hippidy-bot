@@ -1,9 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestDb } from "./testing.ts";
 
-// Slice 2.1, part B: the schema for several sessions per conversation and for changes and
-// their briefs. Nothing writes these tables yet; these tests hold the constraints the code of
-// parts C and D will rely on.
+// Slice 2.1, part B: the schema for changes, their workers' sessions and their briefs. These
+// tests hold the constraints the code of part C relies on.
 
 let db: Awaited<ReturnType<typeof createTestDb>>;
 let conversationId: string;
@@ -30,14 +29,6 @@ async function change(): Promise<string> {
   );
   expect(row?.status).toBe("waiting_for_start");
   return String(row?.id);
-}
-
-function session(kind: string, changeId: string | null = null) {
-  return db.query(
-    `insert into agent_sessions (conversation_id, kind, change_id) values ($1, $2, $3)
-     returning id, session_state`,
-    [conversationId, kind, changeId],
-  );
 }
 
 const brief = {
@@ -82,25 +73,21 @@ function insertBrief(
   );
 }
 
-describe("agent_sessions", () => {
-  it("allows one session a thread talks to, and one worker per change", async () => {
-    expect(await session("teammate")).toEqual([
-      { id: expect.any(String) as string, session_state: "active" },
+describe("changes", () => {
+  it("holds the worker's session once, and the loop's state for it", async () => {
+    const changeId = await change();
+    await db.query(`update changes set agent_session_id = 'sesn_1' where id = $1`, [changeId]);
+    const other = await change();
+    await expect(
+      db.query(`update changes set agent_session_id = 'sesn_1' where id = $1`, [other]),
+    ).rejects.toThrow();
+    const [row] = await db.query(`select session_state, status from changes where id = $1`, [
+      changeId,
     ]);
-    await expect(session("teammate")).rejects.toThrow();
-    await expect(session("legacy")).rejects.toThrow();
-
-    const first = await change();
-    const second = await change();
-    await session("worker", first);
-    await expect(session("worker", first)).rejects.toThrow();
-    await session("worker", second);
-  });
-
-  it("ties a worker to a change, and nothing else", async () => {
-    await expect(session("worker")).rejects.toThrow();
-    await expect(session("teammate", await change())).rejects.toThrow();
-    await expect(session("engineer")).rejects.toThrow();
+    expect(row).toEqual({ session_state: "active", status: "waiting_for_start" });
+    await expect(
+      db.query(`update changes set status = 'done' where id = $1`, [changeId]),
+    ).rejects.toThrow();
   });
 });
 
@@ -155,12 +142,27 @@ describe("change_briefs", () => {
     ).rejects.toThrow();
   });
 
+  it("links a person's message to a brief, and lets go of it if the brief goes", async () => {
+    const changeId = await change();
+    const [brief] = await insertBrief(changeId, "toolu_1");
+    const [message] = await db.query(
+      `insert into inbound_messages (conversation_id, source, source_event_id, workspace_id,
+         channel_id, message_id, actor_id, text, sent_at, change_brief_id)
+       values ($1, 'slack', 'Ev1', 'T1', 'C1', '100.000002', 'U1', 'change it', now(), $2)
+       returning id`,
+      [conversationId, brief?.id],
+    );
+    await db.query(`delete from change_briefs where id = $1`, [brief?.id]);
+    expect(
+      await db.query(`select change_brief_id from inbound_messages where id = $1`, [message?.id]),
+    ).toEqual([{ change_brief_id: null }]);
+  });
+
   it("goes with its change and its conversation", async () => {
     const changeId = await change();
     await insertBrief(changeId, "toolu_1");
-    await session("worker", changeId);
     await db.query(`delete from conversations where id = $1`, [conversationId]);
-    for (const table of ["changes", "change_briefs", "agent_sessions"]) {
+    for (const table of ["changes", "change_briefs"]) {
       expect(await db.query(`select count(*)::int as n from ${table}`)).toEqual([{ n: 0 }]);
     }
   });

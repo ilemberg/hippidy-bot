@@ -1,6 +1,6 @@
 # Slice 2.1: one bot, everyone trusted
 
-Status: **planned 2026-11-25 (decisions 181 to 183). Built, not merged: part A, the probe,
+Status: **planned 2026-11-25 (decisions 181 to 184). Built, not merged: part A, the probe,
 which then waits to be run by hand; part B, the schema
 (`supabase/migrations/20261125000000_sessions_and_changes.sql`). C to E are not built.** The wave is in
 `wave-2.md`; the direction in `team-layer.md`. G1 is answered by this plan (181), G3 is
@@ -102,25 +102,31 @@ of decision 167 (each call answered once, the write keyed on the call's id).
 
 ## The loop with two sessions
 
-Decision 78 kept usage on `conversations` until "a second session per conversation is
-real". It is now.
+Decided in decision 184, after reading the loop: the session people talk to stays where it
+is, and the worker gets a loop of its own beside it.
 
-- **`agent_sessions`**, one row per runtime session: the conversation, its kind (`teammate`,
-  `worker`, or `legacy` for every session before this slice), the change it works on, agent
-  id and version, usage, budget, status and the sync lease. The record already keys on the
-  runtime session's id.
-- **The sync works per session.** The lease, the "sync replies back exactly once" rule and
-  reconcile move from the conversation to the session. This is the riskiest part, since the
-  loop took 11 concurrency fixes (78), so it ships alone and changes no behaviour: every
-  existing conversation gets one `legacy` row.
-- **Mentions always go to the teammate.** The worker's last message of each turn is posted in
-  the thread as today, with ✅ or ❌ by the CI rule (132), and progress notes apply (133).
-  It does not wake the teammate. The next mention handed to the teammate starts with what the
-  worker reported since its last reply, the way the thread is passed today (164), marked as
-  the worker's words.
-- **Stop** stops every session of the conversation.
+- **The thread's own session stays on `conversations`.** The teammate, or the one session of
+  an older thread, keeps the loop it has today, lease and all (it took 11 concurrency fixes,
+  decision 78). Nothing about it moves.
+- **Each change holds its worker's session** on its `changes` row: the session id, the start
+  claim, the lease, the time it started waiting, the event cursor and usage, the same columns
+  `conversations` has. One worker per change, so no separate sessions table is needed.
+- **A person's message goes with the brief it led to.** When the teammate calls
+  `start_change`, the messages its turn is answering are linked to the brief
+  (`inbound_messages.change_brief_id`). The teammate's turn does not settle them; the worker's
+  turn that handled the brief does, with ✅ only when its pull request's CI has passed (132).
+  So 👀 stays on the message until the change is done, and the meaning of ✅ does not change.
+- **The worker's sync** hands over started briefs in order, posts the last message of each of
+  its turns in the thread, judges the turn by CI, denies any tool call that waits, gives up
+  after 30 quiet minutes, and keeps its events in the record and its usage on the change.
+  Webhooks and reconcile find it by its session id, like a conversation.
+- **Mentions always go to the teammate.** The next message handed to the teammate starts with
+  what the worker reported since the teammate's last reply, marked as the worker's words, the
+  way the thread is passed today (164). The worker never wakes the teammate.
+- **Stop** stops the thread's session and every worker of the thread, and settles every
+  pending message.
 - **Open threads keep what they have** (59): a thread on slice 4's agent or the product agent
-  keeps its one session.
+  keeps its one session, and never gets a change.
 
 ## Prompts
 
@@ -158,9 +164,9 @@ Each is its own pull request. A to C change nothing a person sees and can merge 
 | Part | What | Live behaviour changes? |
 |---|---|---|
 | A | **Probe**, a workflow started by hand in `release`, like slice 4's experiment (118): a session in the teammate's environment reads the mounted `main`; tries `git fetch` of `refs/pull/*`, a package registry and a public host; calls one Atlassian read tool. Under $1 | No |
-| B | **Schema**: `agent_sessions`, `changes` (thread, who asked, status, the worker's session) and `change_briefs` (append-only: the text, whether a start was needed and why, who started it, when). Additive (86) | No |
-| C | **The loop per session**: lease, sync and reconcile per `agent_sessions` row; one `legacy` row per existing conversation | No |
-| D | **The brief**: `start_change`, the start rule, posting the brief, the Start button and its route, starting the worker, the worker's reports into the teammate's next message | Yes, but nothing calls it until E |
+| B | **Schema**: `changes` (thread, who asked, status, and the worker's session and loop state) and `change_briefs` (append-only: the text, whether a start was needed and why, who started it, when, the event it was handed over as), and `inbound_messages.change_brief_id`. Additive (86) | No |
+| C | **The worker and the brief, in the API**: `start_change` and the start rule, the worker's loop, settling messages by the worker's turn, the start route, stop, reconcile and webhooks for changes, the worker's reports in the teammate's next message | No: no agent has `start_change` until E |
+| D | **Slack**: the brief posted with a Start button; the button calls the start route | No: nothing posts a brief until E |
 | E | **The agents**: `agents/teammate.md`, `environments/teammate.yaml`, the worker's prompt, one vault per agent, new threads to the teammate, the product agent takes no new threads, the README | **Yes**: every new thread |
 
 **One vault per agent.** Today the sync keeps one vault, `hippidy-bot`, with both the GitHub
