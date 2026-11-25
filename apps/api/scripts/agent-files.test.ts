@@ -3,6 +3,8 @@ import {
   linkProjectInputSchema,
   recordApprovalInputSchema,
   startChangeInputSchema,
+  recallDecisionsInputSchema,
+  recordDecisionInputSchema,
 } from "@hippidy/contracts";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -172,7 +174,12 @@ describe("the teammate (slice 2.1, decision 181)", () => {
 
   it("has link_project and start_change, and never record_approval", () => {
     const tools = customTools(teammate.tools);
-    expect(tools.map((tool) => tool.name)).toEqual(["link_project", "start_change"]);
+    expect(tools.map((tool) => tool.name)).toEqual([
+      "link_project",
+      "start_change",
+      "record_decision",
+      "recall_decisions",
+    ]);
     const linkProject = tools.find((tool) => tool.name === "link_project");
     expect(linkProject?.description).not.toMatch(/stage|manager|only a/i);
   });
@@ -374,6 +381,8 @@ const contracts = {
   link_project: linkProjectInputSchema,
   record_approval: recordApprovalInputSchema,
   start_change: startChangeInputSchema,
+  record_decision: recordDecisionInputSchema,
+  recall_decisions: recallDecisionsInputSchema,
 };
 
 for (const path of ["agents/product.md", "agents/teammate.md"]) {

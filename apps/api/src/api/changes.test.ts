@@ -336,12 +336,13 @@ describe("the worker and the thread", () => {
     await workerDelivers(await onlyChange(), `Opened ${url}`);
     await receiveMessage(deps, message(2, "thanks, what next?"), log);
     const sent = runtime.sessions.get(teammate)?.sent.at(-1) ?? "";
-    expect(sent).toBe(
-      formatForAgent("U1", "thanks, what next?", "Ada", [], {}, [
-        { title: brief.title, text: `Opened ${url}` },
-      ]),
-    );
-    expect(sent.startsWith(`${REPORTS_LEAD}\n- On "Change the reaction": Opened ${url}`)).toBe(
+    // Decisions on record that match the message's words come first (slice 2.2), then the
+    // worker's reports, then the message.
+    const reports = formatForAgent("U1", "thanks, what next?", "Ada", [], {}, [
+      { title: brief.title, text: `Opened ${url}` },
+    ]);
+    expect(sent.endsWith(reports)).toBe(true);
+    expect(reports.startsWith(`${REPORTS_LEAD}\n- On "Change the reaction": Opened ${url}`)).toBe(
       true,
     );
   });
