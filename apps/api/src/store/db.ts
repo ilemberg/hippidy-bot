@@ -27,7 +27,15 @@ async function run(runner: Runner, text: string, params: readonly unknown[]): Pr
  * Keep transactions short: never hold one open across a call to another service.
  */
 export function createPostgresDb(url: string): Db {
-  const sql = postgres(url, { prepare: false, max: 2, idle_timeout: 20, connect_timeout: 10 });
+  // Postgres notices (for example a text search with only stop words in it) are not errors;
+  // left to the client, they would be printed as objects, not JSON log lines.
+  const sql = postgres(url, {
+    prepare: false,
+    max: 2,
+    idle_timeout: 20,
+    connect_timeout: 10,
+    onnotice: () => undefined,
+  });
 
   const inTransaction = (tx: postgres.TransactionSql): Db => ({
     query: (text, params = []) => run(tx, text, params),

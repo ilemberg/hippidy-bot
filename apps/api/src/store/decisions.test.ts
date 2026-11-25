@@ -61,10 +61,14 @@ describe("decisions", () => {
     origin: "thread",
   };
 
-  it("numbers decisions in the order recorded", async () => {
+  it("numbers an import as in the log, and thread decisions from 1000 in order", async () => {
+    expect(
+      await db.query(`select number::int as n from decisions where origin_ref = '173'`),
+    ).toEqual([{ n: 173 }]);
     const [a] = await insert(base);
     const [b] = await insert(base);
-    expect(Number(b?.number)).toBe(Number(a?.number) + 1);
+    expect(Number(a?.number)).toBe(1000);
+    expect(Number(b?.number)).toBe(1001);
   });
 
   it("needs a known status and origin, someone who decided, and a reference for an import", async () => {
