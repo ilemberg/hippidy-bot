@@ -229,14 +229,21 @@ recommended.**
 
 **G12 (3.1, 3.2). Who wins when two people's direction conflicts?** *Recommendation:* the
 named owner of the area, with one person as the fallback for everything unowned.
+**Answered 2026-11-25 (decision 205), as recommended.**
 
 **G13 (3.4). May the bot act in shared spaces for a person, or only brief them?**
-*Recommendation:* brief only, at first. It tells you; you act.
+*Recommendation:* brief only, at first. It tells you; you act. **Answered 2026-11-25
+(decision 205), as recommended**: everyone in the pilot, with "stop briefs" to opt out.
 
 **G14 (3.3). How does the API reach a provider?** Today only the agent reaches Jira and
 Confluence, through Atlassian's MCP server. *Recommendation:* a small interface in the API
 for tasks and pages, with Jira and the built-in tracker as its first two providers; the
-agent keeps its direct tools (rule 4 of `wave-1.md`).
+agent keeps its direct tools (rule 4 of `wave-1.md`). **Answered 2026-11-25 (decision 205),
+as recommended.**
+
+**G19 (3.1). What is an area, and who may create one or change its owner?**
+*Recommendation:* a name, one owner, optional code paths and words that mark it; anyone signed
+in may change one, each change kept. **Answered 2026-11-25 (decision 205), as recommended.**
 
 **G15 (4.3). How does the bot learn of GitHub events?** Decision 108 left the webhook for
 later. *Recommendation:* read the open pull requests on reconcile first, which needs no new
