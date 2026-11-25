@@ -185,6 +185,42 @@ describe("POST /slack/events", () => {
     );
   });
 
+  it("acknowledges a press of Start under a brief and sends it to the API", async () => {
+    const { app, lines } = setup();
+    const payload = {
+      type: "block_actions",
+      trigger_id: "1234.5678.abcd",
+      team: { id: "T1", domain: "acme" },
+      user: { id: "U2", username: "ilya", team_id: "T1" },
+      actions: [
+        {
+          type: "button",
+          block_id: "b1",
+          action_id: "start_change",
+          value: "6f1c2a9e-4b7d-4c3a-9e2f-1a2b3c4d5e6f",
+          action_ts: "1700000000.123456",
+        },
+      ],
+    };
+    const body = `payload=${encodeURIComponent(JSON.stringify(payload))}`;
+    const now = Math.floor(Date.now() / 1000);
+    const res = await app.request(
+      signed(body, signingSecret, now, { "content-type": "application/x-www-form-urlencoded" }),
+    );
+    expect(res.status).toBe(200);
+    // Whatever the API answers, the press reached it through its route, with the action's
+    // timestamp as the correlation id.
+    await waitFor(() =>
+      lines.some(
+        (line) =>
+          typeof line.msg === "string" &&
+          line.msg.startsWith("slack.brief_start") &&
+          line.correlationId === "1700000000.123456",
+      ),
+    );
+    expect(lines.some((line) => line.msg === "slack.brief_start.invalid")).toBe(false);
+  });
+
   it("returns 503 when Slack is not configured, and the API keeps working", async () => {
     const { app } = setup({ API_SERVICE_TOKEN: env.API_SERVICE_TOKEN });
     const res = await app.request(signed(JSON.stringify(fixture)));

@@ -5,6 +5,9 @@ import {
   type AcceptedMessage,
   type ErrorResponse,
   type InboundMessage,
+  startBriefResultSchema,
+  type StartBriefRequest,
+  type StartBriefResult,
   stopResultSchema,
   type StopRequest,
   type StopResult,
@@ -19,9 +22,19 @@ export type StopCallResult =
   | { kind: "done"; result: StopResult }
   | { kind: "rejected"; status: number; error: ErrorResponse["error"] | undefined };
 
+export type StartBriefCallResult =
+  | { kind: "done"; result: StartBriefResult }
+  | { kind: "rejected"; status: number; error: ErrorResponse["error"] | undefined };
+
 export interface ApiClient {
   postMessage(message: InboundMessage, correlationId: string): Promise<PostMessageResult>;
   stop(request: StopRequest, correlationId: string): Promise<StopCallResult>;
+  /** A person pressed Start under a brief (slice 2.1). */
+  startBrief(
+    briefId: string,
+    request: StartBriefRequest,
+    correlationId: string,
+  ): Promise<StartBriefCallResult>;
 }
 
 /** The parts of an HTTP response the client reads. */
@@ -78,6 +91,17 @@ export function createApiClient(options: {
       const { status, body } = await post("/v1/stop", request, correlationId);
       if (status === 202) {
         const result = stopResultSchema.safeParse(body);
+        if (result.success) return { kind: "done", result: result.data };
+      }
+      const error = errorResponseSchema.safeParse(body);
+      return { kind: "rejected", status, error: error.data?.error };
+    },
+
+    async startBrief(briefId, request, correlationId) {
+      const path = `/v1/briefs/${encodeURIComponent(briefId)}/start`;
+      const { status, body } = await post(path, request, correlationId);
+      if (status === 202) {
+        const result = startBriefResultSchema.safeParse(body);
         if (result.success) return { kind: "done", result: result.data };
       }
       const error = errorResponseSchema.safeParse(body);

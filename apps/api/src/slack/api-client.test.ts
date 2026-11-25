@@ -89,4 +89,54 @@ describe("createApiClient", () => {
     expect(seen[0]?.url).toBe("http://in-process.invalid/v1/stop");
     expect(await seen[0]?.json()).toEqual(request);
   });
+
+  describe("startBrief", () => {
+    const briefId = "6f1c2a9e-4b7d-4c3a-9e2f-1a2b3c4d5e6f";
+    const request = {
+      source: "slack" as const,
+      workspaceId: "T1",
+      actor: { id: "U2", displayName: "Ilya" },
+    };
+
+    it("posts the start to the brief's route and reads its result", async () => {
+      const { api, seen } = client(
+        () => Response.json({ status: "started" }, { status: 202 }),
+        "tok",
+      );
+      expect(await api.startBrief(briefId, request, "1700000000.1")).toEqual({
+        kind: "done",
+        result: { status: "started" },
+      });
+      expect(seen[0]?.url).toBe(`http://in-process.invalid/v1/briefs/${briefId}/start`);
+      expect(seen[0]?.method).toBe("POST");
+      expect(seen[0]?.headers.get("authorization")).toBe("Bearer tok");
+      expect(seen[0]?.headers.get(CORRELATION_ID_HEADER)).toBe("1700000000.1");
+      expect(await seen[0]?.json()).toEqual(request);
+    });
+
+    it("keeps the brief id inside its path segment", async () => {
+      const { api, seen } = client(() => Response.json({ status: "not_found" }, { status: 202 }));
+      await api.startBrief("../stop?x", request, "c");
+      expect(seen[0]?.url).toBe("http://in-process.invalid/v1/briefs/..%2Fstop%3Fx/start");
+    });
+
+    it("returns the API's error for a rejection", async () => {
+      const error = { code: "invalid_request", message: "bad" };
+      const { api } = client(() => Response.json({ error }, { status: 400 }));
+      expect(await api.startBrief(briefId, request, "c")).toEqual({
+        kind: "rejected",
+        status: 400,
+        error,
+      });
+    });
+
+    it("treats a 202 with a body that breaks the contract as a failure", async () => {
+      const { api } = client(() => Response.json({ status: "approved" }, { status: 202 }));
+      expect(await api.startBrief(briefId, request, "c")).toEqual({
+        kind: "rejected",
+        status: 202,
+        error: undefined,
+      });
+    });
+  });
 });

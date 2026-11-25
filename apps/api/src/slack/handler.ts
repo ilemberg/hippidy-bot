@@ -1,4 +1,4 @@
-import type { ContextMessage } from "@hippidy/contracts";
+import type { ContextMessage, StartBriefResult } from "@hippidy/contracts";
 import type { Logger } from "../log.ts";
 import type { ApiClient } from "./api-client.ts";
 import { z } from "zod";
@@ -47,6 +47,8 @@ export type MentionOutcome =
 export const RECEIVED_REACTION = "eyes";
 /** The reaction that stops the agent in a thread (decision 60). */
 export const STOP_REACTION = "octagonal_sign";
+/** The `action_id` of the Start button under a brief (slice 2.1, G17). */
+export const START_CHANGE_ACTION = "start_change";
 
 /** A message that is only "stop" (after the bot's mention), never "don't stop". */
 export function isStopCommand(text: string): boolean {
@@ -284,6 +286,94 @@ export async function handleReaction(
     }
     log.info("slack.stop_requested", { via: "reaction", result: stop.result.status });
     return "stopped";
+  } catch (error) {
+    log.error("slack.api_call_failed", { error });
+    return "api_rejected";
+  }
+}
+
+/**
+ * The parts of a `block_actions` payload the Start button needs. The rest (including Slack's
+ * legacy verification `token`) is left out and never logged.
+ */
+const blockActionsSchema = z.object({
+  type: z.literal("block_actions"),
+  team: z.object({ id: z.string().min(1) }),
+  user: z.object({ id: z.string().min(1) }),
+  trigger_id: z.string().min(1),
+  actions: z
+    .array(
+      z.object({
+        action_id: z.string(),
+        value: z.string().optional(),
+        action_ts: z.string().min(1).optional(),
+      }),
+    )
+    .min(1),
+});
+
+const briefIdSchema = z.guid();
+
+export type StartBriefOutcome =
+  StartBriefResult["status"] | "ignored" | "invalid_action" | "api_rejected";
+
+/**
+ * Handles a press of the Start button under a brief (slice 2.1, G17): asks the API to start
+ * it, as the person who pressed it. The API posts who started it in the thread, so this posts
+ * nothing. Any other action is ignored. Never throws; every outcome is logged and returned.
+ */
+export async function handleStartBriefAction(
+  body: unknown,
+  deps: { api: ApiClient; slack: Pick<SlackActions, "userName">; log: Logger },
+): Promise<StartBriefOutcome> {
+  const parsed = blockActionsSchema.safeParse(body);
+  if (!parsed.success) {
+    deps.log.warn("slack.brief_start.invalid", {
+      issues: parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`),
+    });
+    return "invalid_action";
+  }
+  const payload = parsed.data;
+  const [action] = payload.actions;
+  if (action?.action_id !== START_CHANGE_ACTION) return "ignored";
+
+  const correlationId = action.action_ts ?? payload.trigger_id;
+  const log = deps.log.child({ correlationId, source: "slack" });
+  const briefId = briefIdSchema.safeParse(action.value);
+  if (!briefId.success) {
+    log.warn("slack.brief_start.invalid", { issues: ["actions.0.value: not a brief id"] });
+    return "invalid_action";
+  }
+
+  const displayName = await deps.slack
+    .userName(payload.user.id)
+    .catch((error: unknown): undefined => {
+      log.warn("slack.user_lookup_failed", { error });
+      return undefined;
+    });
+  try {
+    const start = await deps.api.startBrief(
+      briefId.data,
+      {
+        source: "slack",
+        workspaceId: payload.team.id,
+        actor:
+          displayName === undefined
+            ? { id: payload.user.id }
+            : { id: payload.user.id, displayName },
+      },
+      correlationId,
+    );
+    if (start.kind === "rejected") {
+      log.error("slack.brief_start_rejected", {
+        briefId: briefId.data,
+        status: start.status,
+        error: start.error,
+      });
+      return "api_rejected";
+    }
+    log.info("slack.brief_start", { briefId: briefId.data, result: start.result.status });
+    return start.result.status;
   } catch (error) {
     log.error("slack.api_call_failed", { error });
     return "api_rejected";

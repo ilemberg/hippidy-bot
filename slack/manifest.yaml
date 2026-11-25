@@ -28,6 +28,11 @@ settings:
       - app_mention
       # A 🛑 on a message stops the agent in that thread (decision 60).
       - reaction_added
+  # The Start button under a brief (slice 2.1, G17). Bolt answers button presses on the same
+  # URL as events. After changing this, update the app from this manifest and reinstall it.
+  interactivity:
+    is_enabled: true
+    request_url: https://hippidy-bot.vercel.app/slack/events
   org_deploy_enabled: false
   socket_mode_enabled: false
   token_rotation_enabled: false

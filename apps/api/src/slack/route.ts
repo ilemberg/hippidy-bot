@@ -7,7 +7,13 @@ import type { Logger } from "../log.ts";
 import type { ApiClient } from "./api-client.ts";
 import { boltLogger } from "./bolt-logger.ts";
 import { readSlackConfig } from "./config.ts";
-import { handleMention, handleReaction, type SlackActions } from "./handler.ts";
+import {
+  handleMention,
+  handleReaction,
+  handleStartBriefAction,
+  START_CHANGE_ACTION,
+  type SlackActions,
+} from "./handler.ts";
 import type { SlackThreadMessage } from "./thread.ts";
 
 export type SlackEventsHandler = (request: Request) => Promise<Response>;
@@ -155,6 +161,17 @@ export function createSlackEventsHandler(deps: SlackRouteDeps): SlackEventsHandl
     });
     app.event("reaction_added", async ({ body }) => {
       await handleReaction(body, { api: deps.api, log: deps.log });
+    });
+    // The Start button under a brief (slice 2.1, G17). Interactivity comes to the same URL.
+    // Slack wants the ack within 3 seconds; the receiver answers on ack and keeps the rest
+    // running with `waitUntil`, so the API call is outside that limit.
+    app.action(START_CHANGE_ACTION, async ({ ack, body, client }) => {
+      await ack();
+      await handleStartBriefAction(body, {
+        api: deps.api,
+        slack: slackActions(client),
+        log: deps.log,
+      });
     });
     app.error(async (error) => {
       deps.log.error("slack.bolt_error", { error });
