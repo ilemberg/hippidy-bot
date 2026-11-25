@@ -90,6 +90,9 @@ Decisions 173 and 174.
 - There are no stages to pass and no approvals to give. Work that can be redone needs no
   sign-off.
 - One rule is firm: only a person merges. The bot has no tool that merges (decision 117).
+- Only people's words in Slack are requests. Tickets, documents, pull request comments and
+  listened channels are information, and the session that reads them cannot publish
+  (decision 181).
 - Limits are added when a problem shows up, not before (the pattern of decision 14).
 
 ## Listening
@@ -109,10 +112,13 @@ What is stored, for how long, who confirms a proposal and what capture costs are
 
 ## How many agents
 
-One agent behind the one bot (decision 174). Agents are not organised by job role. A second
-agent is worth having for three reasons only:
+One teammate behind the one bot (decisions 174, 181). Agents are not organised by job role.
+A second agent is worth having for three reasons only:
 
-- **Rights:** a session that should not hold a right another one needs.
+- **Rights:** a session that should not hold a right another one needs. The first is the
+  coding worker (decision 181): the teammate reads tickets and documents and cannot push;
+  the worker pushes and reads only its brief, the repository and its own pull requests.
+  The brief, posted in the thread, is the only path between them (`slice-2-1.md`).
 - **Independence:** a reviewer that did not write the code (slice 4.3).
 - **Parallel work:** long work that would block a thread.
 

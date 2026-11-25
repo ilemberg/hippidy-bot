@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.vercel.json",
     "agent:sync": "node scripts/sync-agent.ts",
     "agent:experiment": "node scripts/experiment.ts",
-    "atlassian:probe": "node scripts/atlassian-probe.ts"
+    "atlassian:probe": "node scripts/atlassian-probe.ts",
+    "teammate:probe": "node scripts/teammate-probe.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.10.0",

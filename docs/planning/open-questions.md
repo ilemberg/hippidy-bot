@@ -161,16 +161,34 @@ The direction changed on 2026-11-25: hippidy-bot is the team layer (`decisions.m
 139 kept the two apart, so text in a ticket could not steer a session that can push.
 *Recommendation:* accept it for now. A person reviews and merges every pull request, and the
 agent has no tool that merges. Revisit when a worker is started by the bot and not by a
-person (wave 4).
+person (wave 4). **Answered 2026-11-25 (decision 181): not accepted. Split by rights into a
+teammate and a coding worker, joined by a brief; see `slice-2-1.md`.**
 
 **G2 (2.1). Who can merge?** Only people with access to the GitHub repository can.
 *Recommendation:* add each invited person as a collaborator, and leave the rule on `main` as
 it is (required check, no bypass). Otherwise every pull request waits on the owner.
+**Deferred 2026-11-25 (decision 183): the owner merges, as today.**
 
 **G3 (2.1). Spend, with several people starting sessions.** The cap is $5 a session (107)
 and the budget $100 a month (11). *Recommendation:* keep both, read spend per person from
 the record each week until slice 2.4 shows it, and decide a limit when the numbers ask for
-one.
+one. **Answered 2026-11-25 (decision 182), as recommended.**
+
+**G17 (2.1, part D). How does a person start a brief?** Three ways: a Start button under the
+brief (Slack interactivity in the app's manifest, a reinstall, and Bolt answering it at the
+same URL); a ✅ reaction (the `reactions:read` scope and the `reaction_added` event, a
+reinstall); or a reply that mentions the bot and says "go", recognised by the API before the
+teammate sees it (no reinstall, but it matches text). *Recommendation:* the button. It is
+one click, it says plainly what it does, Slack tells the API who pressed it, and Bolt handles
+it on the same route.
+
+**G18 (2.1, parts A and D). Does every brief need a person to start it, or only one written
+after untrusted content was read?** Only tainted briefs keeps "nobody types approve" for
+changes asked for in Slack alone, but rests on the API seeing every untrusted read; part A
+checks the one it may not see (the teammate fetching a fork's branch with git).
+*Recommendation:* only tainted briefs, if part A shows the teammate cannot fetch other refs
+or the start rule can count the fetch. Otherwise every brief, and revisit once the share of
+briefs that needed a start is known.
 
 **G4 (2.2). Where does the memory live?** In the runtime's memory stores, or in our own
 table behind tools the API answers. *Recommendation:* our own table, after the probe in

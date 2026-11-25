@@ -6,3 +6,6 @@ coverage/
 .env.*
 !.env.example
 *.log
+
+# Claude Code agents' worktrees
+.claude/worktrees/

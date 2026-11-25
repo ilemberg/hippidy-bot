@@ -412,6 +412,8 @@ describe("schema", () => {
     "actor_roles",
     "agent_events",
     "approvals",
+    "change_briefs",
+    "changes",
     "conversations",
     "deliveries",
     "inbound_messages",

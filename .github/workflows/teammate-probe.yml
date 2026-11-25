@@ -1,0 +1,66 @@
+name: Teammate probe
+
+# Slice 2.1, part A (docs/planning/slice-2-1.md): one short throwaway session in the
+# teammate's planned environment, run by hand. It checks the session cannot publish (rule 1)
+# and whether it can read refs other than main (G18), and prints its findings in the job
+# summary. It makes its own environment, vault and agent (named hippidy-bot-teammate-probe),
+# so production is not touched, and removes them when it ends.
+#
+# It needs the Anthropic key, the Atlassian key and the agent's GitHub token (only to delete a
+# branch if a push the probe expects to be refused was accepted), which live in the `release`
+# environment that only `main` may use (decision 94). So it runs only from `main`, and only
+# when started by hand: Actions, Teammate probe, Run workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      cleanup_only:
+        description: Only remove what a failed run left
+        type: boolean
+        default: false
+      allowed_hosts:
+        description: Hosts the sandbox may reach, besides MCP servers (comma-separated; none planned)
+        type: string
+        default: ""
+      package_managers:
+        description: Allow package registries (not planned for the teammate)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: teammate-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Probe the teammate's environment
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: release
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Secrets are given only to this step, never to third-party actions.
+      - name: Probe
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ATLASSIAN_SERVICE_KEY: ${{ secrets.ATLASSIAN_SERVICE_KEY }}
+          AGENT_GITHUB_TOKEN: ${{ secrets.AGENT_GITHUB_TOKEN }}
+          PROBE_ALLOWED_HOSTS: ${{ inputs.allowed_hosts }}
+          PROBE_PACKAGE_MANAGERS: ${{ inputs.package_managers }}
+          CLEANUP_ONLY: ${{ inputs.cleanup_only }}
+        run: |
+          if [ "$CLEANUP_ONLY" = "true" ]; then
+            pnpm teammate:probe --cleanup-only
+          else
+            pnpm teammate:probe
+          fi
