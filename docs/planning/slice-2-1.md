@@ -1,7 +1,8 @@
 # Slice 2.1: one bot, everyone trusted
 
-Status: **planned 2026-11-25 (decisions 181 to 183). Part A, the probe, is built and waits
-to be merged and run by hand; nothing else is built.** The wave is in
+Status: **planned 2026-11-25 (decisions 181 to 183). Built, not merged: part A, the probe,
+which then waits to be run by hand; part B, the schema
+(`supabase/migrations/20261125000000_sessions_and_changes.sql`). C to E are not built.** The wave is in
 `wave-2.md`; the direction in `team-layer.md`. G1 is answered by this plan (181), G3 is
 answered (182), G2 is deferred. G17 and G18 are open and block part D.
 

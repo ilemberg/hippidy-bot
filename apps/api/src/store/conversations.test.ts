@@ -411,7 +411,10 @@ describe("schema", () => {
   const tables = [
     "actor_roles",
     "agent_events",
+    "agent_sessions",
     "approvals",
+    "change_briefs",
+    "changes",
     "conversations",
     "deliveries",
     "inbound_messages",
