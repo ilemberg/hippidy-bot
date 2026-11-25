@@ -356,7 +356,7 @@ describe("the vaults: one per agent, one credential per MCP server, each from it
     expect(fake.held()).toEqual(allHeld("github_pat_new", "atlassian_key_new"));
   });
 
-  it("splits the one shared vault of before: the worker's keeps GitHub's credential only", async () => {
+  it("refreshes the one shared vault of before as the worker's, and leaves its Atlassian credential (decision 187)", async () => {
     const fake = fakeClient();
     const shared = fake.addVault(WORKER);
     fake.addCredential(shared.id, "GitHub (AGENT_GITHUB_TOKEN)", {
@@ -371,33 +371,42 @@ describe("the vaults: one per agent, one credential per MCP server, each from it
     });
     const said = await run(fake.client);
     expect(fake.calls).toContain(`credential.update ${WORKER} ${GITHUB_URL}`);
-    expect(fake.calls).toContain(`credential.archive ${WORKER} ${ATLASSIAN_URL}`);
+    expect(fake.calls.filter((call) => call.startsWith("credential.archive"))).toEqual([]);
     expect(fake.calls).not.toContain(`vault.create ${WORKER}`);
-    expect(fake.held()).toEqual(allHeld("github_pat_test", "atlassian_key_test"));
+    // Open product threads attached this vault and still reach Atlassian through it; the new
+    // product and teammate vaults hold their own credential.
+    expect(fake.held()).toEqual({
+      ...allHeld("github_pat_test", "atlassian_key_test"),
+      [WORKER]: [
+        [GITHUB_URL, "github_pat_test"],
+        [ATLASSIAN_URL, "atlassian_key_old"],
+      ],
+    });
     expect(said).toContainEqual(
-      `vault "${WORKER}": archive the credential for ${ATLASSIAN_URL}, not a server of "${WORKER}"`,
+      expect.stringMatching(
+        new RegExp(
+          `^::warning::vault "${WORKER}" holds a credential for ${ATLASSIAN_URL.replace(/[.]/g, "\\.")}`,
+        ),
+      ),
     );
   });
 
-  it("archives a credential when its agent stops declaring the server, in that vault only", async () => {
+  it("leaves a credential in place, with a warning, when its agent stops declaring the server", async () => {
     const fake = fakeClient();
     await run(fake.client);
     fake.calls.length = 0;
     const withoutAtlassian = agentFiles.map((agent) =>
       agent.name === TEAMMATE ? { ...agent, mcp_servers: [], tools: [] } : agent,
     );
-    await run(fake.client, withoutAtlassian);
+    const said = await run(fake.client, withoutAtlassian);
     expect(fake.calls).toEqual([
       `credential.update ${WORKER} ${GITHUB_URL}`,
       `credential.update ${PRODUCT} ${ATLASSIAN_URL}`,
-      `credential.archive ${TEAMMATE} ${ATLASSIAN_URL}`,
       `agent.update ${TEAMMATE}`,
     ]);
-    expect(fake.held()).toEqual({
-      [WORKER]: [[GITHUB_URL, "github_pat_test"]],
-      [PRODUCT]: [[ATLASSIAN_URL, "atlassian_key_test"]],
-      [TEAMMATE]: [],
-    });
+    expect(said).toContainEqual(
+      expect.stringMatching(/^::warning::vault "hippidy-bot-teammate" holds a credential/),
+    );
   });
 
   it("without the Atlassian key, leaves GitHub's credential working and warns", async () => {

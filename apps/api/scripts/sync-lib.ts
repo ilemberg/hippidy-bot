@@ -192,7 +192,7 @@ export function secretForMcpServer(url: string): McpServerSecret | undefined {
  * cannot be read back, so each is written on every sync: running the sync after a secret is
  * replaced is all that rotating it takes. A missing secret leaves its own credential as it is,
  * with a warning; a server with no known secret is skipped, with a warning. A credential for a
- * server the agent does not declare is archived.
+ * server the agent does not declare is left in place, with a warning (decision 187).
  */
 async function syncVault(options: SyncOptions, agent: AgentFile) {
   const { client, secrets, dryRun, say, warn } = options;
@@ -261,15 +261,18 @@ async function syncVault(options: SyncOptions, agent: AgentFile) {
       }
     }
   }
-  // Only a server this agent does not declare loses its credential, whether another agent
-  // uses it or none does: a missing secret or an unknown server above never archives anything.
+  // A credential for a server this agent does not declare is left in place, with a warning,
+  // and never used: a session reaches only the servers its agent declares. It is not archived,
+  // because sessions opened before slice 2.1 attached the one shared vault and still use it (the
+  // product agent's Atlassian credential sits in what is now the worker's vault). Archive it by
+  // hand once those threads are done (decision 187).
   for (const credential of credentials) {
     const url = "mcp_server_url" in credential.auth ? credential.auth.mcp_server_url : undefined;
     if (url !== undefined && !urls.includes(url)) {
-      say(`vault "${name}": archive the credential for ${url}, not a server of "${agent.name}"`);
-      if (!dryRun) {
-        await client.beta.vaults.credentials.archive(credential.id, { vault_id: vault.id });
-      }
+      warn(
+        `::warning::vault "${name}" holds a credential for ${url}, which "${agent.name}" does ` +
+          "not declare. It was left in place; archive it by hand once no open thread needs it.",
+      );
     }
   }
 }
