@@ -35,6 +35,7 @@ import { listSessions } from "./sessions.ts";
 import { FakeExtractor } from "../agent/extractor.ts";
 import { runCapture } from "../api/capture.ts";
 import { captureSpentSince } from "./capture.ts";
+import { actOnProposal, decisionHistory } from "./decisions.ts";
 import { recordObservation, setListening } from "./listening.ts";
 import { searchDecisions } from "./decisions.ts";
 import { applyMigration, applyMigrations } from "./testing.ts";
@@ -733,5 +734,35 @@ describe("listening and capture through postgres.js (slice 2.5)", () => {
       ),
     ).toEqual([{ confirmable_by: ["U1", "U2"], numbered: true }]);
     expect(await captureSpentSince(db, new Date(now.getTime() - 60_000))).toBe(400);
+  });
+});
+
+describe("decision history through postgres.js (slice 2.6)", () => {
+  it("keeps an edit's before and after as JSON objects, with what Postgres cannot hold removed", async () => {
+    const [row] = await db.query(
+      `insert into decisions (statement, area, status, decided_by_source, decided_by_workspace_id,
+         decided_by_actor_id, decided_at, origin, message_id, channel_id, thread_id, confirmable_by)
+       values ('Old.', 'x', 'proposed', 'slack', 'T', 'U1', now(), 'capture', '1.1', 'Cwiki',
+               '1.0', $1::text[])
+       returning id`,
+      [["U1"]],
+    );
+    const id = String(row?.id);
+    const outcome = await actOnProposal(
+      db,
+      id,
+      { source: "slack", workspaceId: "T", actorId: "U1", name: null },
+      { kind: "edit", edit: { statement: 'New \u0000 "quoted".', reason: null } },
+    );
+    expect(outcome.status).toBe("edited");
+    expect(await db.query(`select jsonb_typeof(after) as type from decision_events`)).toEqual([
+      { type: "object" },
+    ]);
+    expect(await decisionHistory(db, id)).toMatchObject([
+      {
+        before: { statement: "Old.", reason: null, area: "x" },
+        after: { statement: 'New  "quoted".', reason: null, area: "x" },
+      },
+    ]);
   });
 });

@@ -63,6 +63,7 @@ function setup(appEnv: Env = env) {
     },
     userName: () => Promise.resolve(undefined),
     postMessage: () => Promise.resolve(),
+    postEphemeral: () => Promise.resolve(),
     threadReplies: () => Promise.resolve([]),
   });
   const conversations = {

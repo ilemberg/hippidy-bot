@@ -25,6 +25,13 @@ export interface SlackActions {
   threadReplies(channel: string, threadTs: string): Promise<SlackThreadMessage[]>;
   /** Posts a message in a channel, or in a thread with `threadTs` (`chat.postMessage`). */
   postMessage(input: { channel: string; text: string; threadTs?: string }): Promise<void>;
+  /** A message only `user` sees (`chat.postEphemeral`). */
+  postEphemeral(input: {
+    channel: string;
+    user: string;
+    text: string;
+    threadTs?: string;
+  }): Promise<void>;
 }
 
 export interface MentionDeps {
@@ -62,6 +69,10 @@ export const STOP_REACTION = "octagonal_sign";
 export const START_CHANGE_ACTION = "start_change";
 /** The Confirm button under a proposed decision (slice 2.2, decision 192). */
 export const CONFIRM_DECISION_ACTION = "confirm_decision";
+
+/** Said privately to someone whose Confirm was refused (decision 201). */
+export const notAllowedText =
+  "Only people who wrote to me in this thread can confirm this decision. Mention me here to take part, then press Confirm again.";
 
 /** A message that is only "stop" (after the bot's mention), never "don't stop". */
 export function isStopCommand(text: string): boolean {
@@ -326,6 +337,8 @@ const blockActionsSchema = z.object({
   team: z.object({ id: z.string().min(1) }),
   user: z.object({ id: z.string().min(1) }),
   trigger_id: z.string().min(1),
+  channel: z.object({ id: z.string().min(1) }).optional(),
+  container: z.object({ thread_ts: z.string().optional() }).optional(),
   actions: z
     .array(
       z.object({
@@ -415,7 +428,7 @@ export type ConfirmDecisionOutcome =
  */
 export async function handleConfirmDecisionAction(
   body: unknown,
-  deps: { api: ApiClient; slack: Pick<SlackActions, "userName">; log: Logger },
+  deps: { api: ApiClient; slack: Pick<SlackActions, "userName" | "postEphemeral">; log: Logger },
 ): Promise<ConfirmDecisionOutcome> {
   const parsed = blockActionsSchema.safeParse(body);
   if (!parsed.success) {
@@ -465,6 +478,20 @@ export async function handleConfirmDecisionAction(
       decisionId: decisionId.data,
       result: confirmed.result.status,
     });
+    // Refused (201): say why, to the person who pressed only.
+    if (confirmed.result.status === "not_allowed" && payload.channel !== undefined) {
+      const threadTs = payload.container?.thread_ts;
+      await deps.slack
+        .postEphemeral({
+          channel: payload.channel.id,
+          user: payload.user.id,
+          text: notAllowedText,
+          ...(threadTs === undefined ? {} : { threadTs }),
+        })
+        .catch((error: unknown) => {
+          log.warn("slack.ephemeral_failed", { error });
+        });
+    }
     return confirmed.result.status;
   } catch (error) {
     log.error("slack.api_call_failed", { error });

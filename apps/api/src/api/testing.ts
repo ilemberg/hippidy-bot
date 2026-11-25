@@ -7,6 +7,8 @@ export const PERSON_WORKSPACE = "T0123456789";
 
 export interface PersonTokenOptions {
   secret?: string;
+  /** The person's Slack user id; U0123456789 unless a test says. */
+  subject?: string;
   team?: string;
   name?: string | undefined;
   audience?: string;
@@ -24,7 +26,7 @@ export function signPersonToken(options: PersonTokenOptions = {}): Promise<strin
   if (name !== undefined) claims.name = name;
   return new SignJWT(claims)
     .setProtectedHeader({ alg: options.algorithm ?? "HS256" })
-    .setSubject("U0123456789")
+    .setSubject(options.subject ?? "U0123456789")
     .setAudience(options.audience ?? "hippidy-api")
     .setIssuer(options.issuer ?? "hippidy-web")
     .setIssuedAt(issuedAt)

@@ -1,4 +1,9 @@
-import type { InboundMessage, StartBriefRequest, StopRequest } from "@hippidy/contracts";
+import type {
+  ConfirmDecisionResult,
+  InboundMessage,
+  StartBriefRequest,
+  StopRequest,
+} from "@hippidy/contracts";
 import { describe, expect, it } from "vitest";
 import { memoryLogger } from "../testing.ts";
 import type { ApiClient, PostMessageResult, StartBriefCallResult } from "./api-client.ts";
@@ -9,6 +14,7 @@ import {
   handleConfirmDecisionAction,
   handleStartBriefAction,
   isStopCommand,
+  notAllowedText,
   type MentionDelivery,
   type SlackActions,
 } from "./handler.ts";
@@ -26,6 +32,7 @@ function setup(
     userName?: (id: string) => Promise<string | undefined>;
     threadReplies?: (channel: string, threadTs: string) => Promise<SlackThreadMessage[]>;
     startBrief?: () => Promise<StartBriefCallResult>;
+    confirmResult?: ConfirmDecisionResult;
   } = {},
 ) {
   const threadReads: { channel: string; threadTs: string }[] = [];
@@ -36,6 +43,7 @@ function setup(
   const reactions: { channel: string; timestamp: string; name: string }[] = [];
   const listening: unknown[] = [];
   const notes: { channel: string; text: string; threadTs?: string }[] = [];
+  const ephemerals: { channel: string; user: string; text: string; threadTs?: string }[] = [];
   const api: ApiClient = {
     setListening: (request) => {
       listening.push(request);
@@ -66,7 +74,10 @@ function setup(
     },
     confirmDecision: (decisionId, request, correlationId) => {
       confirms.push({ decisionId, request, correlationId });
-      return Promise.resolve({ kind: "done", result: { status: "confirmed" } });
+      return Promise.resolve({
+        kind: "done",
+        result: options.confirmResult ?? { status: "confirmed" },
+      });
     },
     startBrief: async (briefId, request, correlationId) => {
       starts.push({ briefId, request, correlationId });
@@ -90,12 +101,17 @@ function setup(
       notes.push(input);
       return Promise.resolve();
     },
+    postEphemeral: (input) => {
+      ephemerals.push(input);
+      return Promise.resolve();
+    },
   };
   const { log, lines } = memoryLogger();
   return {
     deps: { api, slack, log, threadReadTimeoutMs: 50, webBaseUrl: undefined as string | undefined },
     listening,
     notes,
+    ephemerals,
     posted,
     stops,
     starts,
@@ -608,6 +624,17 @@ describe("handleConfirmDecisionAction (slice 2.2)", () => {
       actions: [{ type: "button", action_id: actionId, value, action_ts: "1700000001.000001" }],
     };
   }
+
+  it("tells a person refused why, privately, in the thread (decision 201)", async () => {
+    const { deps, ephemerals } = setup({
+      confirmResult: { status: "not_allowed", reason: "not_in_thread" },
+    });
+    const body = { ...press(), channel: { id: "C1" }, container: { thread_ts: "100.1" } };
+    expect(await handleConfirmDecisionAction(body, deps)).toBe("not_allowed");
+    expect(ephemerals).toEqual([
+      { channel: "C1", user: "U3", text: notAllowedText, threadTs: "100.1" },
+    ]);
+  });
 
   it("confirms the decision as the person who pressed Confirm, with their name", async () => {
     const { deps, confirms, lines } = setup({ userName: () => Promise.resolve("Grace") });

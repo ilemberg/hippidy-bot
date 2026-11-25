@@ -58,6 +58,14 @@ const realSlackActions = (client: webApi.WebClient): SlackActions => ({
       unfurl_links: false,
     });
   },
+  async postEphemeral(input) {
+    await client.chat.postEphemeral({
+      channel: input.channel,
+      user: input.user,
+      text: input.text,
+      ...(input.threadTs === undefined ? {} : { thread_ts: input.threadTs }),
+    });
+  },
   async threadReplies(channel, threadTs) {
     // Needs `channels:history` and `groups:history` (decision 140). Slack returns a thread
     // oldest first, 200 at a time, and the newest messages are the ones that matter, so it
