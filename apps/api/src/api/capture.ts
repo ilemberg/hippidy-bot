@@ -79,9 +79,8 @@ export function checkDecisions(
     const message = byMessage.get(d.messageId.trim());
     const decidedBy = d.decidedBy.trim();
     const statement = clip(d.statement, STATEMENT_MAX);
-    if (message === undefined || message.actorId !== decidedBy || statement.length === 0) {
-      continue;
-    }
+    if (message === undefined) continue;
+    if (message.actorId !== decidedBy || statement.length === 0) continue;
     if (seen.has(statement.toLowerCase())) continue;
     seen.add(statement.toLowerCase());
     const reason = d.reason === null ? "" : clip(d.reason, REASON_MAX);
