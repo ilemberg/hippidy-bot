@@ -15,6 +15,10 @@ import {
   type ObservedLine,
 } from "../store/capture.ts";
 import type { Db } from "../store/db.ts";
+import { decidersFor } from "../store/conflicts.ts";
+import { searchDecisions } from "../store/decisions.ts";
+import type { Decision } from "@hippidy/contracts";
+import type { Fallback } from "./areas.ts";
 import { storable } from "../store/json.ts";
 import type { ObservedThread } from "../store/listening.ts";
 
@@ -39,7 +43,12 @@ export interface CaptureDeps {
   extractor: DecisionExtractor;
   dailyBudgetCents: number;
   now?: () => Date;
+  /** Who decides a replacement in an area with no owner (slice 3.2). */
+  fallback?: Fallback | undefined;
 }
+
+/** Active decisions offered to the model as ones a captured decision may replace. */
+export const ACTIVE_PER_THREAD = 5;
 
 export interface CaptureResult {
   read: number;
@@ -70,11 +79,12 @@ export function checkDecisions(
   result: Extract<ExtractResult, { kind: "ok" }>,
   lines: readonly ObservedLine[],
   existing: readonly string[],
-): CapturedDecision[] {
+  active: readonly Decision[] = [],
+): (CapturedDecision & { replacing?: Decision | undefined })[] {
   const byMessage = new Map(lines.map((line) => [line.messageId, line]));
   const names = new Map(lines.map((line) => [line.actorId, line.actorName]));
   const seen = new Set(existing.map((s) => s.trim().toLowerCase()));
-  const kept: CapturedDecision[] = [];
+  const kept: (CapturedDecision & { replacing?: Decision | undefined })[] = [];
   for (const d of result.decisions) {
     const message = byMessage.get(d.messageId.trim());
     const decidedBy = d.decidedBy.trim();
@@ -92,6 +102,8 @@ export function checkDecisions(
       decidedBy: { actorId: decidedBy, name: names.get(decidedBy) ?? null },
       messageId: message.messageId,
       decidedAt: message.sentAt,
+      // Only one of the decisions it was shown: a number the model made up replaces nothing.
+      replacing: d.replaces == null ? undefined : active.find((a) => a.number === d.replaces),
     });
     if (kept.length === MAX_DECISIONS_PER_THREAD) break;
   }
@@ -130,7 +142,23 @@ async function captureThread(
     return { outcome: "nothing", proposed: 0, spentMicros: 0 };
   }
   const existing = await threadDecisionStatements(deps.db, thread);
-  const result = await deps.extractor.extract({ lines, existing, truncated });
+  const active = await searchDecisions(deps.db, {
+    query: lines
+      .map((line) => line.text)
+      .join(" ")
+      .slice(0, 2000),
+    limit: ACTIVE_PER_THREAD,
+    minShared: 2,
+  }).catch((error: unknown): Decision[] => {
+    log.warn("capture.active_failed", { error });
+    return [];
+  });
+  const result = await deps.extractor.extract({
+    lines,
+    existing,
+    truncated,
+    active: active.map((d) => ({ number: d.number, statement: d.statement })),
+  });
   const usage = result.usage;
   const spent = usage === null ? 0 : costMicros(usage);
   const usageColumns = {
@@ -144,7 +172,33 @@ async function captureThread(
     await finishCapture(deps.db, { ...base, ...usageColumns, outcome: result.kind, error });
     return { outcome: result.kind, proposed: 0, spentMicros: spent };
   }
-  const decisions = checkDecisions(result, lines, existing);
+  const checked = checkDecisions(result, lines, existing, active);
+  const place = { source: thread.source, workspaceId: thread.workspaceId };
+  const decisions: CapturedDecision[] = [];
+  for (const { replacing, ...decision } of checked) {
+    if (replacing === undefined) {
+      decisions.push(decision);
+      continue;
+    }
+    // Replacing someone else's decision waits for its deciders (decision 208).
+    const deciders = await decidersFor(
+      deps.db,
+      place,
+      {
+        area: replacing.area,
+        replacedDecider: replacing.origin === "import" ? null : replacing.decidedBy.actorId,
+      },
+      deps.fallback,
+    );
+    const theirs = deciders.some((d) => d.actorId === decision.decidedBy.actorId);
+    decisions.push({
+      ...decision,
+      replaces: {
+        id: replacing.id,
+        deciders: theirs ? undefined : deciders.map((d) => d.actorId),
+      },
+    });
+  }
   const dropped = result.decisions.length - decisions.length;
   if (dropped > 0) log.info("capture.decisions_dropped", { dropped });
   const { proposed } = await finishCapture(deps.db, {

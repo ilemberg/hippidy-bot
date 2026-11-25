@@ -36,7 +36,8 @@ import { FakeExtractor } from "../agent/extractor.ts";
 import { runCapture } from "../api/capture.ts";
 import { captureSpentSince } from "./capture.ts";
 import { areaHistory, createArea, editArea, nameAreasForChange } from "./areas.ts";
-import { actOnProposal, decisionHistory } from "./decisions.ts";
+import { actOnProposal, decisionHistory, recordDecision } from "./decisions.ts";
+import { conflictDetail, listConflicts, recordConflict, settleConflict } from "./conflicts.ts";
 import { recordObservation, setListening } from "./listening.ts";
 import { searchDecisions } from "./decisions.ts";
 import { applyMigration, applyMigrations } from "./testing.ts";
@@ -811,5 +812,119 @@ describe("areas through postgres.js (slice 3.1)", () => {
     const changeId = created.kind === "created" ? created.changeId : "";
     expect(await nameAreasForChange(db, changeId, [id], "brief")).toEqual([id]);
     expect(await nameAreasForChange(db, changeId, [id], "pull_request")).toEqual([]);
+  });
+});
+
+describe("conflicts through postgres.js (slice 3.2)", () => {
+  it("keeps positions as JSON, decisions and deciders as arrays, and numbers as numbers", async () => {
+    const place = { source: "slack" as const, workspaceId: "Tconflicts" };
+    const conversation = await findOrCreateConversation(db, {
+      ...place,
+      channelId: "C",
+      threadId: "conflicts.1",
+    });
+    const recorded = await recordDecision(db, {
+      customToolUseId: "sevt_conflict_pg",
+      conversationId: conversation.id,
+      messageId: null,
+      statement: "Search uses full-text.",
+      reason: undefined,
+      area: "search",
+      decidedBy: { ...place, actorId: "U2", name: "Grace" },
+      status: "active",
+      supersedes: undefined,
+    });
+    if (recorded.kind === "no_superseded") throw new Error("seed");
+    const guarded = await recordDecision(db, {
+      customToolUseId: "sevt_conflict_pg_2",
+      conversationId: conversation.id,
+      messageId: null,
+      statement: "Search uses vectors.",
+      reason: undefined,
+      area: "search",
+      decidedBy: { ...place, actorId: "U1", name: "Linus" },
+      status: "proposed",
+      supersedes: recorded.decision.number,
+      guard: {
+        deciders: ["UOWNER", "U2"],
+        summary: "Replace it",
+        positions: [{ actorId: "U1", name: "Linus", says: 'say "vectors" \u0000 now' }],
+      },
+    });
+    if (guarded.kind === "no_superseded") throw new Error("guard");
+    const raised = await recordConflict(db, {
+      place,
+      kind: "raised",
+      summary: "Which?",
+      conversationId: conversation.id,
+      channelId: null,
+      threadId: null,
+      area: null,
+      decisionIds: [recorded.decision.id],
+      proposalId: null,
+      positions: [
+        { actorId: "U1", name: null, says: "a" },
+        { actorId: "U2", name: "Grace", says: "b" },
+      ],
+      deciders: ["UOWNER"],
+      customToolUseId: "sevt_conflict_raised",
+    });
+    expect(raised).toMatchObject({ created: true });
+    expect(typeof raised.number).toBe("number");
+    expect(
+      await recordConflict(db, {
+        place,
+        kind: "raised",
+        summary: "Which?",
+        conversationId: conversation.id,
+        channelId: null,
+        threadId: null,
+        area: null,
+        decisionIds: [],
+        proposalId: null,
+        positions: [],
+        deciders: [],
+        customToolUseId: "sevt_conflict_raised",
+      }),
+    ).toEqual({ ...raised, created: false });
+    expect(
+      await db.query(`select jsonb_typeof(positions) as type from conflicts where id = $1`, [
+        raised.id,
+      ]),
+    ).toEqual([{ type: "array" }]);
+
+    const listed = await listConflicts(db, place, {
+      status: "open",
+      decision: recorded.decision.number,
+      limit: 10,
+    });
+    expect(listed.map((c) => c.kind).sort()).toEqual(["raised", "replacement"]);
+    const replacement = listed.find((c) => c.kind === "replacement");
+    expect(replacement).toMatchObject({
+      decisions: [{ number: recorded.decision.number, status: "active" }],
+      proposal: { number: guarded.decision.number, status: "proposed" },
+      positions: [{ actorId: "U1", name: "Linus", says: 'say "vectors"  now' }],
+      deciders: [
+        { actorId: "UOWNER", name: null },
+        { actorId: "U2", name: "Grace" },
+      ],
+    });
+    expect((await conflictDetail(db, place, raised.number, "UOWNER"))?.youMay).toEqual({
+      settle: true,
+      reason: null,
+    });
+    const settled = await settleConflict(
+      db,
+      { ...place, actorId: "UOWNER", name: null },
+      raised.id,
+      {
+        outcome: "dismissed",
+      },
+    );
+    expect(settled).toMatchObject({
+      status: "settled",
+      conflict: { status: "settled", outcome: "dismissed", note: null },
+    });
+    expect(typeof settled.conflict?.settledAt).toBe("string");
   });
 });

@@ -81,6 +81,8 @@ describe("createAnthropicExtractor", () => {
           area: "search",
           decidedBy: "U1",
           messageId: "1.1",
+          // An answer from before slice 3.2, without `replaces`, replaces nothing.
+          replaces: null,
         },
       ],
     });
@@ -121,17 +123,42 @@ describe("captureMessage", () => {
         "",
         "Already on record from this thread:",
         "- Releases go out on Tuesdays.",
+        "",
+        "Active decisions that may bear on it:",
+        "(none)",
       ].join("\n"),
     );
     expect(captureMessage({ ...input, existing: [], truncated: true })).toMatch(
       /^The thread \(only its latest messages[^\n]*\n[\s\S]*\(none\)$/,
     );
+    // The active decisions a found one may replace (slice 3.2), one line each.
+    expect(
+      captureMessage({ ...input, active: [{ number: 12, statement: "Search\nuses full-text." }] }),
+    ).toMatch(/Active decisions that may bear on it:\n- 12: Search \/ uses full-text\.$/);
   });
 });
 
 describe("parseAnswer and costMicros", () => {
   it("reads only the fixed shape, and prices a call at list price", () => {
     expect(parseAnswer("not json")).toBe("answer is not JSON");
+    expect(
+      parseAnswer(
+        JSON.stringify({
+          decisions: [
+            {
+              statement: "s",
+              reason: null,
+              area: null,
+              decidedBy: "U1",
+              messageId: "1",
+              replaces: 12,
+            },
+          ],
+        }),
+      ),
+    ).toEqual([
+      { statement: "s", reason: null, area: null, decidedBy: "U1", messageId: "1", replaces: 12 },
+    ]);
     expect(parseAnswer(JSON.stringify({ decisions: [{ statement: "x" }] }))).toBe(
       "answer does not match the schema",
     );
