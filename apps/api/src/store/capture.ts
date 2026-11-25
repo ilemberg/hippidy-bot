@@ -1,6 +1,7 @@
 import { messageSourceSchema } from "@hippidy/contracts";
 import { z } from "zod";
 import type { Db } from "./db.ts";
+import { recordConflict } from "./conflicts.ts";
 import { storable } from "./json.ts";
 import type { ObservedThread } from "./listening.ts";
 
@@ -153,6 +154,11 @@ export interface CapturedDecision {
   decidedBy: { actorId: string; name: string | null };
   messageId: string;
   decidedAt: string;
+  /**
+   * The active decision it replaces (slice 3.2, decision 208), its area, and who alone decides
+   * the replacement.
+   */
+  replaces?: { id: string; area: string | null; deciders: string[] } | undefined;
 }
 
 export interface CaptureRun {
@@ -238,9 +244,10 @@ export async function finishCapture(db: Db, run: CaptureRun): Promise<{ proposed
       const rows = await tx.query(
         `insert into decisions (statement, reason, area, status, decided_by_source,
            decided_by_workspace_id, decided_by_actor_id, decided_by_name, decided_at, origin,
-           message_id, channel_id, thread_id, capture_run_id, confirmable_by)
+           message_id, channel_id, thread_id, capture_run_id, confirmable_by, supersedes_id,
+           deciders)
          values ($1, $2, $3, 'proposed', $4, $5, $6, $7, $8, 'capture', $9, $10, $11, $12,
-                 $13::text[])
+                 $13::text[], $14, $15::text[])
          on conflict do nothing
          returning id`,
         [
@@ -257,9 +264,34 @@ export async function finishCapture(db: Db, run: CaptureRun): Promise<{ proposed
           run.thread.threadId,
           runId,
           run.writers,
+          decision.replaces?.id ?? null,
+          decision.replaces?.deciders ?? null,
         ],
       );
       proposed += rows.length;
+      const inserted = rows[0];
+      if (inserted !== undefined && decision.replaces !== undefined) {
+        // Nothing is posted in a listened thread (176): the conflict is listed for its deciders.
+        await recordConflict(tx, {
+          place: { source: run.thread.source, workspaceId: run.thread.workspaceId },
+          kind: "capture",
+          summary: `Listening found a decision that would replace an active one: ${decision.statement}`,
+          conversationId: null,
+          channelId: run.thread.channelId,
+          threadId: run.thread.threadId,
+          area: decision.replaces.area,
+          decisionIds: [decision.replaces.id],
+          proposalId: z.object({ id: z.string() }).parse(inserted).id,
+          positions: [
+            {
+              actorId: decision.decidedBy.actorId,
+              name: decision.decidedBy.name,
+              says: decision.statement,
+            },
+          ],
+          deciders: decision.replaces.deciders,
+        });
+      }
     }
     // Only up to the message it was claimed at: one that arrived during the call keeps the
     // thread due.

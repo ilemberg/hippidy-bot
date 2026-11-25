@@ -26,6 +26,8 @@ export interface ExtractInput {
   existing: string[];
   /** Whether older messages were left out. */
   truncated: boolean;
+  /** Active decisions that share words with the thread, which one found may replace (3.2). */
+  active?: { number: number; statement: string }[];
 }
 
 /** One decision as the model proposes it; the caller checks it against the thread. */
@@ -35,6 +37,8 @@ export interface ExtractedDecision {
   area: string | null;
   decidedBy: string;
   messageId: string;
+  /** The number of an active decision listed with the thread that this one replaces. */
+  replaces?: number | null;
 }
 
 export interface ExtractUsage {
@@ -72,6 +76,7 @@ For each decision give:
 - area: one or two lowercase words for what it is about (search, slack, billing), or null.
 - decidedBy: the user id of the person who made or settled it, exactly as written in the thread.
 - messageId: the message id where it was settled, exactly as written in the thread.
+- replaces: the number of a decision listed under "Active decisions" that this one changes or contradicts, or null. Only a number from that list; null when it only adds to one.
 
 Do not repeat a decision listed under "Already on record". Return at most ${String(MAX_DECISIONS_PER_THREAD)} decisions.`;
 
@@ -89,8 +94,9 @@ export const CAPTURE_SCHEMA = {
           area: { type: ["string", "null"] },
           decidedBy: { type: "string" },
           messageId: { type: "string" },
+          replaces: { type: ["integer", "null"] },
         },
-        required: ["statement", "reason", "area", "decidedBy", "messageId"],
+        required: ["statement", "reason", "area", "decidedBy", "messageId", "replaces"],
         additionalProperties: false,
       },
     },
@@ -107,6 +113,7 @@ const answerSchema = z.object({
       area: z.string().nullable(),
       decidedBy: z.string(),
       messageId: z.string(),
+      replaces: z.number().int().nullable().optional(),
     }),
   ),
 });
@@ -136,6 +143,11 @@ export function captureMessage(input: ExtractInput): string {
     "",
     "Already on record from this thread:",
     ...(input.existing.length === 0 ? ["(none)"] : input.existing.map((s) => `- ${oneLine(s)}`)),
+    "",
+    "Active decisions that may bear on it:",
+    ...((input.active ?? []).length === 0
+      ? ["(none)"]
+      : (input.active ?? []).map((d) => `- ${String(d.number)}: ${oneLine(d.statement)}`)),
   ];
   return parts.join("\n");
 }
@@ -156,6 +168,7 @@ export function parseAnswer(text: string): ExtractedDecision[] | string {
     area: d.area ?? null,
     decidedBy: d.decidedBy,
     messageId: d.messageId,
+    replaces: d.replaces ?? null,
   }));
 }
 

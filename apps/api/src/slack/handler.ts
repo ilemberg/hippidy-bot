@@ -74,6 +74,10 @@ export const CONFIRM_DECISION_ACTION = "confirm_decision";
 export const notAllowedText =
   "Only people who wrote to me in this thread, or the owner of its area, can confirm this decision. Mention me here to take part, then press Confirm again.";
 
+/** Said privately to someone who is not among a guarded proposal's deciders (decision 208). */
+export const notDeciderText =
+  "This would replace someone else's decision, so only the people named in the post can confirm it.";
+
 /** What a person who pressed Confirm is told privately, when anything but done. */
 const privateConfirmTexts: Partial<Record<ConfirmDecisionResult["status"], string>> = {
   not_allowed: notAllowedText,
@@ -487,7 +491,10 @@ export async function handleConfirmDecisionAction(
       result: confirmed.result.status,
     });
     // Refused, changed or already decided (201, 203): say so, to the person who pressed only.
-    const privately = privateConfirmTexts[confirmed.result.status];
+    const privately =
+      confirmed.result.reason === "not_decider"
+        ? notDeciderText
+        : privateConfirmTexts[confirmed.result.status];
     if (privately !== undefined && payload.channel !== undefined) {
       const threadTs = payload.container?.thread_ts;
       await deps.slack

@@ -149,6 +149,7 @@ function realServices(
       new Anthropic({ apiKey: agentConfig.apiKey, maxRetries: 0, timeout: 25_000 }),
     ),
     dailyBudgetCents: readCaptureBudgetCents(env, log),
+    fallback: conversations.fallback,
   };
   return verifyAgentWebhook === undefined
     ? { conversations, capture, status }

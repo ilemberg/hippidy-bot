@@ -8,6 +8,7 @@ import {
   type NotAllowedReason,
 } from "@hippidy/contracts";
 import { z } from "zod";
+import { recordConflict, settleProposalConflict, type Position } from "./conflicts.ts";
 import type { Db, Row } from "./db.ts";
 import { storable, toJsonText } from "./json.ts";
 
@@ -123,6 +124,19 @@ export async function recordDecision(
     decidedBy: DecisionActor;
     status: "active" | "proposed";
     supersedes: number | undefined;
+    /**
+     * It replaces someone else's decision (slice 3.2, decision 208): only these people may
+     * confirm or reword it, and a conflict is recorded with it. The caller makes it proposed.
+     */
+    guard?:
+      | {
+          deciders: readonly string[];
+          /** The replaced decision's area, whose owner decides. */
+          area: string | null;
+          summary: string;
+          positions: readonly Position[];
+        }
+      | undefined;
   },
 ): Promise<RecordDecisionResult> {
   return db.transaction(async (tx) => {
@@ -144,8 +158,8 @@ export async function recordDecision(
     const inserted = await tx.query(
       `insert into decisions (statement, reason, area, status, decided_by_source,
          decided_by_workspace_id, decided_by_actor_id, decided_by_name, decided_at, origin,
-         conversation_id, message_id, supersedes_id, custom_tool_use_id)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, now(), 'thread', $9, $10, $11, $12)
+         conversation_id, message_id, supersedes_id, custom_tool_use_id, deciders)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, now(), 'thread', $9, $10, $11, $12, $13::text[])
        returning id`,
       [
         input.statement,
@@ -160,9 +174,25 @@ export async function recordDecision(
         input.messageId,
         supersedesId,
         input.customToolUseId,
+        input.guard === undefined ? null : [...new Set(input.guard.deciders)],
       ],
     );
     const id = z.object({ id: z.string() }).parse(inserted[0]).id;
+    if (input.guard !== undefined && supersedesId !== null) {
+      await recordConflict(tx, {
+        place: { source: input.decidedBy.source, workspaceId: input.decidedBy.workspaceId },
+        kind: "replacement",
+        summary: input.guard.summary,
+        conversationId: input.conversationId,
+        channelId: null,
+        threadId: null,
+        area: input.guard.area,
+        decisionIds: [supersedesId],
+        proposalId: id,
+        positions: input.guard.positions,
+        deciders: input.guard.deciders,
+      });
+    }
     if (input.status === "active" && supersedesId !== null) {
       await tx.query(
         `update decisions set status = 'superseded', updated_at = now() where id = $1`,
@@ -214,6 +244,7 @@ const placeRow = z.object({
   decided_by_actor_id: z.string().nullable(),
   decided_by_name: z.string().nullable(),
   created_at: z.date(),
+  deciders: z.array(z.string()).nullable(),
 });
 type Place = z.infer<typeof placeRow>;
 
@@ -224,7 +255,7 @@ async function readPlace(db: Db, decisionId: string, lock: boolean): Promise<Pla
             coalesce(v.source, d.decided_by_source) as source,
             coalesce(v.workspace_id, d.decided_by_workspace_id) as workspace_id,
             d.statement, d.reason, d.area, d.wording_version, d.decided_by_actor_id,
-            d.decided_by_name, d.created_at
+            d.decided_by_name, d.created_at, d.deciders
      from decisions d left join conversations v on v.id = d.conversation_id
      where d.id = $1 ${lock ? "for update of d" : ""}`,
     [decisionId],
@@ -235,18 +266,36 @@ async function readPlace(db: Db, decisionId: string, lock: boolean): Promise<Pla
 /**
  * Whether a person may act on a decision (G11, decisions 201 and 202): an import never; one
  * the teammate recorded, a person whose message the bot received in its thread; one from
- * listening, a person who wrote in the thread it came from. Undefined: it is not in the
- * person's source and workspace, so for them it does not exist.
+ * listening, a person who wrote in the thread it came from. A guarded proposal, one that
+ * replaces someone else's decision, is confirmed or reworded only by its deciders; anyone who
+ * could act on it otherwise may still reject it (slice 3.2, decision 208). Undefined: it is not
+ * in the person's source and workspace, so for them it does not exist.
  */
 async function permission(
   db: Db,
   place: Place,
   person: DecisionActor,
+  action: "confirm" | "edit" | "reject",
 ): Promise<{ kind: "may" } | { kind: "may_not"; reason: NotAllowedReason } | undefined> {
   if (place.origin === "import") return { kind: "may_not", reason: "read_only" };
   if (place.source !== person.source || place.workspace_id !== person.workspaceId) {
     return undefined;
   }
+  if (place.deciders !== null) {
+    if (place.deciders.includes(person.actorId)) return { kind: "may" };
+    if (action !== "reject") return { kind: "may_not", reason: "not_decider" };
+    const others = await ordinaryPermission(db, place, person);
+    return others.kind === "may" ? others : { kind: "may_not", reason: "not_decider" };
+  }
+  return ordinaryPermission(db, place, person);
+}
+
+/** Who may act on a proposal that replaces nobody else's decision (201, 202, 206). */
+async function ordinaryPermission(
+  db: Db,
+  place: Place,
+  person: DecisionActor,
+): Promise<{ kind: "may" } | { kind: "may_not"; reason: NotAllowedReason }> {
   // The owner of its area may act on it too (G11 from slice 3.1, decision 206), on what was
   // proposed after they became owner: anyone may change an owner, so making oneself owner of an
   // area does not open the proposals already waiting in it (decision 207).
@@ -278,12 +327,21 @@ export async function mayAct(
   db: Db,
   decisionId: string,
   person: DecisionActor,
-): Promise<{ act: boolean; reason: NotAllowedReason | null }> {
+): Promise<{ act: boolean; reason: NotAllowedReason | null; withdraw?: boolean }> {
   const place = await readPlace(db, decisionId, false);
   if (place === undefined) return { act: false, reason: null };
-  const allowed = await permission(db, place, person);
+  const allowed = await permission(db, place, person, "confirm");
   if (allowed === undefined) return { act: false, reason: null };
-  if (allowed.kind === "may_not") return { act: false, reason: allowed.reason };
+  if (allowed.kind === "may_not") {
+    // Not a decider of a guarded proposal, but may still withdraw it (decision 208).
+    const reject =
+      place.status === "proposed" && allowed.reason === "not_decider"
+        ? await permission(db, place, person, "reject")
+        : undefined;
+    return reject?.kind === "may"
+      ? { act: false, reason: allowed.reason, withdraw: true }
+      : { act: false, reason: allowed.reason };
+  }
   return { act: place.status === "proposed", reason: null };
 }
 
@@ -325,7 +383,7 @@ export async function actOnProposal(
   return db.transaction(async (tx) => {
     const place = await readPlace(tx, decisionId, true);
     if (place === undefined) return { status: "not_found" };
-    const allowed = await permission(tx, place, person);
+    const allowed = await permission(tx, place, person, action.kind);
     if (allowed === undefined) return { status: "not_found" };
     const current = async () =>
       toDecision(
@@ -404,6 +462,8 @@ export async function actOnProposal(
         [decisionId, person.actorId, person.name],
       );
       await recordEvent(tx, decisionId, "rejected", person);
+      // The decision it would have replaced stands (slice 3.2).
+      await settleProposalConflict(tx, decisionId, "kept", person);
       return { status: "rejected", decision: await current() };
     }
 
@@ -416,6 +476,7 @@ export async function actOnProposal(
       [decisionId, person.source, person.workspaceId, person.actorId, person.name],
     );
     await recordEvent(tx, decisionId, "confirmed", person);
+    await settleProposalConflict(tx, decisionId, "changed", person);
     let replaced: { number: number; stillActive: boolean } | undefined;
     if (place.supersedes_id !== null) {
       const old = await tx.query(

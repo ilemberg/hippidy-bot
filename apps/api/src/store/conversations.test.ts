@@ -434,6 +434,7 @@ describe("schema", () => {
     "change_areas",
     "change_briefs",
     "changes",
+    "conflicts",
     "conversations",
     "decision_events",
     "decisions",

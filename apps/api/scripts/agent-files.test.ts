@@ -3,6 +3,7 @@ import {
   linkProjectInputSchema,
   recordApprovalInputSchema,
   startChangeInputSchema,
+  raiseConflictInputSchema,
   recallDecisionsInputSchema,
   recordDecisionInputSchema,
 } from "@hippidy/contracts";
@@ -179,6 +180,7 @@ describe("the teammate (slice 2.1, decision 181)", () => {
       "start_change",
       "record_decision",
       "recall_decisions",
+      "raise_conflict",
     ]);
     const linkProject = tools.find((tool) => tool.name === "link_project");
     expect(linkProject?.description).not.toMatch(/stage|manager|only a/i);
@@ -383,6 +385,7 @@ const contracts = {
   start_change: startChangeInputSchema,
   record_decision: recordDecisionInputSchema,
   recall_decisions: recallDecisionsInputSchema,
+  raise_conflict: raiseConflictInputSchema,
 };
 
 for (const path of ["agents/product.md", "agents/teammate.md"]) {

@@ -13,6 +13,9 @@ import {
   type SessionList,
   MAX_INBOUND_MESSAGE_BYTES,
   confirmDecisionRequestSchema,
+  listConflictsQuerySchema,
+  settleConflictRequestSchema,
+  type ConflictList,
   listDecisionsQuerySchema,
   editDecisionRequestSchema,
   createAreaRequestSchema,
@@ -57,6 +60,8 @@ import { requireServiceOrPerson, requireServiceToken } from "./auth.ts";
 import { startBriefByPerson, syncChange } from "./changes.ts";
 import { runCapture, type CaptureDeps } from "./capture.ts";
 import { namePullRequestAreas } from "./areas.ts";
+import { settleConflictByPerson } from "./conflicts.ts";
+import { conflictDetail, listConflicts } from "../store/conflicts.ts";
 import {
   areaHistory,
   createArea,
@@ -637,6 +642,70 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
     c.var.log.info("area.edit", { areaId: areaId.data, status: result.status });
     const body: AreaActionResult = result.area === undefined ? { status: result.status } : result;
     return c.json(body);
+  });
+
+  // Conflicts and who decides them (slice 3.2, decision 208): read by anyone signed in or the
+  // service; settled by a signed-in decider, as themselves.
+  api.get("/v1/conflicts", readers, async (c) => {
+    const query = listConflictsQuerySchema.safeParse(c.req.query());
+    if (!query.success) return invalidQuery(c, query.error);
+    const db = deps.conversations?.db ?? deps.status.db;
+    const place = placeOf(c.var.caller);
+    if (db === undefined || place === undefined) {
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    }
+    const body: ConflictList = { conflicts: await listConflicts(db, place, query.data) };
+    return c.json(body);
+  });
+
+  api.get("/v1/conflicts/:number", readers, async (c) => {
+    const number = z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(1_000_000_000)
+      .safeParse(c.req.param("number"));
+    if (!number.success) return errorResponse(c, 404, "not_found", "No such conflict");
+    const db = deps.conversations?.db ?? deps.status.db;
+    const place = placeOf(c.var.caller);
+    if (db === undefined || place === undefined) {
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    }
+    const caller = c.var.caller;
+    const detail = await conflictDetail(
+      db,
+      place,
+      number.data,
+      caller.kind === "person" ? caller.actorId : undefined,
+      deps.conversations?.fallback,
+    );
+    if (detail === undefined) return errorResponse(c, 404, "not_found", "No such conflict");
+    return c.json(detail);
+  });
+
+  api.post("/v1/conflicts/:conflictId/settle", people, limitBody, async (c) => {
+    const caller = c.var.caller;
+    if (caller.kind !== "person") {
+      return errorResponse(c, 400, "invalid_request", "Only a signed-in person settles a conflict");
+    }
+    const conflictId = conversationIdSchema.safeParse(c.req.param("conflictId"));
+    if (!conflictId.success) return errorResponse(c, 404, "not_found", "No such conflict");
+    const parsed = settleConflictRequestSchema.safeParse((await jsonBody(c))?.body);
+    if (!parsed.success) return errorResponse(c, 400, "invalid_request", "Request body is invalid");
+    if (deps.conversations === undefined) {
+      return errorResponse(c, 503, "not_configured", "Conversations are not configured");
+    }
+    const person = actorOf(caller, undefined);
+    if (person === undefined) return errorResponse(c, 400, "invalid_request", "No person");
+    return c.json(
+      await settleConflictByPerson(
+        deps.conversations,
+        conflictId.data,
+        person,
+        parsed.data,
+        c.var.log,
+      ),
+    );
   });
 
   // One decision by its number, its history, and what the signed-in person may do (2.6).

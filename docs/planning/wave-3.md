@@ -48,7 +48,9 @@ other and can run side by side. 3.4 last, since a brief reads what the other thr
 
 Planned in detail in `slice-3-1.md` (decision 206).
 
-## Slice 3.2 (outline)
+## Slice 3.2
+
+Planned in detail in `slice-3-2.md` (decision 208). The outline it came from:
 
 - **Finding a conflict.** No new model call. The teammate already sees the decisions that bear
   on a message; it is told to call `raise_conflict` when what someone asks for contradicts an

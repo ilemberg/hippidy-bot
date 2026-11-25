@@ -183,6 +183,9 @@ describe("record_decision (decision 192)", () => {
   });
 
   it("supersedes an active decision when the new one is active", async () => {
+    // An imported decision names no one, so the project's owner decides its replacement
+    // (decision 208): here the person replacing it is that owner.
+    deps = { ...deps, fallback: { actorId: "U1" } };
     const [old] = await db.query(
       `select number::int as number from decisions where origin_ref = '173'`,
     );
@@ -298,6 +301,9 @@ describe("what the review of part C found (decision 195)", () => {
   });
 
   it("leaves the decision a proposal replaces active until it is confirmed, and says which", async () => {
+    // An imported decision names no one, so the project's owner decides its replacement
+    // (decision 208): here the person replacing it is that owner.
+    deps = { ...deps, fallback: { actorId: "U1" } };
     const { answer } = await record(
       { ...decision, supersedes: 173 },
       { mcpReads: ["getJiraIssue"] },
@@ -312,6 +318,9 @@ describe("what the review of part C found (decision 195)", () => {
   });
 
   it("says so, and leaves it, when the decision a proposal replaces was replaced meanwhile", async () => {
+    // An imported decision names no one, so the project's owner decides its replacement
+    // (decision 208): here the person replacing it is that owner.
+    deps = { ...deps, fallback: { actorId: "U1" } };
     const { answer } = await record(
       { ...decision, supersedes: 173 },
       { mcpReads: ["getJiraIssue"] },

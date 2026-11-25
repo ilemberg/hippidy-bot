@@ -15,6 +15,7 @@ import {
   handleStartBriefAction,
   isStopCommand,
   notAllowedText,
+  notDeciderText,
   type MentionDelivery,
   type SlackActions,
 } from "./handler.ts";
@@ -634,6 +635,15 @@ describe("handleConfirmDecisionAction (slice 2.2)", () => {
     expect(ephemerals).toEqual([
       { channel: "C1", user: "U3", text: notAllowedText, threadTs: "100.1" },
     ]);
+  });
+
+  it("tells a person who is not among a replacement's deciders who decides (decision 208)", async () => {
+    const { deps, ephemerals } = setup({
+      confirmResult: { status: "not_allowed", reason: "not_decider" },
+    });
+    const body = { ...press(), channel: { id: "C1" } };
+    expect(await handleConfirmDecisionAction(body, deps)).toBe("not_allowed");
+    expect(ephemerals[0]?.text).toBe(notDeciderText);
   });
 
   it("tells a person privately when the wording changed since it was posted (decision 203)", async () => {
