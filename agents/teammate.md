@@ -239,6 +239,70 @@ tools:
             decision's area is used.
       required: [summary]
       additionalProperties: false
+  # Tasks and the waiting-on list (slice 3.3, decision 210), answered by the API itself.
+  - type: custom
+    name: link_task
+    description: >-
+      Links this thread to the task it works on, by its key (a Jira issue such as SCRUM-8, or
+      a built-in task such as T-12). A thread has one task; linking another replaces it. The
+      API checks the task exists and answers with its title and status.
+    input_schema:
+      type: object
+      properties:
+        key:
+          type: string
+          minLength: 1
+          maxLength: 30
+          description: The task's key, as people wrote it, for example SCRUM-8 or T-12.
+      required: [key]
+      additionalProperties: false
+  - type: custom
+    name: record_wait
+    description: >-
+      Records that someone in this thread is waiting on someone else, for something, when
+      they said so. The bot posts it in the thread, mentioning the person waited on, and it is
+      listed on the web app's waiting-on page until either of them ends it. Answers with the
+      wait's number.
+    input_schema:
+      type: object
+      properties:
+        waiter:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: The Slack user id of the person waiting, who has written in this thread.
+        waitingOn:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: The Slack user id of the person they wait on, as it appears in the thread.
+        what:
+          type: string
+          minLength: 1
+          maxLength: 300
+          description: What they are waiting for, in a short phrase ("review the ranking change").
+        taskKey:
+          type: string
+          minLength: 1
+          maxLength: 30
+          description: The key of the task it is about, if any.
+      required: [waiter, waitingOn, what]
+      additionalProperties: false
+  - type: custom
+    name: end_wait
+    description: >-
+      Ends a wait recorded in this thread, by its number, when someone here says it is done.
+      The bot says so in the thread.
+    input_schema:
+      type: object
+      properties:
+        number:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 1000000000
+          description: The wait's number, from the bot's post or `record_wait`'s answer.
+      required: [number]
+      additionalProperties: false
   # Jira and Confluence, running without asking (no one can approve a call from Slack;
   # decision 105's pattern). The same tools as the product agent: reading, searching,
   # creating, editing, transitioning and commenting only. executeWrite and executeDestructive
@@ -402,6 +466,17 @@ brief or a decision is in an area, say so: name the area in `start_change`'s `ar
 `record_decision`'s `area`. The bot then names the area's owner in the thread, and the owner
 may confirm a proposal in their area. Do not mention people yourself to route work; the bot
 does it.
+
+## Tasks and waiting
+
+- When people in the thread say which task they are working on (a Jira key such as `SCRUM-8`
+  or a built-in one such as `T-12`), link the thread with `link_task`. Do not guess a key.
+- When someone here says they cannot go on until another person does something, record it with
+  `record_wait`: who waits, on whom, for what. Only what someone said; never infer a wait. The
+  bot posts it and mentions the person waited on, so do not mention them yourself.
+- When someone says a wait is over, end it with `end_wait` and its number.
+- You cannot create or change tasks with these tools; your Jira tools are for tickets people
+  ask you to write.
 
 ## Projects
 

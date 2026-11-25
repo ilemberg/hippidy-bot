@@ -10,7 +10,14 @@ import type { ConversationDeps } from "./api/conversations.ts";
 import { errorResponse } from "./api/errors.ts";
 import type { StatusDeps } from "./api/status.ts";
 import type { ApiEnv } from "./api/types.ts";
-import { readApiConfig, readCaptureBudgetCents, readFallbackOwner, type Env } from "./config.ts";
+import {
+  readApiConfig,
+  readCaptureBudgetCents,
+  readFallbackOwner,
+  readTaskConfig,
+  type Env,
+} from "./config.ts";
+import { createTaskSource } from "./tasks/provider.ts";
 import type { Logger } from "./log.ts";
 import { createApiClient, type ResponseLike } from "./slack/api-client.ts";
 import { readSlackConfig } from "./slack/config.ts";
@@ -130,6 +137,8 @@ function realServices(
     runtime: createManagedAgentRuntime(agentConfig, client),
     deliverers,
     fallback: readFallbackOwner(env, log),
+    // The team's one home for tasks (slice 3.3, decision 210).
+    tasks: createTaskSource(readTaskConfig(env, log), db, log),
     // The same token that mounts the repo reads its pull requests' checks (decision 132).
     ...(agentConfig.repository === undefined
       ? {}

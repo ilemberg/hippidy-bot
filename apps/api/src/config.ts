@@ -119,3 +119,41 @@ export function readFallbackOwner(env: Env, log: Logger): { actorId: string } | 
   }
   return { actorId: raw.trim() };
 }
+
+/** Where tasks come from (slice 3.3, decision 210). */
+export type TaskConfig =
+  | { kind: "builtin" }
+  | { kind: "jira"; baseUrl: string; email: string; token: string; project: string }
+  /** `TASK_PROVIDER` is `jira`, but its settings are missing or bad: tasks fail closed. */
+  | { kind: "jira_unconfigured" };
+
+/**
+ * Reads `TASK_PROVIDER` and, for Jira, `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN` and
+ * `JIRA_PROJECT_KEY` (default `SCRUM`). Unset, the built-in tracker. Never throws.
+ */
+export function readTaskConfig(env: Env, log: Logger): TaskConfig {
+  const provider = (env.TASK_PROVIDER ?? "").trim().toLowerCase();
+  if (provider === "" || provider === "builtin") return { kind: "builtin" };
+  if (provider !== "jira") {
+    log.error("config.task_provider_invalid", {
+      variable: "TASK_PROVIDER",
+      reason: "must be builtin or jira",
+    });
+    return { kind: "jira_unconfigured" };
+  }
+  const baseUrl = (env.JIRA_BASE_URL ?? "").trim().replace(/\/+$/, "");
+  const email = (env.JIRA_EMAIL ?? "").trim();
+  const token = (env.JIRA_API_TOKEN ?? "").trim();
+  const project = (env.JIRA_PROJECT_KEY ?? "SCRUM").trim().toUpperCase();
+  const problems: string[] = [];
+  if (!/^https:\/\/[a-z0-9.-]+$/i.test(baseUrl)) problems.push("JIRA_BASE_URL");
+  if (!/^[^\s@]+@[^\s@]+$/.test(email)) problems.push("JIRA_EMAIL");
+  if (token === "") problems.push("JIRA_API_TOKEN");
+  if (!/^[A-Z][A-Z0-9]{0,19}$/.test(project)) problems.push("JIRA_PROJECT_KEY");
+  if (problems.length > 0) {
+    // Names only: never a value.
+    log.error("config.jira_invalid", { variables: problems });
+    return { kind: "jira_unconfigured" };
+  }
+  return { kind: "jira", baseUrl, email, token, project };
+}
