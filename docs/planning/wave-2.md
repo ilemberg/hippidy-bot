@@ -84,6 +84,13 @@ Planned in detail in `slice-2-1.md` (decision 183). In short:
 Built in five parts: a probe of the teammate's environment, the schema, the loop per session,
 the brief, and the agents. Done-when lines are in `slice-2-1.md`.
 
+## Slice 2.3
+
+Planned and built in `slice-2-3.md` (decisions 193 and 194): `apps/web`, a Next.js app on its
+own Vercel project; sign in with Slack for the one workspace; the web app's server calls the
+API with a short-lived person token, and the API answers `GET /v1/me` and the read routes for
+a person. Every write stays on the service token.
+
 ## Before 2.2: the memory probe
 
 "Agent memory across sessions" has been open since wave 1 (`open-questions.md`, "Things not

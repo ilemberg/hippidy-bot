@@ -13,14 +13,15 @@ and what it cost, and can be read back through the API.
 
 ## Layout
 
-| Path                     | What it is                                                                                     |
-| ------------------------ | ---------------------------------------------------------------------------------------------- |
-| `apps/api`               | The deployable, served by Vercel: the core API (`src/api`) and the Slack adapter (`src/slack`) |
-| `slack/manifest.yaml`    | The Slack app's definition: name, scopes, events                                               |
-| `packages/contracts`     | The API's request, response and error schemas (Zod), shared with every client                  |
-| `agents`, `environments` | The agents' definitions and system prompts, and their sandboxes; synced to Anthropic by CI     |
-| `supabase`               | Database schema as migrations, applied by CI on merge to `main`                                |
-| `docs/planning`          | Plans and the decision log                                                                     |
+| Path                     | What it is                                                                                             |
+| ------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `apps/api`               | The API, served by Vercel: the core API (`src/api`) and the Slack adapter (`src/slack`)                |
+| `apps/web`               | The web app (Next.js), its own Vercel project: Sign in with Slack, and pages that read through the API |
+| `slack/manifest.yaml`    | The Slack app's definition: name, scopes, events                                                       |
+| `packages/contracts`     | The API's request, response and error schemas (Zod), shared with every client                          |
+| `agents`, `environments` | The agents' definitions and system prompts, and their sandboxes; synced to Anthropic by CI             |
+| `supabase`               | Database schema as migrations, applied by CI on merge to `main`                                        |
+| `docs/planning`          | Plans and the decision log                                                                             |
 
 ## Run, test, check
 
@@ -51,12 +52,13 @@ Vercel does and checks it starts (`pnpm build && pnpm smoke`).
 | ---------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GET /health`                      | none                | Returns `{"status":"ok"}`. Works with no configuration at all                                                                                 |
 | `GET /status`                      | none                | Health of each part: `database` (answers `select 1`), `agent`, `slack`, `github`. 200 when all are `ok`, else 503 with `degraded`             |
+| `GET /v1/me`                       | token or person     | Who the API takes the caller to be: `{"kind":"service"}`, or a person with `workspaceId`, `actorId` and `name`                                |
 | `POST /v1/messages`                | service token       | Accepts one inbound message, hands it to the thread's agent session, returns 202                                                              |
 | `POST /v1/webhooks/agent`          | Anthropic signature | Anthropic says a session went idle or ended; the API posts any new replies                                                                    |
 | `POST /v1/reconcile`               | reconcile token     | The safety net: delivers replies whose webhook was lost, retries failed posts. Called every minute                                            |
-| `GET /v1/conversations`            | service token       | Conversations, newest first. `limit` (1 to 100, default 20); `before` takes the `next` of the page before                                     |
-| `GET /v1/conversations/:id`        | service token       | One conversation: its state, usage and cost, and the transcript, oldest first                                                                 |
-| `GET /v1/conversations/:id/events` | service token       | Every event the agent session reported, raw, in the order stored. `limit` (1 to 200, default 50); `after` takes the `next` of the page before |
+| `GET /v1/conversations`            | token or person     | Conversations, newest first. `limit` (1 to 100, default 20); `before` takes the `next` of the page before                                     |
+| `GET /v1/conversations/:id`        | token or person     | One conversation: its state, usage and cost, and the transcript, oldest first                                                                 |
+| `GET /v1/conversations/:id/events` | token or person     | Every event the agent session reported, raw, in the order stored. `limit` (1 to 200, default 50); `after` takes the `next` of the page before |
 | `POST /v1/projects`                | service token       | Creates a project in `plan`, returns 201                                                                                                      |
 | `GET /v1/projects`                 | service token       | Every project, newest first                                                                                                                   |
 | `GET /v1/projects/:id`             | service token       | One project, its approvals and whether the plan is approved                                                                                   |
@@ -73,6 +75,10 @@ the API generates one if it is missing and returns it in the same header.
 
 The service token is sent as `Authorization: Bearer <token>`. If the API has no token configured,
 or the configured one is shorter than 32 characters, it rejects every request.
+
+"Token or person" routes also take a person token from the web app's server: a JWT for one
+person of the workspace, signed with `WEB_API_SECRET` (see "Slice 2.3 setup"). Every other
+route takes the service token only.
 
 ## Setup
 
@@ -569,6 +575,61 @@ from `slack/manifest.yaml` (at https://api.slack.com/apps, **hippidy-bot**, **Ap
 **YAML**, paste the file, **Save Changes**) and reinstall it when Slack asks (**Install App**,
 **Reinstall to Workspace**). The bot token stays the same.
 
+## Slice 2.3 setup: the web app and Sign in with Slack
+
+`apps/web` is a Next.js app with one page so far. A member of the workspace signs in with
+Slack and sees who the API takes them to be (decisions 193 and 194,
+`docs/planning/slice-2-3.md`). It is a second Vercel project from this same repository. Its
+server calls the API as the signed-in person with a person token: a JWT it signs for each call
+with a secret only the two servers know, valid for two minutes. The browser never sees that
+token, the secret or the service token. Until every variable below is set, sign-in is off and
+the page says so; the bot is not affected.
+
+To run it locally: `pnpm dev` for the API, and in another terminal `pnpm dev:web`, which
+serves http://localhost:3001 and reads `apps/web/.env.local` (copy `apps/web/.env.example`).
+Signing in for real needs the Slack app to allow `http://localhost:3001/auth/slack/callback`
+as a redirect URL. Its cookies are always Secure, which Chrome and Firefox accept from
+localhost and Safari does not. `pnpm build:web` builds it the way Vercel does.
+
+| Variable              | Where       | What                                                                                          |
+| --------------------- | ----------- | --------------------------------------------------------------------------------------------- |
+| `WEB_API_SECRET`      | API and web | The same value in both: signs and checks person tokens. At least 32 characters                |
+| `SLACK_WORKSPACE_ID`  | API and web | The workspace's team id (`T...`). Only its members can sign in, and the API refuses any other |
+| `SLACK_CLIENT_ID`     | web         | The Slack app's Client ID (Basic Information, App Credentials)                                |
+| `SLACK_CLIENT_SECRET` | web         | The Slack app's Client Secret, same page                                                      |
+| `WEB_SESSION_SECRET`  | web         | Signs the session cookie. At least 32 characters, and not the same as `WEB_API_SECRET`        |
+| `API_BASE_URL`        | web         | The API's address, `https://hippidy-bot.vercel.app`                                           |
+| `WEB_BASE_URL`        | web         | The web app's own address, `https://<its domain>`, with no path                               |
+
+1. **Two secrets.** Run `openssl rand -hex 32` twice (the PowerShell line in "Setup" works
+   too). One is `WEB_API_SECRET`, the other `WEB_SESSION_SECRET`. Copy each straight into
+   Vercel in the steps below, never into a chat or a file.
+2. **The team id.** In Slack, open the workspace in a browser: the address is
+   `https://app.slack.com/client/T.../...`, and the part starting with `T` is the team id.
+3. **The web project.** In Vercel, **Add New**, **Project**, import this repository again. Set
+   the root directory to `apps/web`; the framework is detected as Next.js; leave the rest at
+   the defaults (the build command runs the app's `build` script, which builds
+   `packages/contracts` first). Deploy once; it shows "Sign-in is not set up yet." Note its
+   production domain.
+4. **The Slack app.** If that domain is not `hippidy-bot-web.vercel.app`, change it in
+   `slack/manifest.yaml` under `redirect_urls` (and merge that). Then at
+   https://api.slack.com/apps, **hippidy-bot**, **App Manifest**, **YAML**, paste the file,
+   **Save Changes**, and reinstall when Slack asks. This adds the redirect URL
+   `https://<domain>/auth/slack/callback` and the user scopes `openid`, `profile` and
+   `email`. The bot token stays the same.
+5. **Variables, Production only.** In the API's Vercel project: `WEB_API_SECRET` and
+   `SLACK_WORKSPACE_ID`. In the web project: all seven from the table. Mark the secrets
+   **Sensitive**. Redeploy both projects.
+6. **Check.** `curl -s -o /dev/null -w '%{http_code}\n' https://hippidy-bot.vercel.app/v1/me`
+   answers `401`. Open the web app, press **Sign in with Slack**, allow, and the page shows
+   "Signed in as <your name>" and `"kind": "person"`. In the Vercel logs: `signin.succeeded`
+   in the web project; `auth.rejected` in the API's means the two `WEB_API_SECRET` values or
+   the team ids differ.
+
+Optional: in each project's settings, next to the root directory, turn on skipping
+deployments when nothing under the root directory or its dependencies changed, so a change to
+one app does not redeploy the other.
+
 ## Planning docs
 
 | Doc                                                                  | What it is                                                                                 |
@@ -581,6 +642,7 @@ from `slack/manifest.yaml` (at https://api.slack.com/apps, **hippidy-bot**, **Ap
 | [docs/planning/team-layer.md](docs/planning/team-layer.md)           | The direction from wave 2: the team layer, its records, and how people reach it            |
 | [docs/planning/wave-2.md](docs/planning/wave-2.md)                   | The wave 2 plan (draft): one team, one memory; waves 3 to 5 as sketches                    |
 | [docs/planning/slice-2-1.md](docs/planning/slice-2-1.md)             | Slice 2.1 plan: one bot, everyone trusted; the teammate and the coding worker              |
+| [docs/planning/slice-2-3.md](docs/planning/slice-2-3.md)             | Slice 2.3 plan: the web app and Sign in with Slack                                         |
 | [docs/planning/open-questions.md](docs/planning/open-questions.md)   | The grill: decisions that are open, grouped by when they block                             |
 | [docs/planning/decisions.md](docs/planning/decisions.md)             | Decision log. Things move here from open-questions once decided                            |
 | [docs/planning/stack-and-tools.md](docs/planning/stack-and-tools.md) | Stack options, MCP servers, and off-the-shelf pieces that make this cheaper or better      |

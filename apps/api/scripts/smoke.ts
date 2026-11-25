@@ -7,6 +7,11 @@ const checks: [string, Request, number][] = [
   ["status without config", new Request("http://smoke/status"), 503],
   ["messages without token", new Request("http://smoke/v1/messages", { method: "POST" }), 401],
   [
+    "me with a token and no configuration",
+    new Request("http://smoke/v1/me", { headers: { authorization: "Bearer a.b.c" } }),
+    401,
+  ],
+  [
     "slack events without config",
     new Request("http://smoke/slack/events", { method: "POST" }),
     503,

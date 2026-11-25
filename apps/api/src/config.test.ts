@@ -32,7 +32,29 @@ describe("readApiConfig", () => {
     const { log } = memoryLogger();
     const reconcile = "r".repeat(40);
     const config = readApiConfig({ API_SERVICE_TOKEN: goodToken, RECONCILE_TOKEN: reconcile }, log);
-    expect(config).toEqual({ serviceToken: goodToken, reconcileToken: reconcile });
+    expect(config).toEqual({
+      serviceToken: goodToken,
+      reconcileToken: reconcile,
+      personAuth: undefined,
+    });
     expect(readApiConfig({ API_SERVICE_TOKEN: goodToken }, log).reconcileToken).toBeUndefined();
+  });
+
+  it("reads person auth only when both the shared secret and the workspace are good", () => {
+    const { log, lines } = memoryLogger();
+    const secret = "w".repeat(40);
+    expect(
+      readApiConfig({ WEB_API_SECRET: secret, SLACK_WORKSPACE_ID: "T0123456789" }, log).personAuth,
+    ).toEqual({ secret, workspaceId: "T0123456789" });
+    expect(readApiConfig({ WEB_API_SECRET: secret }, log).personAuth).toBeUndefined();
+    expect(readApiConfig({ SLACK_WORKSPACE_ID: "T0123456789" }, log).personAuth).toBeUndefined();
+    expect(
+      readApiConfig({ WEB_API_SECRET: secret, SLACK_WORKSPACE_ID: "team one" }, log).personAuth,
+    ).toBeUndefined();
+    expect(lines).toContainEqual(
+      expect.objectContaining({ level: "error", msg: "config.slack_workspace_id_invalid" }),
+    );
+    expect(JSON.stringify(lines)).not.toContain(secret);
+    expect(JSON.stringify(lines)).not.toContain("team one");
   });
 });

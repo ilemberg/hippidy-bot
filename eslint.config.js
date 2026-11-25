@@ -5,7 +5,16 @@ import { defineConfig } from "eslint/config";
 import tseslint from "typescript-eslint";
 
 export default defineConfig(
-  { ignores: ["**/node_modules/", "**/dist/", "**/.vercel/", "**/coverage/"] },
+  {
+    ignores: [
+      "**/node_modules/",
+      "**/dist/",
+      "**/.vercel/",
+      "**/coverage/",
+      "**/.next/",
+      "**/next-env.d.ts",
+    ],
+  },
   js.configs.recommended,
   tseslint.configs.strictTypeChecked,
   tseslint.configs.stylisticTypeChecked,
@@ -49,6 +58,24 @@ export default defineConfig(
           selector: String.raw`ImportExpression[source.value=/(^|\/)((api|store)(\/|$)|(compose|index)(\.[cm]?[jt]s)?$)/]`,
           message:
             "The Slack adapter may not import the API, its store, compose.ts or index.ts. Use @hippidy/contracts.",
+        },
+      ],
+    },
+  },
+  {
+    // The web app talks to the system only through the API's routes (decision 22): it imports
+    // the shared contract, never the API's code.
+    files: ["apps/web/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              regex: String.raw`(^|/)apps/api(/|$)|^@hippidy/api$|(^|/)api/src(/|$)`,
+              message: "The web app may not import the API's code. Call it over HTTP.",
+            },
+          ],
         },
       ],
     },
