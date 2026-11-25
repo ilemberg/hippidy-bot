@@ -412,12 +412,16 @@ describe("schema", () => {
     "actor_roles",
     "agent_events",
     "approvals",
+    "capture_runs",
     "change_briefs",
     "changes",
     "conversations",
     "decisions",
     "deliveries",
     "inbound_messages",
+    "listening_channels",
+    "observed_messages",
+    "observed_threads",
     "projects",
   ];
 
