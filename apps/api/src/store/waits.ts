@@ -153,8 +153,8 @@ export type EndOutcome =
   | { status: "not_found"; wait?: undefined };
 
 /**
- * Ends a wait, as a person who is part of it (the waiter, the person waited on, or whoever
- * recorded it); `anyone` lets the thread it was recorded in end it through the teammate.
+ * Ends a wait. By id (the web app): only its people, the waiter, the person waited on or whoever
+ * recorded it. By number in its own thread (the teammate): whoever said there that it is done.
  */
 export async function endWait(
   db: Db,
