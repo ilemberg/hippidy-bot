@@ -353,7 +353,7 @@ describe("changing a job (slice 4.2)", () => {
       ["U1", "paused", "paused"],
     ]);
     // The service token never changes a job.
-    const service = await app.request(`/v1/jobs/${String(detail.job.id)}`, {
+    const service = await app.request(`/v1/jobs/${detail.job.id}`, {
       method: "PATCH",
       headers: { authorization: `Bearer ${serviceToken}`, "content-type": "application/json" },
       body: JSON.stringify({ version: 3, state: "active" }),
