@@ -441,6 +441,8 @@ describe("schema", () => {
     "decision_events",
     "decisions",
     "deliveries",
+    "goal_tickets",
+    "goals",
     "inbound_messages",
     "job_events",
     "job_wakes",

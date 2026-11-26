@@ -327,6 +327,7 @@ export const jobKindLabel: Record<JobKind, string> = {
   capture: "Capture",
   briefs: "Briefs",
   checker: "Checker",
+  goal: "Goal",
 };
 
 export const jobStateLabel: Record<JobState, string> = {

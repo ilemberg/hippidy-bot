@@ -270,6 +270,36 @@ export async function editTask(
   });
 }
 
+/**
+ * Marks a built-in task done, kept in its history as done by `actor` (a goal whose pull request
+ * merged, slice 4.4: `job:<name>`). Nothing when it is done already or there is no such task.
+ * Answers whether it changed it. Run inside the caller's transaction.
+ */
+export async function markTaskDone(
+  db: Db,
+  place: Place,
+  key: string,
+  actor: AreaActor,
+): Promise<boolean> {
+  const number = builtinNumber(key);
+  if (number === undefined) return false;
+  const rows = await db.query(
+    `select ${columns} from tasks
+     where source = $1 and workspace_id = $2 and number = $3 for update`,
+    [place.source, place.workspaceId, number],
+  );
+  if (rows[0] === undefined) return false;
+  const current = parse(rows[0]);
+  if (current.status === "done") return false;
+  await db.query(
+    `update tasks set status = 'done', version = version + 1, updated_at = now() where id = $1`,
+    [current.id],
+  );
+  const before = fieldsOf(current);
+  await recordEvent(db, current.id, "edited", actor, before, { ...before, status: "done" });
+  return true;
+}
+
 /** Links a thread to a task by key (SCRUM-8): one at a time, the latest replacing it. */
 export async function linkThreadToTask(db: Db, conversationId: string, key: string): Promise<void> {
   await db.query(`update conversations set task_key = $2, task_linked_at = now() where id = $1`, [

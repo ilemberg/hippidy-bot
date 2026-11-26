@@ -3,6 +3,7 @@ import {
   DiffTooLargeError,
   capDiff,
   createGitHubPulls,
+  pullNumberOf,
   repositoryOf,
   type PullsFetch,
 } from "./pulls.ts";
@@ -226,5 +227,47 @@ describe("capDiff", () => {
 
   it("keeps a diff under the cap as it is", () => {
     expect(capDiff("")).toEqual({ text: "", files: [], omitted: [] });
+  });
+});
+
+describe("a pull request's state (slice 4.4)", () => {
+  it("reads merged, closed and open with the checks token", async () => {
+    const answers: Record<string, unknown> = {
+      "/pulls/1": { state: "closed", merged: true, merged_at: "2026-11-26T10:00:00Z" },
+      "/pulls/2": { state: "closed", merged: false, merged_at: null },
+      "/pulls/3": { state: "open", merged: false },
+      "/pulls/4": { state: "closed", merged_at: "2026-11-26T10:00:00Z" },
+    };
+    const { pulls, asked } = github((request) => ({
+      status: 200,
+      body: answers[request.url.replace(/^.*\/hippidy-bot/, "")] ?? {},
+    }));
+    expect(await pulls.pullState(1)).toBe("merged");
+    expect(await pulls.pullState(2)).toBe("closed");
+    expect(await pulls.pullState(3)).toBe("open");
+    expect(await pulls.pullState(4)).toBe("merged");
+    expect(asked[0]).toMatchObject({
+      url: "https://api.github.com/repos/ilemberg/hippidy-bot/pulls/1",
+      method: "GET",
+      headers: { Authorization: `Bearer ${AGENT_TOKEN}` },
+    });
+    const { pulls: failing } = github(() => ({ status: 502, body: "" }));
+    await expect(failing.pullState(1)).rejects.toThrow("GitHub answered 502");
+  });
+
+  it("finds the number of a pull request of the repository from its link, and no other", () => {
+    const repository = "ilemberg/hippidy-bot";
+    expect(pullNumberOf("https://github.com/ilemberg/hippidy-bot/pull/12", repository)).toBe(12);
+    expect(pullNumberOf("https://github.com/Ilemberg/Hippidy-Bot/pull/12/files", repository)).toBe(
+      12,
+    );
+    expect(pullNumberOf("https://github.com/ilemberg/hippidy-bot/pull/12#x", repository)).toBe(12);
+    expect(pullNumberOf("https://github.com/other/repo/pull/12", repository)).toBeUndefined();
+    expect(
+      pullNumberOf("https://github.com/ilemberg/hippidy-bot/issues/12", repository),
+    ).toBeUndefined();
+    expect(
+      pullNumberOf("https://github.com/ilemberg/hippidy-bot/pull/0", repository),
+    ).toBeUndefined();
   });
 });

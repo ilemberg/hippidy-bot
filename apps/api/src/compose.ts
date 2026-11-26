@@ -2,12 +2,14 @@ import { Anthropic } from "@anthropic-ai/sdk";
 import type { Hono } from "hono";
 import { readAgentConfig } from "./agent/config.ts";
 import { createAnthropicExtractor } from "./agent/extractor.ts";
+import { BRIEF_TIMEOUT_MS, createAnthropicBriefWriter } from "./agent/brief-writer.ts";
 import { REVIEW_TIMEOUT_MS, createAnthropicReviewer } from "./agent/reviewer.ts";
 import { createManagedAgentRuntime } from "./agent/managed.ts";
 import { createWebhookVerifier, type VerifyAgentWebhook } from "./agent/webhooks.ts";
 import { createApi } from "./api/app.ts";
 import type { CaptureDeps } from "./api/capture.ts";
 import type { CheckerServices } from "./api/checker.ts";
+import type { GoalServices } from "./api/goals.ts";
 import type { ConversationDeps } from "./api/conversations.ts";
 import { errorResponse } from "./api/errors.ts";
 import type { StatusDeps } from "./api/status.ts";
@@ -40,6 +42,7 @@ export interface AppDeps {
     conversations?: ConversationDeps;
     capture?: CaptureDeps;
     checker?: CheckerServices;
+    goals?: GoalServices;
     verifyAgentWebhook?: VerifyAgentWebhook;
     slackActions?: SlackRouteDeps["slackActions"];
     slackPoster?: SlackPoster;
@@ -72,6 +75,7 @@ export function configureApp(app: Hono<ApiEnv>, { env, log, services }: AppDeps)
       conversations: services?.conversations ?? real.conversations,
       capture: services?.capture ?? real.capture,
       checker: services?.checker ?? real.checker,
+      goals: services?.goals ?? real.goals,
       verifyAgentWebhook: services?.verifyAgentWebhook ?? real.verifyAgentWebhook,
       status: services?.status ?? real.status,
       tasks: services?.conversations?.tasks ?? real.tasks,
@@ -116,6 +120,7 @@ function realServices(
   conversations?: ConversationDeps;
   capture?: CaptureDeps;
   checker?: CheckerServices;
+  goals?: GoalServices;
   verifyAgentWebhook?: VerifyAgentWebhook;
   status: StatusDeps;
   tasks?: TaskSource;
@@ -176,20 +181,29 @@ function realServices(
   // The checker (slice 4.3): reads pull requests with the same token as the checks, posts its
   // reviews with a token that can only comment, and writes them with its own client: no
   // retries, and a timeout long enough for one review at medium effort within the function's.
+  const pulls =
+    agentConfig.repository === undefined
+      ? undefined
+      : createGitHubPulls({
+          repositoryUrl: agentConfig.repository.url,
+          token: agentConfig.repository.token,
+        });
   const checker: CheckerServices = {
-    pulls:
-      agentConfig.repository === undefined
-        ? undefined
-        : createGitHubPulls({
-            repositoryUrl: agentConfig.repository.url,
-            token: agentConfig.repository.token,
-          }),
+    pulls,
     reviewToken: readReviewToken(env, log),
     reviewer: createAnthropicReviewer(
       new Anthropic({ apiKey: agentConfig.apiKey, maxRetries: 0, timeout: REVIEW_TIMEOUT_MS }),
     ),
   };
+  // Goals (slice 4.4): read their pull requests with the same token, and write each brief with
+  // their own client: no retries, and a timeout for one brief at medium effort.
+  const goals: GoalServices = {
+    pulls,
+    writer: createAnthropicBriefWriter(
+      new Anthropic({ apiKey: agentConfig.apiKey, maxRetries: 0, timeout: BRIEF_TIMEOUT_MS }),
+    ),
+  };
   return verifyAgentWebhook === undefined
-    ? { conversations, capture, checker, status }
-    : { conversations, capture, checker, verifyAgentWebhook, status };
+    ? { conversations, capture, checker, goals, status }
+    : { conversations, capture, checker, goals, verifyAgentWebhook, status };
 }

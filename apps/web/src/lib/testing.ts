@@ -364,6 +364,7 @@ export const briefsJob: Job = {
 /** `GET /v1/jobs/capture`: two wakes, newest first, and Ada raising its cap from $30 to $40. */
 export const jobDetail: JobDetail = {
   job,
+  goal: null,
   wakes: [
     {
       startedAt: "2026-11-25T11:58:00.000Z",

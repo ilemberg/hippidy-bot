@@ -55,6 +55,10 @@ import {
   settledHeads,
 } from "./reviews.ts";
 import { applyMigration, applyMigrations } from "./testing.ts";
+import { FakeBriefWriter } from "../agent/brief-writer.ts";
+import { goalBriefKey, runGoal } from "../api/goals.ts";
+import { createTaskSource } from "../tasks/provider.ts";
+import { briefByKey, createGoal, editGoal, findGoal } from "./goals.ts";
 
 // The production client (postgres.js) over a real Postgres connection, served by PGlite.
 let pg: PGlite;
@@ -1071,6 +1075,112 @@ describe("jobs through postgres.js (slice 4.1)", () => {
     });
     expect(edited).toMatchObject({ status: "edited", job: { state: "paused", goal: 'say "hi"' } });
     expect((await jobHistory(db, capture?.id ?? ""))[0]?.after).toMatchObject({ state: "paused" });
+  });
+});
+
+describe("goals through postgres.js (slice 4.4)", () => {
+  it("keeps tickets in order, history and links as JSON, and numbers and dates as such", async () => {
+    const place = { source: "slack" as const, workspaceId: "Tgoals" };
+    const actor = { ...place, actorId: "U1", name: "Grace" };
+    const log = memoryLogger().log;
+    // The bot is in the thread.
+    await findOrCreateConversation(db, { ...place, channelId: "C1", threadId: "goals.1" });
+    // Task numbers run across workspaces: their keys are read back.
+    const keys: string[] = [];
+    for (const title of ["One", "Two", "Three"]) {
+      const task = await createTask(db, actor, { title });
+      keys.push(`T-${String(task.row?.number)}`);
+    }
+    const [k1 = "", k2 = "", k3 = ""] = keys;
+    const created = await createGoal(
+      db,
+      actor,
+      {
+        name: "export",
+        goal: 'Ship "export" \u0000',
+        channelId: "C1",
+        threadId: "goals.1",
+        limit: 1,
+        capCents: 1000,
+        everyMinutes: 10,
+      },
+      [
+        { key: k1, title: "One", url: null },
+        { key: k2, title: "Two \u0000", url: null },
+      ],
+    );
+    expect(created).toEqual({ status: "created", name: "export" });
+    const job = (await listJobs(db, place)).find((j) => j.kind === "goal");
+    const jobId = job?.id ?? "";
+    expect(job?.goal).toBe('Ship "export"');
+    expect(
+      await editGoal(
+        db,
+        actor,
+        jobId,
+        { version: 1, tickets: [k3, k1, k2] },
+        new Map([[k3, { key: k3, title: "Three", url: null }]]),
+      ),
+    ).toEqual({ status: "edited", name: "export" });
+    const history = await jobHistory(db, jobId);
+    expect(history.map((h) => [h.before, h.after.tickets])).toEqual([
+      [{}, [k1, k2]],
+      [{ tickets: [k1, k2], limit: 1 }, [k3, k1, k2]],
+    ]);
+
+    // A wake: the brief written, its links kept as JSON; a merge marks the task done.
+    const writer = new FakeBriefWriter();
+    const deps = {
+      pulls: {
+        repository: "ilemberg/pg-goals",
+        pullState: () => Promise.resolve("merged" as const),
+        listOpen: () => Promise.resolve([]),
+        diff: () => Promise.reject(new Error("not used")),
+        listReviews: () => Promise.resolve([]),
+        postReview: () => Promise.reject(new Error("not used")),
+      },
+      writer,
+      tasks: createTaskSource({ kind: "builtin" }, db, log),
+      webBaseUrl: "https://web.example",
+    };
+    const goalJob = (await listJobs(db, place)).find((j) => j.kind === "goal");
+    if (goalJob === undefined) throw new Error("no goal");
+    expect(await runGoal(deps, db, place, goalJob, log)).toMatchObject({
+      outcome: "said",
+      summary: `posted the brief for ${k3}`,
+      costMicros: 40_000,
+    });
+    const earlier = await briefByKey(db, goalBriefKey(jobId, k3));
+    expect(earlier?.links).toEqual([`https://web.example/tasks/${k3}`]);
+    const goal = await findGoal(db, jobId);
+    expect(goal?.tickets.map((t) => [t.key, t.position, t.state, t.failures])).toEqual([
+      [k3, 0, "briefed", 0],
+      [k1, 1, "pending", 0],
+      [k2, 2, "pending", 0],
+    ]);
+    expect(goal?.tickets[2]?.title).toBe("Two ");
+    await db.query(`update changes set pull_request_url = $2 where id = $1`, [
+      goal?.tickets[0]?.changeId,
+      "https://github.com/ilemberg/pg-goals/pull/4",
+    ]);
+    writer.answer({ kind: "refused", usage: { inputTokens: 10, outputTokens: 0 } });
+    expect(await runGoal(deps, db, place, goalJob, log)).toMatchObject({
+      outcome: "failed",
+      summary: `${k3} merged; could not write the brief for ${k1}`,
+      costMicros: 40,
+    });
+    const after = await findGoal(db, jobId);
+    expect(after?.tickets[0]?.settledAt).toBeInstanceOf(Date);
+    expect(after?.tickets[1]?.failures).toBe(1);
+    expect(
+      (await listBuiltinTasks(db, place, { status: "done", limit: 5 })).map((t) => t.number),
+    ).toEqual([Number(k3.slice(2))]);
+    const [taskEvent] = await db.query(
+      `select e.after->>'status' as status, e.actor_id from task_events e
+       join tasks t on t.id = e.task_id where t.number = $1 and e.kind = 'edited'`,
+      [Number(k3.slice(2))],
+    );
+    expect(taskEvent).toEqual({ status: "done", actor_id: "job:export" });
   });
 });
 
