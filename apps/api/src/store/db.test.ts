@@ -40,7 +40,7 @@ import { actOnProposal, decisionHistory, recordDecision } from "./decisions.ts";
 import { createTask, editTask, listBuiltinTasks, taskHistory } from "./tasks.ts";
 import { runBriefs } from "../api/briefs.ts";
 import { runJobs } from "../api/jobs.ts";
-import { jobWakes, listJobs } from "./jobs.ts";
+import { editJob, jobHistory, jobWakes, listJobs } from "./jobs.ts";
 import { endWait, listWaits, recordWait } from "./waits.ts";
 import { conflictDetail, listConflicts, recordConflict, settleConflict } from "./conflicts.ts";
 import { recordObservation, setListening } from "./listening.ts";
@@ -1053,5 +1053,13 @@ describe("jobs through postgres.js (slice 4.1)", () => {
     const capture = jobs.find((j) => j.name === "capture");
     const wakes = await jobWakes(db, capture?.id ?? "");
     expect(wakes).toEqual([expect.objectContaining({ outcome: "silent", costMicros: 0 })]);
+    // A person's change, kept as JSON (slice 4.2).
+    const edited = await editJob(db, { ...place, actorId: "U1", name: "Ada" }, capture?.id ?? "", {
+      version: 1,
+      state: "paused",
+      goal: 'say "hi" \u0000',
+    });
+    expect(edited).toMatchObject({ status: "edited", job: { state: "paused", goal: 'say "hi"' } });
+    expect((await jobHistory(db, capture?.id ?? ""))[0]?.after).toMatchObject({ state: "paused" });
   });
 });
