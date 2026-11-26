@@ -3,6 +3,8 @@ import { z } from "zod";
 // Tasks behind a provider, and the waiting-on list (slice 3.3, decision 210).
 
 const timestamp = z.iso.datetime({ offset: true });
+const noNull = (value: string) => !value.includes("\u0000");
+const noNullMessage = { message: "Must not contain a null character" };
 const person = z.strictObject({ actorId: z.string(), name: z.string().nullable() });
 
 export const taskProviderSchema = z.enum(["builtin", "jira"]);
@@ -98,7 +100,7 @@ const description = z.string().trim().max(4000).nullable().optional();
 
 /** Body of `POST /v1/tasks` from a signed-in person (built-in tracker only). */
 export const createTaskRequestSchema = z.strictObject({
-  title: z.string().trim().min(1).max(200),
+  title: z.string().trim().min(1).max(200).refine(noNull, noNullMessage),
   description,
   status: taskStatusSchema.optional(),
   assigneeActorId: z.string().trim().min(1).max(40).nullable().optional(),
@@ -108,7 +110,7 @@ export type CreateTaskRequest = z.infer<typeof createTaskRequestSchema>;
 /** Body of `PATCH /v1/tasks/:id`: what changes, on the version seen. */
 export const editTaskRequestSchema = z.strictObject({
   version: z.number().int().positive(),
-  title: z.string().trim().min(1).max(200).optional(),
+  title: z.string().trim().min(1).max(200).refine(noNull, noNullMessage).optional(),
   description,
   status: taskStatusSchema.optional(),
   assigneeActorId: z.string().trim().min(1).max(40).nullable().optional(),
@@ -117,10 +119,19 @@ export type EditTaskRequest = z.infer<typeof editTaskRequestSchema>;
 
 /**
  * What creating or editing a built-in task did. `changed`: edited since the version named.
- * `not_builtin`: the tasks come from Jira, so they are changed there.
+ * `not_builtin`: the tasks come from Jira, so they are changed there. `unknown_person`: the
+ * assignee is not someone the record knows.
  */
 export const taskActionResultSchema = z.strictObject({
-  status: z.enum(["created", "edited", "unchanged", "changed", "not_found", "not_builtin"]),
+  status: z.enum([
+    "created",
+    "edited",
+    "unchanged",
+    "changed",
+    "not_found",
+    "not_builtin",
+    "unknown_person",
+  ]),
   task: taskSchema.optional(),
 });
 export type TaskActionResult = z.infer<typeof taskActionResultSchema>;
@@ -160,7 +171,7 @@ export type WaitList = z.infer<typeof waitListSchema>;
 /** Body of `POST /v1/waits` from a signed-in person: their own wait. */
 export const createWaitRequestSchema = z.strictObject({
   waitingOnActorId: z.string().trim().min(1).max(40),
-  what: z.string().trim().min(1).max(300),
+  what: z.string().trim().min(1).max(300).refine(noNull, noNullMessage),
   taskKey: taskKeySchema.optional(),
 });
 export type CreateWaitRequest = z.infer<typeof createWaitRequestSchema>;

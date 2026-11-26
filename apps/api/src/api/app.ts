@@ -71,7 +71,7 @@ import { startBriefByPerson, syncChange } from "./changes.ts";
 import { runCapture, type CaptureDeps } from "./capture.ts";
 import { namePullRequestAreas } from "./areas.ts";
 import { settleConflictByPerson } from "./conflicts.ts";
-import { createTaskSource } from "../tasks/provider.ts";
+import { createTaskSource, type TaskSource } from "../tasks/provider.ts";
 import {
   createTask,
   editTask,
@@ -125,6 +125,8 @@ export interface ApiDeps {
   status: StatusDeps;
   /** Capture from listened channels (slice 2.5). Undefined until storage and the agent are. */
   capture?: CaptureDeps | undefined;
+  /** Where tasks come from (slice 3.3). Built with storage, whether or not the agent is. */
+  tasks?: TaskSource | undefined;
 }
 
 /** Webhook types after which the session may have something new to deliver. */
@@ -732,7 +734,7 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
   // Tasks behind one provider, and the waiting-on list (slice 3.3, decision 210). Read by
   // anyone signed in or the service; a person writes as themselves.
   const taskSource = (db: NonNullable<typeof deps.status.db>) =>
-    deps.conversations?.tasks ?? createTaskSource({ kind: "builtin" }, db, deps.log);
+    deps.tasks ?? deps.conversations?.tasks ?? createTaskSource({ kind: "builtin" }, db, deps.log);
   const storage = (c: Context<ApiEnv>) => {
     const db = deps.conversations?.db ?? deps.status.db;
     const place = placeOf(c.var.caller);
@@ -797,6 +799,10 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
       const body: TaskActionResult = { status: "not_builtin" };
       return c.json(body);
     }
+    if (!(await knownAssignee(at.db, at.place, actor, parsed.data.assigneeActorId))) {
+      const body: TaskActionResult = { status: "unknown_person" };
+      return c.json(body);
+    }
     const result = await createTask(at.db, actor, parsed.data);
     c.var.log.info("task.create", { status: result.status });
     const body: TaskActionResult =
@@ -820,6 +826,10 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
       return errorResponse(c, 503, "not_configured", "Storage is not configured");
     if (taskSource(at.db).provider !== "builtin") {
       const body: TaskActionResult = { status: "not_builtin" };
+      return c.json(body);
+    }
+    if (!(await knownAssignee(at.db, at.place, actor, parsed.data.assigneeActorId))) {
+      const body: TaskActionResult = { status: "unknown_person" };
       return c.json(body);
     }
     const result = await editTask(at.db, actor, taskId.data, parsed.data);
@@ -1038,4 +1048,15 @@ async function isKnown(
     [place.source, place.workspaceId, actorId],
   );
   return rows.length > 0;
+}
+
+/** An assignee is someone the record knows, or the person assigning (from the review of 3.3). */
+async function knownAssignee(
+  db: NonNullable<StatusDeps["db"]>,
+  place: { source: "slack" | "ui"; workspaceId: string },
+  actor: { actorId: string },
+  assignee: string | null | undefined,
+): Promise<boolean> {
+  if (assignee == null || assignee === actor.actorId) return true;
+  return (await knownName(db, place, assignee)) !== null || (await isKnown(db, place, assignee));
 }

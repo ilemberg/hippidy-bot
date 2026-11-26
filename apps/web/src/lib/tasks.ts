@@ -91,6 +91,7 @@ export const taskErrors = [
   "changed",
   "not_found",
   "not_builtin",
+  "unknown_person",
   "signed_out",
   "unavailable",
   "failed",
@@ -131,6 +132,8 @@ export function taskNoticeText(notice: TaskNotice): string {
       return "There is no such task.";
     case "not_builtin":
       return "The team's tasks are in Jira, so they are created and changed there.";
+    case "unknown_person":
+      return "Not saved: assign it to someone the bot knows, chosen from the list.";
     case "signed_out":
       return "Your sign-in has ended. Sign in again, then try again.";
     case "unavailable":
@@ -355,6 +358,7 @@ function outcomeOf(result: ApiResult<TaskActionResult>, action: TaskAction): Tas
     case "changed":
     case "not_found":
     case "not_builtin":
+    case "unknown_person":
       return { kind: "error", error: status };
   }
 }

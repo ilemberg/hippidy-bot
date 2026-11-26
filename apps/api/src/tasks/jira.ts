@@ -71,20 +71,38 @@ function jqlString(text: string): string {
   return `"${text.replace(/["\\]/g, (c) => `\\${c}`)}"`;
 }
 
+/** Words for Jira's `text ~`: its search reserves these characters, so they become spaces. */
+function searchWords(text: string): string {
+  return text
+    .replace(/[+\-&|!(){}[\]^"~*?:\\/]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function createJira(config: JiraConfig, fetchJira: Fetch = fetch) {
   const headers = {
     authorization: `Basic ${Buffer.from(`${config.email}:${config.token}`).toString("base64")}`,
     accept: "application/json",
     "content-type": "application/json",
   };
-  async function call(path: string, init: RequestInit): Promise<Response> {
+  /**
+   * One call, its body read and parsed: anything that goes wrong on the way (no answer, an
+   * error status, a body that is not JSON, the time running out while it is read) is
+   * `JiraUnreachable`, so a caller has one thing to handle (from the review of 3.3). A 404
+   * answers undefined.
+   */
+  async function call(path: string, init: RequestInit, timeoutMs: number): Promise<unknown> {
     try {
-      return await fetchJira(`${config.baseUrl}${path}`, {
+      const response = await fetchJira(`${config.baseUrl}${path}`, {
         ...init,
         headers,
-        signal: AbortSignal.timeout(JIRA_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       });
+      if (response.status === 404) return undefined;
+      if (!response.ok) throw new JiraUnreachable(`Jira answered ${String(response.status)}`);
+      return await response.json();
     } catch (error) {
+      if (error instanceof JiraUnreachable) throw error;
       throw new JiraUnreachable(
         `Jira did not answer: ${error instanceof Error ? error.name : "error"}`,
       );
@@ -94,37 +112,50 @@ export function createJira(config: JiraConfig, fetchJira: Fetch = fetch) {
     /** The project's issues, not done first, by latest change. */
     async list(query: { q?: string | undefined; status: string; limit: number }): Promise<Task[]> {
       const clauses = [`project = ${jqlString(config.project)}`];
-      if (query.q !== undefined) clauses.push(`text ~ ${jqlString(query.q)}`);
+      const words = query.q === undefined ? "" : searchWords(query.q);
+      if (words !== "") clauses.push(`text ~ ${jqlString(words)}`);
       if (query.status === "open") clauses.push("statusCategory != Done");
       else if (query.status === "todo") clauses.push('statusCategory = "To Do"');
       else if (query.status === "doing") clauses.push('statusCategory = "In Progress"');
       else if (query.status === "done") clauses.push("statusCategory = Done");
-      const response = await call("/rest/api/3/search/jql", {
-        method: "POST",
-        body: JSON.stringify({
-          jql: `${clauses.join(" AND ")} ORDER BY updated DESC`,
-          fields: FIELDS,
-          maxResults: query.limit,
-        }),
-      });
-      if (!response.ok) throw new JiraUnreachable(`Jira answered ${String(response.status)}`);
-      const body = z.object({ issues: z.array(z.unknown()) }).safeParse(await response.json());
+      const answer = await call(
+        "/rest/api/3/search/jql",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            jql: `${clauses.join(" AND ")} ORDER BY updated DESC`,
+            fields: FIELDS,
+            maxResults: query.limit,
+          }),
+        },
+        JIRA_TIMEOUT_MS,
+      );
+      const body = z.object({ issues: z.array(z.unknown()) }).safeParse(answer);
       if (!body.success) throw new JiraUnreachable("Jira's answer did not have issues");
       return body.data.issues.flatMap((issue) => {
         const task = toTask(config, issue);
-        return task === undefined ? [] : [task];
+        return task === undefined || !inProject(config, task.key) ? [] : [task];
       });
     },
-    /** One issue by key; undefined if Jira has none (or it is in another project). */
-    async get(key: string): Promise<Task | undefined> {
-      if (!key.startsWith(`${config.project}-`)) return undefined;
-      const response = await call(
+    /**
+     * One issue by key; undefined if Jira has none, or it is in another project (Jira follows
+     * a moved key to its new one, which may be a project this credential should not show).
+     */
+    async get(key: string, timeoutMs = JIRA_TIMEOUT_MS): Promise<Task | undefined> {
+      if (!inProject(config, key)) return undefined;
+      const answer = await call(
         `/rest/api/3/issue/${encodeURIComponent(key)}?fields=${FIELDS.join(",")}`,
         { method: "GET" },
+        timeoutMs,
       );
-      if (response.status === 404) return undefined;
-      if (!response.ok) throw new JiraUnreachable(`Jira answered ${String(response.status)}`);
-      return toTask(config, await response.json());
+      if (answer === undefined) return undefined;
+      const task = toTask(config, answer);
+      if (task === undefined) throw new JiraUnreachable("Jira's answer was not an issue");
+      return inProject(config, task.key) ? task : undefined;
     },
   };
+}
+
+function inProject(config: JiraConfig, key: string): boolean {
+  return key.toUpperCase().startsWith(`${config.project}-`);
 }

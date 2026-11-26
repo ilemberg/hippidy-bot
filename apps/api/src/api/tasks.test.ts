@@ -257,7 +257,8 @@ describe("Jira as the provider", () => {
       `Basic ${Buffer.from("bot@example.com:secret-token").toString("base64")}`,
     );
     expect(JSON.parse(search?.body ?? "{}")).toMatchObject({
-      jql: 'project = "SCRUM" AND text ~ "a\\" OR project = X" AND statusCategory != Done ORDER BY updated DESC',
+      // Jira's reserved search characters become spaces; the words stay inside one string.
+      jql: 'project = "SCRUM" AND text ~ "a OR project = X" AND statusCategory != Done ORDER BY updated DESC',
     });
     const detail = taskDetailSchema.parse(
       await (await app().request("/v1/tasks/SCRUM-8", { headers: await as("U1") })).json(),
@@ -298,6 +299,54 @@ describe("Jira as the provider", () => {
     expect(off.problem).toBe("not_configured");
     expect(JSON.stringify(lines)).not.toContain("secret-token");
     expect(readTaskConfig({}, quiet)).toEqual({ kind: "builtin" });
+  });
+});
+
+describe("what the review of 3.3 found about Jira and tasks", () => {
+  it("treats an answer that is not JSON as Jira not answering, and links a key as given", async () => {
+    const odd = () => Promise.resolve(new Response("<html>login</html>", { status: 200 }));
+    deps = { ...deps, tasks: createTaskSource(jiraConfig, db, log, odd) };
+    const list = taskListSchema.parse(
+      await (await app().request("/v1/tasks", { headers: await as("U1") })).json(),
+    );
+    expect(list).toMatchObject({ available: false, problem: "unreachable" });
+    await receiveMessage(deps, message(1, "we're on SCRUM-8"), log);
+    expect(JSON.parse(await teammateCalls("link_task", { key: "SCRUM-8" }))).toEqual({
+      key: "SCRUM-8",
+      linked: true,
+      note: "Jira did not answer in time, so the key was linked as given",
+    });
+    const [row] = await db.query(`select task_key from conversations`);
+    expect(row?.task_key).toBe("SCRUM-8");
+  });
+
+  it("does not show an issue Jira moved to another project", async () => {
+    const moved = () =>
+      Promise.resolve(
+        Response.json({
+          key: "SECRET-4",
+          fields: { summary: "Private", status: { name: "Done", statusCategory: { key: "done" } } },
+        }),
+      );
+    deps = { ...deps, tasks: createTaskSource(jiraConfig, db, log, moved) };
+    expect((await app().request("/v1/tasks/SCRUM-1", { headers: await as("U1") })).status).toBe(
+      404,
+    );
+  });
+
+  it("refuses an assignee the record does not know, and a title of null characters", async () => {
+    const api = app();
+    const post = async (body: object) =>
+      api.request("/v1/tasks", {
+        method: "POST",
+        headers: await as("U1"),
+        body: JSON.stringify(body),
+      });
+    const unknown = await post({ title: "x", assigneeActorId: "UNOBODY" });
+    expect(taskActionResultSchema.parse(await unknown.json()).status).toBe("unknown_person");
+    expect((await post({ title: "\u0000" })).status).toBe(400);
+    const self = await post({ title: "x", assigneeActorId: "U1" });
+    expect(taskActionResultSchema.parse(await self.json()).status).toBe("created");
   });
 });
 
@@ -359,9 +408,10 @@ describe("the waiting-on list", () => {
 
     // Refused: a waiter who never wrote here, someone unknown, and oneself.
     await receiveMessage(deps, message(3, "a"), log);
-    expect(
-      await teammateCalls("record_wait", { waiter: "U5", waitingOn: "U2", what: "x" }),
-    ).toContain("has not written in this thread");
+    // Grace's turn cannot record a wait for someone else (from the review).
+    expect(await teammateCalls("record_wait", { waiter: "U5", waitingOn: "U2", what: "x" })).toBe(
+      "only the person waiting or the person waited on may record a wait, in their own message",
+    );
     await receiveMessage(deps, message(4, "b"), log);
     expect(
       await teammateCalls("record_wait", { waiter: "U1", waitingOn: "UNOBODY", what: "x" }),
@@ -387,22 +437,57 @@ describe("the waiting-on list", () => {
   });
 
   it("answers a record_wait call again from what it recorded, posting once", async () => {
-    await receiveMessage(deps, message(1, "hi", "U2", "Ada"), log);
-    await receiveMessage(deps, message(2, "waiting on Ada"), log);
-    const conversation = await thread();
+    await receiveMessage(deps, message(1, "waiting on Ada for a review"), log);
+    await receiveMessage(deps, message(2, "hi", "U2", "Ada"), log);
+    const first = await teammateCalls("record_wait", { waiter: "U1", waitingOn: "U2", what: "x" });
+    const [row] = await db.query(`select custom_tool_use_id from waits`);
     const call = {
-      id: "sevt_wait_twice",
+      id: String(row?.custom_tool_use_id),
       name: "record_wait",
       input: { waiter: "U1", waitingOn: "U2", what: "x" },
       processedAt: null,
     };
-    const first = await answerCustomToolCall(db, conversation.id, call, [], [], deps);
-    const again = await answerCustomToolCall(db, conversation.id, call, [], [], deps);
-    expect(again).toEqual(first);
+    const again = await answerCustomToolCall(db, (await thread()).id, call, [], [], deps);
+    expect(again).toEqual({ text: first, isError: false });
     expect(await db.query(`select 1 from waits`)).toHaveLength(1);
     expect(
       await db.query(`select 1 from deliveries where agent_event_id like 'wait:%'`),
     ).toHaveLength(1);
+  });
+
+  it("lets only a wait's people end it in its thread, and counts waits per thread", async () => {
+    await receiveMessage(deps, message(1, "waiting on Ada", "U1", "Grace"), log);
+    await receiveMessage(deps, message(2, "hi", "U2", "Ada"), log);
+    await receiveMessage(deps, message(3, "done?", "U9", "Mallory"), log);
+    await teammateCalls("record_wait", { waiter: "U1", waitingOn: "U2", what: "a review" });
+    // Ada's message is answered, then Mallory's turn asks to end it.
+    const teammate = runtime.onlySessionId();
+    runtime.work(teammate);
+    runtime.finish(teammate, "Hi.");
+    await syncConversation(deps, await thread(), log);
+    expect(await teammateCalls("end_wait", { number: 1 })).toBe(
+      "only the person waiting, the person waited on or whoever recorded it may end wait 1",
+    );
+    const [open] = await db.query(`select ended_at from waits`);
+    expect(open?.ended_at).toBeNull();
+    // The person waited on may record a wait on themselves ("Grace is waiting on me").
+    await receiveMessage(deps, message(4, "Grace waits on me for the spec", "U2", "Ada"), log);
+    expect(
+      JSON.parse(
+        await teammateCalls("record_wait", { waiter: "U1", waitingOn: "U2", what: "the spec" }),
+      ),
+    ).toEqual({ number: 2, recorded: true });
+    // The per-day cap: twenty recorded in a day, ended or not.
+    await db.query(
+      `insert into waits (source, workspace_id, waiter_actor_id, waiting_on_actor_id, what,
+         conversation_id, recorded_by_actor_id, ended_by_actor_id, ended_at)
+       select 'slack', $1, 'U1', 'U2', 'x', $2, 'U1', 'U1', now() from generate_series(1, 18)`,
+      [ws, (await thread()).id],
+    );
+    await receiveMessage(deps, message(5, "one more", "U1", "Grace"), log);
+    expect(await teammateCalls("record_wait", { waiter: "U1", waitingOn: "U2", what: "y" })).toBe(
+      "this thread has recorded 20 waits today; record more tomorrow",
+    );
   });
 
   it("lets a person record their own wait in the web app, and only its people end it", async () => {
@@ -424,6 +509,12 @@ describe("the waiting-on list", () => {
     expect((await record("U1", { waitingOnActorId: "U1", what: "x" })).status).toBe(
       "unknown_person",
     );
+    const nul = await api.request("/v1/waits", {
+      method: "POST",
+      headers: await as("U1"),
+      body: JSON.stringify({ waitingOnActorId: "U2", what: "\u0000" }),
+    });
+    expect(nul.status).toBe(400);
     const recorded = await record("U1", {
       waitingOnActorId: "U2",
       what: "a review",

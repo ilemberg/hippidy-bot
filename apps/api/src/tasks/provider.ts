@@ -4,7 +4,7 @@ import type { Logger } from "../log.ts";
 import type { Place } from "../store/areas.ts";
 import type { Db } from "../store/db.ts";
 import { findBuiltinTask, listBuiltinTasks, toTask } from "../store/tasks.ts";
-import { createJira, JiraUnreachable, type Fetch } from "./jira.ts";
+import { createJira, JIRA_TIMEOUT_MS, JiraUnreachable, type Fetch } from "./jira.ts";
 
 // Tasks behind one provider (slice 3.3, decision 210): the built-in tracker or Jira, read the
 // same way so the web app's page is the same whichever is the team's home. Nothing is cached.
@@ -18,8 +18,12 @@ export type TaskLookup =
 export interface TaskSource {
   readonly provider: TaskProvider;
   list(place: Place, query: ListTasksQuery): Promise<TaskList>;
-  get(place: Place, key: string): Promise<TaskLookup>;
+  /** `quick`: a short wait, for a check made while a conversation's sync lease is held. */
+  get(place: Place, key: string, options?: { quick?: boolean }): Promise<TaskLookup>;
 }
+
+/** How long a quick check waits for Jira before the key is taken as given. */
+export const QUICK_TIMEOUT_MS = 1500;
 
 export function createTaskSource(
   config: TaskConfig,
@@ -74,9 +78,12 @@ export function createTaskSource(
         return { provider: "jira", available: false, problem: "unreachable", tasks: [] };
       }
     },
-    async get(_place, key) {
+    async get(_place, key, options) {
       try {
-        const task = await jira.get(key);
+        const task = await jira.get(
+          key,
+          options?.quick === true ? QUICK_TIMEOUT_MS : JIRA_TIMEOUT_MS,
+        );
         return task === undefined ? { kind: "missing" } : { kind: "found", task };
       } catch (error) {
         if (!(error instanceof JiraUnreachable)) throw error;

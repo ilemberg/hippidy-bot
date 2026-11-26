@@ -9,6 +9,8 @@ import { storable } from "./json.ts";
 
 /** The most open waits one thread may have (rule 13: attention has a budget). */
 export const MAX_OPEN_WAITS_PER_THREAD = 10;
+/** The most waits a thread may record in a day, ended or not: each one mentions someone. */
+export const MAX_WAITS_PER_THREAD_PER_DAY = 20;
 
 const columns = `w.id, w.number::int as number, w.waiter_actor_id, w.waiter_name,
   w.waiting_on_actor_id, w.waiting_on_name, w.what, w.task_key, w.created_at,
@@ -80,27 +82,19 @@ export async function listWaits(db: Db, place: Place, query: ListWaitsQuery): Pr
   return rows.map(toWait);
 }
 
-/** A wait by its number, in the workspace. */
-export async function findWaitByNumber(
+/** How many waits are open in a thread, and how many were recorded there in the last day. */
+export async function waitsIn(
   db: Db,
-  place: Place,
-  number: number,
-): Promise<Wait | undefined> {
+  conversationId: string,
+): Promise<{ open: number; lastDay: number }> {
   const rows = await db.query(
-    `select ${columns} from ${from}
-     where w.source = $1 and w.workspace_id = $2 and w.number = $3`,
-    [place.source, place.workspaceId, number],
-  );
-  return rows[0] === undefined ? undefined : toWait(rows[0]);
-}
-
-/** How many waits are open in a thread. */
-export async function openWaitsIn(db: Db, conversationId: string): Promise<number> {
-  const rows = await db.query(
-    `select count(*)::int as n from waits where conversation_id = $1 and ended_at is null`,
+    `select count(*) filter (where ended_at is null)::int as open,
+            count(*) filter (where created_at > now() - interval '1 day')::int as last_day
+     from waits where conversation_id = $1`,
     [conversationId],
   );
-  return z.object({ n: z.number() }).parse(rows[0]).n;
+  const d = z.object({ open: z.number(), last_day: z.number() }).parse(rows[0]);
+  return { open: d.open, lastDay: d.last_day };
 }
 
 /** Records a wait; with a tool call's id, once per call. */
@@ -153,13 +147,16 @@ export type EndOutcome =
   | { status: "not_found"; wait?: undefined };
 
 /**
- * Ends a wait. By id (the web app): only its people, the waiter, the person waited on or whoever
- * recorded it. By number in its own thread (the teammate): whoever said there that it is done.
+ * Ends a wait, as one of its people: the waiter, the person waited on, or whoever recorded it
+ * (from the review of 3.3). By id from the web app, in the person's workspace; by number in its
+ * own thread, through the teammate. `then` runs in the same transaction once it has ended, so
+ * the note in its thread is queued with it.
  */
 export async function endWait(
   db: Db,
   actor: AreaActor,
   where: { id: string } | { number: number; conversationId: string },
+  then?: (tx: Db, wait: Wait) => Promise<void>,
 ): Promise<EndOutcome> {
   return db.transaction(async (tx) => {
     const rows =
@@ -176,15 +173,17 @@ export async function endWait(
           );
     if (rows[0] === undefined) return { status: "not_found" };
     const wait = toWait(rows[0]);
-    if (wait.status === "ended") return { status: "already_ended", wait };
-    // From the web app, only its people; in its own thread, anyone there may say it is done.
     const part = [wait.waiter.actorId, wait.waitingOn.actorId, wait.recordedBy.actorId];
-    if ("id" in where && !part.includes(actor.actorId)) return { status: "not_allowed", wait };
+    if (!part.includes(actor.actorId)) return { status: "not_allowed", wait };
+    if (wait.status === "ended") return { status: "already_ended", wait };
     await tx.query(
       `update waits set ended_by_actor_id = $2, ended_by_name = $3, ended_at = now() where id = $1`,
       [wait.id, actor.actorId, actor.name],
     );
-    const after = await tx.query(`select ${columns} from ${from} where w.id = $1`, [wait.id]);
-    return { status: "ended", wait: toWait(after[0]) };
+    const ended = toWait(
+      (await tx.query(`select ${columns} from ${from} where w.id = $1`, [wait.id]))[0],
+    );
+    await then?.(tx, ended);
+    return { status: "ended", wait: ended };
   });
 }

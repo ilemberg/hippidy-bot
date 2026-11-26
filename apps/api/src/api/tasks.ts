@@ -18,7 +18,13 @@ import {
   type ToolCallContext,
 } from "../store/projects.ts";
 import { linkThreadToTask } from "../store/tasks.ts";
-import { endWait, MAX_OPEN_WAITS_PER_THREAD, openWaitsIn, recordWait } from "../store/waits.ts";
+import {
+  endWait,
+  MAX_OPEN_WAITS_PER_THREAD,
+  MAX_WAITS_PER_THREAD_PER_DAY,
+  recordWait,
+  waitsIn,
+} from "../store/waits.ts";
 import { createTaskSource, type TaskSource } from "../tasks/provider.ts";
 import type { CustomToolAnswer, CustomToolCall, Routing } from "./agent-tools.ts";
 import { targetOf } from "./conversations.ts";
@@ -35,8 +41,13 @@ export const taskErrors = {
     `${actorId} is not someone the bot knows; ask for the person's Slack user id as it appears in the thread`,
   same: "a person cannot wait on themselves",
   tooMany: `this thread already has ${String(MAX_OPEN_WAITS_PER_THREAD)} open waits; end the ones that are done first`,
+  tooManyToday: `this thread has recorded ${String(MAX_WAITS_PER_THREAD_PER_DAY)} waits today; record more tomorrow`,
+  notTheirs:
+    "only the person waiting or the person waited on may record a wait, in their own message",
+  notPart: (n: number) =>
+    `only the person waiting, the person waited on or whoever recorded it may end wait ${String(n)}`,
   noSender:
-    "cannot tell which message in this thread this call answers, so there is no one ending the wait",
+    "cannot tell which message in this thread this call answers, so there is no one to act for",
   noWait: (n: number) => `there is no wait ${String(n)} recorded in this thread`,
 } as const;
 
@@ -58,7 +69,8 @@ export async function linkTask(
 ): Promise<CustomToolAnswer> {
   const key = input.key.toUpperCase();
   const source = sourceOf(db, routing);
-  const found = await source.get(context, key);
+  // A short wait: this runs while the conversation's sync lease is held (from the review).
+  const found = await source.get(context, key, { quick: true });
   if (found.kind === "missing") return error(taskErrors.noTask(key, source.provider));
   await linkThreadToTask(db, conversationId, key);
   return {
@@ -68,7 +80,10 @@ export async function linkTask(
         : {
             key,
             linked: true,
-            note: "the task provider could not be reached, so the key was linked as given",
+            note:
+              found.problem === "not_configured"
+                ? "Jira is not set up for the bot, so the key was linked as given"
+                : "Jira did not answer in time, so the key was linked as given",
           },
     ),
     isError: false,
@@ -99,6 +114,17 @@ export async function recordWaitFor(
     return { text: JSON.stringify({ number, recorded: true }), isError: false };
   }
   if (input.waiter === input.waitingOn) return error(taskErrors.same);
+  // Recorded only for the person whose message this turn answers, about themselves: a
+  // bystander, or text the teammate read, cannot put a wait in someone else's name (from the
+  // review of 3.3; as 209).
+  const turn =
+    call.processedAt === null
+      ? undefined
+      : await readTurnMessage(db, conversationId, call.processedAt, messages);
+  if (turn === undefined) return error(taskErrors.noSender);
+  if (turn.actorId !== input.waiter && turn.actorId !== input.waitingOn) {
+    return error(taskErrors.notTheirs);
+  }
   if (
     !(await hasWrittenInConversation(db, conversationId, { ...context, actorId: input.waiter }))
   ) {
@@ -123,14 +149,10 @@ export async function recordWaitFor(
       )
     ).length > 0;
   if (!known) return error(taskErrors.unknownPerson(input.waitingOn));
-  if ((await openWaitsIn(db, conversationId)) >= MAX_OPEN_WAITS_PER_THREAD) {
-    return error(taskErrors.tooMany);
-  }
-  const turn =
-    call.processedAt === null
-      ? undefined
-      : await readTurnMessage(db, conversationId, call.processedAt, messages);
-  const recorder = turn?.actorId ?? input.waiter;
+  const counts = await waitsIn(db, conversationId);
+  if (counts.open >= MAX_OPEN_WAITS_PER_THREAD) return error(taskErrors.tooMany);
+  if (counts.lastDay >= MAX_WAITS_PER_THREAD_PER_DAY) return error(taskErrors.tooManyToday);
+  const recorder = turn.actorId;
   const conversation = await getConversation(db, conversationId);
   const recorded = await db.transaction(async (tx) => {
     const result = await recordWait(tx, {
@@ -180,19 +202,23 @@ export async function endWaitFor(
     actorId: turn.actorId,
     name: await actorNameInConversation(db, conversationId, turn.actorId),
   };
-  const result = await endWait(db, actor, { number: input.number, conversationId });
-  if (result.status === "not_found" || result.status === "not_allowed") {
-    return error(taskErrors.noWait(input.number));
-  }
-  if (result.status === "ended") {
-    const conversation = await getConversation(db, conversationId);
-    const who = result.wait.waiter.name ?? result.wait.waiter.actorId;
-    await enqueueDelivery(db, conversationId, `wait-ended:${result.wait.id}`, "note", {
-      kind: "reply",
-      target: targetOf(conversation),
-      text: `Wait ${String(result.wait.number)} ended by ${actor.name ?? actor.actorId}: ${who} is no longer waiting on ${result.wait.waitingOn.name ?? result.wait.waitingOn.actorId} for "${result.wait.what}".`,
-    });
-  }
+  const conversation = await getConversation(db, conversationId);
+  const result = await endWait(
+    db,
+    actor,
+    { number: input.number, conversationId },
+    // Queued with the end, so it is never ended without being said.
+    async (tx, wait) => {
+      const who = wait.waiter.name ?? wait.waiter.actorId;
+      await enqueueDelivery(tx, conversationId, `wait-ended:${wait.id}`, "note", {
+        kind: "reply",
+        target: targetOf(conversation),
+        text: `Wait ${String(wait.number)} ended by ${actor.name ?? actor.actorId}: ${who} is no longer waiting on ${wait.waitingOn.name ?? wait.waitingOn.actorId} for "${wait.what}".`,
+      });
+    },
+  );
+  if (result.status === "not_found") return error(taskErrors.noWait(input.number));
+  if (result.status === "not_allowed") return error(taskErrors.notPart(input.number));
   return {
     text: JSON.stringify({ number: result.wait.number, status: "ended" }),
     isError: false,

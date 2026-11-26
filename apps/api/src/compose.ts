@@ -17,7 +17,7 @@ import {
   readTaskConfig,
   type Env,
 } from "./config.ts";
-import { createTaskSource } from "./tasks/provider.ts";
+import { createTaskSource, type TaskSource } from "./tasks/provider.ts";
 import type { Logger } from "./log.ts";
 import { createApiClient, type ResponseLike } from "./slack/api-client.ts";
 import { readSlackConfig } from "./slack/config.ts";
@@ -67,6 +67,7 @@ export function configureApp(app: Hono<ApiEnv>, { env, log, services }: AppDeps)
       capture: services?.capture ?? real.capture,
       verifyAgentWebhook: services?.verifyAgentWebhook ?? real.verifyAgentWebhook,
       status: services?.status ?? real.status,
+      tasks: services?.conversations?.tasks ?? real.tasks,
     }),
   );
 
@@ -108,6 +109,7 @@ function realServices(
   capture?: CaptureDeps;
   verifyAgentWebhook?: VerifyAgentWebhook;
   status: StatusDeps;
+  tasks?: TaskSource;
 } {
   const dbConfig = readDbConfig(env, log);
   const agentConfig = readAgentConfig(env, log);
@@ -121,7 +123,10 @@ function realServices(
       github: agentConfig?.repository !== undefined,
     },
   };
-  if (agentConfig === undefined) return { status };
+  // The team's one home for tasks (slice 3.3, decisions 210 and 211): built whenever storage
+  // is, so the tasks pages never fall back to another home when the agent is not configured.
+  const tasks = db === undefined ? undefined : createTaskSource(readTaskConfig(env, log), db, log);
+  if (agentConfig === undefined) return tasks === undefined ? { status } : { status, tasks };
 
   const client = new Anthropic({ apiKey: agentConfig.apiKey, maxRetries: 2, timeout: 20_000 });
   const verifyAgentWebhook =
@@ -137,8 +142,7 @@ function realServices(
     runtime: createManagedAgentRuntime(agentConfig, client),
     deliverers,
     fallback: readFallbackOwner(env, log),
-    // The team's one home for tasks (slice 3.3, decision 210).
-    tasks: createTaskSource(readTaskConfig(env, log), db, log),
+    ...(tasks === undefined ? {} : { tasks }),
     // The same token that mounts the repo reads its pull requests' checks (decision 132).
     ...(agentConfig.repository === undefined
       ? {}

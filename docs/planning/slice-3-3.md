@@ -1,6 +1,6 @@
 # Slice 3.3: tasks and the waiting-on list
 
-Status: **planned 2026-11-25 (decision 210).** The wave is in `wave-3.md`.
+Status: **built 2026-11-26, not merged (decisions 210 and 211).** The wave is in `wave-3.md`.
 
 **Demo:** the web app's `/tasks` page lists the team's tasks, from Jira's `SCRUM` project or
 from the built-in tracker, the same way whichever is the home: key, title, status, who it is
@@ -40,22 +40,23 @@ reviews it, either of them ends the wait, in the thread or on the page.
 
 ## A thread's task (SCRUM-8)
 
-`link_task` takes a task's key. The API checks it exists in the provider (or, when the
-provider cannot be reached, records it as given and says so), and keeps it on the thread. A
+`link_task` takes a task's key. The API checks it exists in the provider, waiting at most 1.5
+seconds since the thread's sync lease is held (or, when the provider does not answer, records
+it as given and says so), and keeps it on the thread. A
 thread has one task at a time; linking another replaces it. The task's page lists the threads
-linked to it, and the agents page shows a thread's task.
+linked to it. Showing a thread's task on the agents page is left for later (211).
 
 ## Waiting-on (178)
 
 - **A wait:** who waits, on whom, for what (at most 300 characters), optionally a task's key,
   since when, and where it was said (a thread). It ends when either person, or whoever recorded
   it, ends it; it is kept with who ended it and when.
-- **`record_wait`:** the waiter must have written in the thread (the teammate records what
-  people said, not guesses); the person waited on must be someone the record knows. Posted in
-  the thread: "Grace is waiting on @Ada: review the ranking." with the person waited on
-  mentioned. One wait per call; at most ten open waits per thread.
-- **`end_wait`:** by number, from the thread it was recorded in, when someone there says it is
-  done. Posted in the thread.
+- **`record_wait`:** only in a turn answering the waiter or the person waited on (211); the
+  person waited on must be someone the record knows. Posted in the thread: "Grace is waiting on
+  @Ada: review the ranking." with the person waited on mentioned. One wait per call; at most ten
+  open waits per thread, and 20 recorded a day.
+- **`end_wait`:** by number, from the thread it was recorded in, in a turn answering the waiter,
+  the person waited on or whoever recorded it (211). Posted in the thread, with the end.
 - **Routes:** `GET /v1/waits` (open by default; for one person), `POST /v1/waits` (a signed-in
   person records their own wait), `POST /v1/waits/:id/end` (the waiter, the person waited on,
   or whoever recorded it).
