@@ -16,6 +16,13 @@ import {
   fetchDecisions,
   rejectDecision,
   settleConflict,
+  createTask,
+  editTask,
+  endWait,
+  fetchTask,
+  fetchTasks,
+  fetchWaits,
+  recordWait,
 } from "./api-client.ts";
 import { memoryLogger } from "./log.ts";
 import type { Fetch } from "./slack-oidc.ts";
@@ -25,8 +32,12 @@ import {
   config,
   conflict,
   conflictDetail,
+  jiraTask,
   proposal as decision,
   proposalDetail as detail,
+  task,
+  taskDetail,
+  wait,
 } from "./testing.ts";
 import type { Person } from "./tokens.ts";
 
@@ -362,5 +373,158 @@ describe("conflicts", () => {
     expect(await settleConflict(person, conflict.id, { outcome: "kept" }, deps(odd.fetch))).toEqual(
       { kind: "failed", reason: "unexpected_response" },
     );
+  });
+});
+
+describe("tasks", () => {
+  it("lists them by words, status and limit, as the person, asking only for what is given", async () => {
+    const list = { provider: "jira", available: true, problem: null, tasks: [jiraTask] };
+    const api = fakeApi(() => Response.json(list));
+    expect(
+      await fetchTasks(person, { q: "rank & sort", status: "done", limit: 100 }, deps(api.fetch)),
+    ).toEqual({ kind: "ok", value: list });
+    await fetchTasks(person, {}, deps(api.fetch));
+    expect(api.calls.map(({ url, method }) => [method, url])).toEqual([
+      ["GET", "https://api.example.test/v1/tasks?q=rank+%26+sort&status=done&limit=100"],
+      ["GET", "https://api.example.test/v1/tasks"],
+    ]);
+    for (const call of api.calls) expect(await tokenSubject(call.headers)).toBe("U0123456789");
+  });
+
+  it("passes on a provider that gave nothing, and refuses an odd answer", async () => {
+    const none = { provider: "jira", available: false, problem: "unreachable", tasks: [] };
+    const api = fakeApi(() => Response.json(none));
+    expect(await fetchTasks(person, {}, deps(api.fetch))).toEqual({ kind: "ok", value: none });
+    const odd = fakeApi(() => Response.json({ provider: "linear", tasks: [] }));
+    expect(await fetchTasks(person, {}, deps(odd.fetch))).toEqual({
+      kind: "failed",
+      reason: "unexpected_response",
+    });
+  });
+
+  it("reads one by its key, and tells not found from an API that did not answer", async () => {
+    const api = fakeApi(() => Response.json(taskDetail));
+    expect(await fetchTask(person, "T-4", deps(api.fetch))).toEqual({
+      kind: "ok",
+      value: taskDetail,
+    });
+    expect(api.calls[0]?.url).toBe("https://api.example.test/v1/tasks/T-4");
+    const missing = fakeApi(() =>
+      Response.json({ error: { code: "not_found", message: "No such task" } }, { status: 404 }),
+    );
+    expect(await fetchTask(person, "T-9", deps(missing.fetch))).toEqual({ kind: "not_found" });
+    const down = fakeApi(() => new Response(null, { status: 503 }));
+    expect(await fetchTask(person, "T-4", deps(down.fetch))).toEqual({
+      kind: "failed",
+      reason: "status_503",
+    });
+  });
+
+  it("creates with a POST and edits with a PATCH to the task's id, naming no one else", async () => {
+    const id = taskDetail.builtin?.id ?? "";
+    const api = fakeApi((call) =>
+      call.method === "POST"
+        ? Response.json({ status: "created", task }, { status: 201 })
+        : Response.json({ status: "changed", task }),
+    );
+    expect(
+      await createTask(person, { title: "Rank", assigneeActorId: "U2" }, deps(api.fetch)),
+    ).toEqual({ kind: "ok", value: { status: "created", task } });
+    expect(
+      await editTask(person, id, { version: 2, assigneeActorId: null }, deps(api.fetch)),
+    ).toEqual({ kind: "ok", value: { status: "changed", task } });
+    expect(api.calls.map(({ url, method, body }) => ({ url, method, body }))).toEqual([
+      {
+        url: "https://api.example.test/v1/tasks",
+        method: "POST",
+        body: { title: "Rank", assigneeActorId: "U2" },
+      },
+      {
+        url: `https://api.example.test/v1/tasks/${id}`,
+        method: "PATCH",
+        body: { version: 2, assigneeActorId: null },
+      },
+    ]);
+    for (const call of api.calls) {
+      expect(call.headers.get("content-type")).toBe("application/json");
+      expect(call.headers.get("x-correlation-id")).toBe("corr-1");
+      expect(await tokenSubject(call.headers)).toBe("U0123456789");
+    }
+    const jira = fakeApi(() => Response.json({ status: "not_builtin" }));
+    expect(await createTask(person, { title: "Rank" }, deps(jira.fetch))).toEqual({
+      kind: "ok",
+      value: { status: "not_builtin" },
+    });
+    const odd = fakeApi(() => Response.json({ status: "moved" }));
+    expect(await editTask(person, id, { version: 1 }, deps(odd.fetch))).toEqual({
+      kind: "failed",
+      reason: "unexpected_response",
+    });
+  });
+});
+
+describe("waits", () => {
+  it("lists them by status, person and task, as the person, asking only for what is given", async () => {
+    const api = fakeApi(() => Response.json({ waits: [wait] }));
+    expect(
+      await fetchWaits(
+        person,
+        { status: "ended", person: "U1", task: "T-4", limit: 200 },
+        deps(api.fetch),
+      ),
+    ).toEqual({ kind: "ok", value: [wait] });
+    await fetchWaits(person, {}, deps(api.fetch));
+    expect(api.calls.map(({ url, method }) => [method, url])).toEqual([
+      ["GET", "https://api.example.test/v1/waits?status=ended&person=U1&task=T-4&limit=200"],
+      ["GET", "https://api.example.test/v1/waits"],
+    ]);
+    for (const call of api.calls) expect(await tokenSubject(call.headers)).toBe("U0123456789");
+    const odd = fakeApi(() => Response.json({ waits: [{ id: wait.id }] }));
+    expect(await fetchWaits(person, {}, deps(odd.fetch))).toEqual({
+      kind: "failed",
+      reason: "unexpected_response",
+    });
+  });
+
+  it("records the person's own wait and ends one, naming no one else as who acts", async () => {
+    const ended = { ...wait, status: "ended" as const };
+    const api = fakeApi((call) =>
+      call.url.endsWith("/end")
+        ? Response.json({ status: "ended", wait: ended })
+        : Response.json({ status: "recorded", wait }, { status: 201 }),
+    );
+    expect(
+      await recordWait(
+        person,
+        { waitingOnActorId: "U1", what: "review the ranking", taskKey: "T-4" },
+        deps(api.fetch),
+      ),
+    ).toEqual({ kind: "ok", value: { status: "recorded", wait } });
+    expect(await endWait(person, wait.id, deps(api.fetch))).toEqual({
+      kind: "ok",
+      value: { status: "ended", wait: ended },
+    });
+    expect(api.calls.map(({ url, method, body }) => ({ url, method, body }))).toEqual([
+      {
+        url: "https://api.example.test/v1/waits",
+        method: "POST",
+        body: { waitingOnActorId: "U1", what: "review the ranking", taskKey: "T-4" },
+      },
+      { url: `https://api.example.test/v1/waits/${wait.id}/end`, method: "POST", body: {} },
+    ]);
+    for (const call of api.calls) {
+      expect(call.headers.get("content-type")).toBe("application/json");
+      expect(await tokenSubject(call.headers)).toBe("U0123456789");
+    }
+    const refused = fakeApi(() => Response.json({ status: "not_allowed" }));
+    expect(await endWait(person, wait.id, deps(refused.fetch))).toEqual({
+      kind: "ok",
+      value: { status: "not_allowed" },
+    });
+    const down: Fetch = () => Promise.reject(new Error("connection refused"));
+    expect(await endWait(person, wait.id, deps(down))).toEqual({
+      kind: "failed",
+      reason: "unreachable",
+    });
   });
 });
