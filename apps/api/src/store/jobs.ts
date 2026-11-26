@@ -76,8 +76,14 @@ export async function ensureBuiltinJobs(
   db: Db,
   place: Place,
   owner: { actorId: string } | undefined,
+  caps: { capture?: number | undefined } = {},
 ): Promise<void> {
-  for (const job of BUILTIN_JOBS) {
+  for (const builtin of BUILTIN_JOBS) {
+    // Capture's cap follows its daily budget for a 31-day month when the job is made.
+    const job =
+      builtin.kind === "capture" && caps.capture !== undefined
+        ? { ...builtin, capCents: caps.capture }
+        : builtin;
     await db.query(
       `insert into jobs (source, workspace_id, name, kind, goal, owner_actor_id, cap_cents)
        values ($1, $2, $3, $4, $5, $6, $7)
@@ -151,7 +157,8 @@ export async function uncapForNewMonth(db: Db, place: Place): Promise<void> {
   await db.query(
     `update jobs set state = 'active', capped_month = null, updated_at = now()
      where source = $1 and workspace_id = $2 and state = 'capped'
-       and capped_month < date_trunc('month', now() at time zone 'utc')::date`,
+       and (capped_month is null
+            or capped_month < date_trunc('month', now() at time zone 'utc')::date)`,
     [place.source, place.workspaceId],
   );
 }
@@ -165,7 +172,8 @@ export async function takeDueJobs(db: Db, place: Place): Promise<Job[]> {
     `update jobs j set last_wake_at = now()
      where j.source = $1 and j.workspace_id = $2 and j.state = 'active'
        and (j.last_wake_at is null
-            or j.last_wake_at <= now() - make_interval(mins => j.every_minutes) + interval '5 seconds')
+            or date_trunc('minute', j.last_wake_at)
+               <= date_trunc('minute', now()) - make_interval(mins => j.every_minutes))
      returning j.id`,
     [place.source, place.workspaceId],
   );
@@ -216,6 +224,18 @@ export async function capJob(db: Db, jobId: string): Promise<void> {
        capped_month = date_trunc('month', now() at time zone 'utc')::date, updated_at = now()
      where id = $1 and state = 'active'`,
     [jobId],
+  );
+}
+
+/**
+ * Ends wakes left unfinished for ten minutes (their process was killed or timed out) as failed,
+ * so they read as failures, not silence, and are kept.
+ */
+export async function closeUnfinishedWakes(db: Db): Promise<void> {
+  await db.query(
+    `update job_wakes
+     set ended_at = now(), outcome = 'failed', error = 'did not finish'
+     where outcome is null and started_at < now() - interval '10 minutes'`,
   );
 }
 

@@ -1,10 +1,10 @@
 import type { Job, JobKind } from "@hippidy/contracts";
 import type { Logger } from "../log.ts";
 import type { Place } from "../store/areas.ts";
-import { captureSpentSince } from "../store/capture.ts";
 import type { Db } from "../store/db.ts";
 import {
   capJob,
+  closeUnfinishedWakes,
   ensureBuiltinJobs,
   finishWake,
   pruneWakes,
@@ -43,9 +43,9 @@ const RUNNERS: Record<JobKind, Runner> = {
     if (deps.capture === undefined) {
       return { outcome: "silent", summary: "the agent is not configured", costMicros: 0 };
     }
-    const started = deps.now?.() ?? new Date();
     const result = await runCapture(deps.capture, log);
-    const cost = await captureSpentSince(deps.db, started);
+    // Its own calls only: another wake running at the same time spends on its own.
+    const cost = result.spentMicros;
     if (result.budgetReached && result.read === 0) {
       return { outcome: "silent", summary: "the day's capture budget is spent", costMicros: cost };
     }
@@ -68,10 +68,12 @@ const RUNNERS: Record<JobKind, Runner> = {
     };
   },
   async briefs(deps, place, log) {
-    if (deps.briefs === undefined) {
-      return { outcome: "silent", summary: "Slack is not configured", costMicros: 0 };
+    if (deps.briefs?.deliverer?.direct === undefined) {
+      return { outcome: "silent", summary: "Slack direct messages are not set up", costMicros: 0 };
     }
     const result = await runBriefs({ ...deps.briefs, db: deps.db, place }, log);
+    // A run that failed as a whole is a failed wake, not a silent one (rule 15).
+    if (result.runFailed === true) throw new Error("the briefs run failed; see brief.run_failed");
     if (result.sent > 0) {
       return {
         outcome: "said",
@@ -103,11 +105,27 @@ export interface JobsRunResult {
 export async function runJobs(deps: JobDeps, log: Logger): Promise<JobsRunResult> {
   const result: JobsRunResult = { woke: 0, said: 0, failed: 0, skipped: 0 };
   const place = deps.place;
-  if (place === undefined) return result;
+  const now = deps.now?.() ?? new Date();
+  if (place === undefined) {
+    // Jobs belong to a workspace (SLACK_WORKSPACE_ID). Without one, capture, which reads every
+    // listened channel, still runs as it did before 4.1, unlogged (from the review).
+    if (now.getUTCMinutes() === 0)
+      log.warn("jobs.no_workspace", { variable: "SLACK_WORKSPACE_ID" });
+    if (deps.capture !== undefined) {
+      await runCapture(deps.capture, log).catch((error: unknown) => {
+        log.error("capture.failed", { error });
+      });
+    }
+    return result;
+  }
   let due: Job[];
   try {
-    await ensureBuiltinJobs(deps.db, place, deps.fallback);
+    await ensureBuiltinJobs(deps.db, place, deps.fallback, {
+      capture: deps.capture === undefined ? undefined : deps.capture.dailyBudgetCents * 31,
+    });
     await uncapForNewMonth(deps.db, place);
+    // A wake whose process was killed is told apart from a silent one (from the review).
+    await closeUnfinishedWakes(deps.db);
     due = await takeDueJobs(deps.db, place);
   } catch (error) {
     log.error("jobs.schedule_failed", { error });
@@ -145,10 +163,13 @@ export async function runJobs(deps: JobDeps, log: Logger): Promise<JobsRunResult
       }
     }
   }
-  try {
-    await pruneWakes(deps.db);
-  } catch (error) {
-    log.warn("jobs.prune_failed", { error });
+  // Once an hour is enough to keep two weeks of silent wakes.
+  if (now.getUTCMinutes() === 0) {
+    try {
+      await pruneWakes(deps.db);
+    } catch (error) {
+      log.warn("jobs.prune_failed", { error });
+    }
   }
   return result;
 }

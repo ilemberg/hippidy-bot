@@ -46,7 +46,7 @@ describe("the scheduler", () => {
       { outcome: "silent", summary: "the agent is not configured", cost: 0 },
     ]);
     expect(await wakes("briefs")).toEqual([
-      { outcome: "silent", summary: "Slack is not configured", cost: 0 },
+      { outcome: "silent", summary: "Slack direct messages are not set up", cost: 0 },
     ]);
     const [owner] = await db.query(`select owner_actor_id from jobs where name = 'capture'`);
     expect(owner?.owner_actor_id).toBe("UOWNER");
@@ -146,6 +146,101 @@ describe("the scheduler", () => {
     expect(result.woke).toBe(2);
     const [capture] = await wakes("capture");
     expect(capture?.outcome).toBe("failed");
+  });
+});
+
+describe("what the review of 4.1 found", () => {
+  it("still runs capture, unlogged, when there is no workspace", async () => {
+    const channel = { ...place, channelId: "C1" };
+    await setListening(db, { ...channel, listening: true, actor: { id: "U1" } });
+    for (const [messageId, actor] of [
+      ["100.1", "U1"],
+      ["100.2", "U2"],
+    ] as const) {
+      await recordObservation(db, {
+        kind: "posted",
+        ...channel,
+        messageId,
+        threadId: "100.1",
+        actor: { id: actor, displayName: actor },
+        text: "x",
+        sentAt: new Date(Date.now() - 40 * 60_000).toISOString(),
+      });
+    }
+    const extractor = new FakeExtractor();
+    const result = await runJobs(
+      { db, place: undefined, capture: { db, extractor, dailyBudgetCents: 100 } },
+      log,
+    );
+    expect(result.woke).toBe(0);
+    expect(extractor.calls).toHaveLength(1);
+  });
+
+  it("wakes a job each minute, however long reconcile's earlier steps took", async () => {
+    await runJobs({ db, place }, log);
+    // Taken late in the last minute, early in this one: still due.
+    await db.query(
+      `update jobs set last_wake_at = date_trunc('minute', now()) - interval '1 minute' + interval '50 seconds'`,
+    );
+    expect((await runJobs({ db, place }, log)).woke).toBe(2);
+  });
+
+  it("tells a wake that never finished from a silent one", async () => {
+    await runJobs({ db, place }, log);
+    await db.query(
+      `insert into job_wakes (job_id, started_at)
+       select id, now() - interval '20 minutes' from jobs where name = 'capture'`,
+    );
+    await db.query(`update jobs set last_wake_at = null`);
+    await runJobs({ db, place }, log);
+    const [unfinished] = await db.query(
+      `select outcome, error from job_wakes where started_at < now() - interval '15 minutes'`,
+    );
+    expect(unfinished).toEqual({ outcome: "failed", error: "did not finish" });
+  });
+
+  it("logs briefs as said through the scheduler, and a briefs run that fails as failed", async () => {
+    const sent: string[] = [];
+    const deliverer = {
+      deliver: () => Promise.resolve(),
+      direct: (m: { userId: string }) => {
+        sent.push(m.userId);
+        return Promise.resolve();
+      },
+      timeZone: () => Promise.resolve("UTC"),
+    };
+    await db.query(
+      `insert into waits (source, workspace_id, waiter_actor_id, waiting_on_actor_id, what,
+         recorded_by_actor_id)
+       values ('slack', $1, 'U1', 'U2', 'a review', 'U1')`,
+      [ws],
+    );
+    const monday = new Date("2026-11-23T09:30:00.000Z");
+    const deps: JobDeps = {
+      db,
+      place,
+      now: () => monday,
+      briefs: { deliverer, webBaseUrl: undefined, now: () => monday },
+    };
+    await runJobs(deps, log);
+    expect(sent).toEqual(["U2"]);
+    expect(await wakes("briefs")).toEqual([{ outcome: "said", summary: "sent 1 brief", cost: 0 }]);
+    await db.query(`alter table briefs rename to briefs_gone`);
+    await db.query(`update jobs set last_wake_at = null`);
+    await runJobs(deps, log);
+    await db.query(`alter table briefs_gone rename to briefs`);
+    expect((await wakes("briefs")).at(-1)?.outcome).toBe("failed");
+  });
+
+  it("never wakes a job a person paused, whatever the month", async () => {
+    await runJobs({ db, place }, log);
+    await db.query(
+      `update jobs set state = 'paused', capped_month = date '2000-01-01', last_wake_at = null
+       where name = 'capture'`,
+    );
+    await runJobs({ db, place }, log);
+    const [row] = await db.query(`select state from jobs where name = 'capture'`);
+    expect(row?.state).toBe("paused");
   });
 });
 

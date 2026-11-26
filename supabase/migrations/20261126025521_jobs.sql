@@ -37,6 +37,9 @@ create table public.job_wakes (
 );
 
 create index job_wakes_job_idx on public.job_wakes (job_id, started_at desc);
+-- Pruning silent and skipped wakes, and finding unfinished ones.
+create index job_wakes_prune_idx on public.job_wakes (started_at)
+  where outcome is null or outcome in ('silent', 'skipped');
 
 create table public.job_events (
   id uuid primary key default gen_random_uuid(),

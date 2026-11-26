@@ -1,6 +1,6 @@
 # Slice 4.1: the job record and its scheduler
 
-Status: **planned 2026-11-26 (decision 215).** The wave is in `wave-4.md`.
+Status: **built 2026-11-26, not merged (decisions 215 and 216).** The wave is in `wave-4.md`.
 
 **Demo:** capture and briefs, which reconcile has run by hand since 2.5 and 3.4, run as the
 first two jobs. `GET /v1/jobs` lists them with their schedule, state and this month's spend
@@ -33,7 +33,8 @@ does not wake; a job past its cap pauses itself and says so once.
 ## Waking
 
 - Each reconcile makes the built-in jobs if they are missing, then lists the active jobs whose
-  last wake is at least their interval ago.
+  last wake was at least their interval of calendar minutes ago (216). Jobs belong to the
+  workspace in `SLACK_WORKSPACE_ID`; without it, capture runs as before, unlogged.
 - A due job is taken by one run only (its `last_wake_at` is moved forward atomically), so
   overlapping runs never wake it twice.
 - Before it runs, its spend this calendar month (UTC), summed from its wakes, is checked
@@ -41,7 +42,8 @@ does not wake; a job past its cap pauses itself and says so once.
 - It runs, and the wake is logged: `said` (it posted, proposed or sent something), `silent`
   (nothing to do, and why in a few words), `failed` (with the error) or `skipped`; with its
   cost in millionths of a dollar. A wake that throws never fails reconcile.
-- Silent and skipped wakes are kept 14 days; the others are kept.
+- Silent and skipped wakes are kept 14 days; the others are kept. A wake unfinished for ten
+  minutes (its process was killed) is ended as failed (216).
 
 ## Done when
 

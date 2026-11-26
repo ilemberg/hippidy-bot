@@ -102,6 +102,8 @@ export interface BriefRunResult {
   sent: number;
   empty: number;
   failed: number;
+  /** The run itself failed (a database error), not one send: its wake is a failure (4.1). */
+  runFailed?: boolean;
 }
 
 /** One pass: sends the briefs due now. Never throws: a failure is logged and tried again. */
@@ -174,6 +176,7 @@ export async function runBriefs(deps: BriefDeps, log: Logger): Promise<BriefRunR
     }
   } catch (error) {
     log.error("brief.run_failed", { error });
+    result.runFailed = true;
   }
   if (result.sent + result.failed > 0) log.info("brief.run", { ...result });
   return result;

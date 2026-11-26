@@ -56,6 +56,8 @@ export interface CaptureResult {
   failed: number;
   /** Set when capture stopped for the day at its budget. */
   budgetReached: boolean;
+  /** What this run's own calls cost, in millionths of a dollar (slice 4.1). */
+  spentMicros: number;
 }
 
 function startOfUtcDay(now: Date): Date {
@@ -224,7 +226,13 @@ function stopped(spent: number, budgetMicros: number): boolean {
  */
 export async function runCapture(deps: CaptureDeps, log: Logger): Promise<CaptureResult> {
   const now = deps.now?.() ?? new Date();
-  const result: CaptureResult = { read: 0, proposed: 0, failed: 0, budgetReached: false };
+  const result: CaptureResult = {
+    read: 0,
+    proposed: 0,
+    failed: 0,
+    budgetReached: false,
+    spentMicros: 0,
+  };
   const budgetMicros = deps.dailyBudgetCents * 10_000;
   let spent = await captureSpentSince(deps.db, startOfUtcDay(now));
   if (stopped(spent, budgetMicros)) {
@@ -245,6 +253,7 @@ export async function runCapture(deps: CaptureDeps, log: Logger): Promise<Captur
     try {
       const done = await captureThread(deps, thread, threadLog);
       spent += done.spentMicros;
+      result.spentMicros += done.spentMicros;
       if (done.outcome === "proposed" || done.outcome === "nothing") result.read++;
       else result.failed++;
       result.proposed += done.proposed;
