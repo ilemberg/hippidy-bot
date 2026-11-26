@@ -23,6 +23,8 @@ import {
   fetchTasks,
   fetchWaits,
   recordWait,
+  fetchMyBrief,
+  setMyBriefs,
 } from "./api-client.ts";
 import { memoryLogger } from "./log.ts";
 import type { Fetch } from "./slack-oidc.ts";
@@ -33,6 +35,7 @@ import {
   conflict,
   conflictDetail,
   jiraTask,
+  myBrief,
   proposal as decision,
   proposalDetail as detail,
   task,
@@ -523,6 +526,57 @@ describe("waits", () => {
     });
     const down: Fetch = () => Promise.reject(new Error("connection refused"));
     expect(await endWait(person, wait.id, deps(down))).toEqual({
+      kind: "failed",
+      reason: "unreachable",
+    });
+  });
+});
+
+describe("briefs", () => {
+  it("reads the person's brief as them, checked against the contract", async () => {
+    const api = fakeApi(() => Response.json(myBrief));
+    expect(await fetchMyBrief(person, deps(api.fetch))).toEqual({ kind: "ok", value: myBrief });
+    expect(api.calls.map(({ url, method }) => [method, url])).toEqual([
+      ["GET", "https://api.example.test/v1/briefs/me"],
+    ]);
+    expect(await tokenSubject(api.calls[0]?.headers ?? new Headers())).toBe("U0123456789");
+    const odd = fakeApi(() => Response.json({ ...myBrief, on: "yes" }));
+    expect(await fetchMyBrief(person, deps(odd.fetch))).toEqual({
+      kind: "failed",
+      reason: "unexpected_response",
+    });
+    const down = fakeApi(() => new Response(null, { status: 503 }));
+    expect(await fetchMyBrief(person, deps(down.fetch))).toEqual({
+      kind: "failed",
+      reason: "status_503",
+    });
+  });
+
+  it("switches the person's own briefs, naming no one in the body", async () => {
+    const api = fakeApi((call) => Response.json({ on: (call.body as { on: boolean }).on }));
+    expect(await setMyBriefs(person, false, deps(api.fetch))).toEqual({
+      kind: "ok",
+      value: { on: false },
+    });
+    expect(await setMyBriefs(person, true, deps(api.fetch))).toEqual({
+      kind: "ok",
+      value: { on: true },
+    });
+    expect(api.calls.map(({ url, method, body }) => ({ url, method, body }))).toEqual([
+      { url: "https://api.example.test/v1/briefs/me", method: "POST", body: { on: false } },
+      { url: "https://api.example.test/v1/briefs/me", method: "POST", body: { on: true } },
+    ]);
+    for (const call of api.calls) {
+      expect(call.headers.get("content-type")).toBe("application/json");
+      expect(await tokenSubject(call.headers)).toBe("U0123456789");
+    }
+    const odd = fakeApi(() => Response.json({ on: true, who: "U1" }));
+    expect(await setMyBriefs(person, true, deps(odd.fetch))).toEqual({
+      kind: "failed",
+      reason: "unexpected_response",
+    });
+    const down: Fetch = () => Promise.reject(new Error("connection refused"));
+    expect(await setMyBriefs(person, true, deps(down))).toEqual({
       kind: "failed",
       reason: "unreachable",
     });
