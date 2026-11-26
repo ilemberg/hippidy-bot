@@ -136,10 +136,20 @@ export async function runJobs(deps: JobDeps, log: Logger): Promise<JobsRunResult
     let wakeId: string | undefined;
     try {
       wakeId = await startWake(deps.db, job.id);
+      // Paused since this run took it: it does not wake.
+      if (wakeId === undefined) continue;
       result.woke++;
       // At its cap it pauses itself, and one wake says so (G21).
       if (job.spentMicrosThisMonth >= job.capCents * 10_000) {
-        await capJob(deps.db, job.id);
+        if (!(await capJob(deps.db, job.id, job.capCents))) {
+          // A person changed its cap meanwhile: this wake is skipped, the next reads the new one.
+          await finishWake(deps.db, wakeId, {
+            outcome: "skipped",
+            summary: "its cap was just changed",
+          });
+          result.skipped++;
+          continue;
+        }
         await finishWake(deps.db, wakeId, {
           outcome: "skipped",
           summary: `reached its cap of $${(job.capCents / 100).toFixed(2)} this month; paused until next month`,

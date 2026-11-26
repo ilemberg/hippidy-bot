@@ -1,6 +1,6 @@
 # Slice 4.2: job management
 
-Status: **planned 2026-11-26 (decision 217).** The wave is in `wave-4.md`; the record in
+Status: **built 2026-11-26, not merged (decisions 217 and 218).** The wave is in `wave-4.md`; the record in
 `slice-4-1.md`.
 
 **Demo:** on `/jobs` Ada sees capture and briefs, each with its schedule, state and this

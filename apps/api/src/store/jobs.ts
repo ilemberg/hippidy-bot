@@ -155,7 +155,8 @@ export async function jobWakes(db: Db, jobId: string, limit = 50): Promise<JobWa
  */
 export async function uncapForNewMonth(db: Db, place: Place): Promise<void> {
   await db.query(
-    `update jobs set state = 'active', capped_month = null, updated_at = now()
+    `update jobs set state = 'active', capped_month = null, version = version + 1,
+       updated_at = now()
      where source = $1 and workspace_id = $2 and state = 'capped'
        and (capped_month is null
             or capped_month < date_trunc('month', now() at time zone 'utc')::date)`,
@@ -186,10 +187,18 @@ export async function takeDueJobs(db: Db, place: Place): Promise<Job[]> {
   return jobs.map(toJob);
 }
 
-/** Starts a wake's row; answers its id. */
-export async function startWake(db: Db, jobId: string): Promise<string> {
-  const rows = await db.query(`insert into job_wakes (job_id) values ($1) returning id`, [jobId]);
-  return z.object({ id: z.string() }).parse(rows[0]).id;
+/**
+ * Starts a wake's row, only while the job is still active: a person may have paused it after
+ * this run took it (from the review of 4.2). Answers its id, or undefined to skip it.
+ */
+export async function startWake(db: Db, jobId: string): Promise<string | undefined> {
+  const rows = await db.query(
+    `insert into job_wakes (job_id)
+     select $1 where exists (select 1 from jobs where id = $1 and state = 'active')
+     returning id`,
+    [jobId],
+  );
+  return rows[0] === undefined ? undefined : z.object({ id: z.string() }).parse(rows[0]).id;
 }
 
 /** Ends a wake with its outcome, what it said or why not, and its cost. */
@@ -217,14 +226,19 @@ export async function finishWake(
   );
 }
 
-/** Caps a job that reached its cap, for this month (G21). */
-export async function capJob(db: Db, jobId: string): Promise<void> {
-  await db.query(
-    `update jobs set state = 'capped',
+/**
+ * Caps a job that reached its cap, for this month (G21), unless a person changed its cap since
+ * the run read it (from the review of 4.2). Answers whether it capped it.
+ */
+export async function capJob(db: Db, jobId: string, capCentsSeen: number): Promise<boolean> {
+  const rows = await db.query(
+    `update jobs set state = 'capped', version = version + 1,
        capped_month = date_trunc('month', now() at time zone 'utc')::date, updated_at = now()
-     where id = $1 and state = 'active'`,
-    [jobId],
+     where id = $1 and state = 'active' and cap_cents = $2
+     returning id`,
+    [jobId, capCentsSeen],
   );
+  return rows.length > 0;
 }
 
 /**
@@ -252,8 +266,8 @@ export async function pruneWakes(db: Db): Promise<number> {
 /** A job's changes by people, oldest first (slice 4.2). */
 export async function jobHistory(db: Db, jobId: string): Promise<JobDetail["history"]> {
   const rows = await db.query(
-    `select actor_id, actor_name, at, before, after from job_events
-     where job_id = $1 order by seq`,
+    `select * from (select actor_id, actor_name, at, before, after, seq from job_events
+       where job_id = $1 order by seq desc limit 100) latest order by seq`,
     [jobId],
   );
   return rows.map((r) => {
@@ -304,7 +318,8 @@ export async function editJob(
     let state: string = current.state;
     if (request.state === "paused") state = "paused";
     else if (request.state === "active") {
-      if (current.state === "capped" && !underCap) return { status: "still_capped", job: current };
+      // Never active at or over its cap, from paused or capped (from the review of 4.2).
+      if (current.state !== "active" && !underCap) return { status: "still_capped", job: current };
       state = "active";
     } else if (current.state === "capped" && request.capCents !== undefined && underCap) {
       // Raising a capped job's cap above its spend lets it wake again.

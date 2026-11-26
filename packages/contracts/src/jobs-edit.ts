@@ -3,9 +3,6 @@ import { jobSchema } from "./jobs.ts";
 
 // Changing a standing job (slice 4.2, decision 217): a signed-in person, on the version seen.
 
-const timestamp = z.iso.datetime({ offset: true });
-const person = z.strictObject({ actorId: z.string(), name: z.string().nullable() });
-
 /** Body of `PATCH /v1/jobs/:id`: what changes, on the version seen. */
 export const editJobRequestSchema = z
   .strictObject({
@@ -40,19 +37,3 @@ export const jobActionResultSchema = z.strictObject({
   job: jobSchema.optional(),
 });
 export type JobActionResult = z.infer<typeof jobActionResultSchema>;
-
-const jobFields = z.strictObject({
-  state: z.string(),
-  capCents: z.number(),
-  everyMinutes: z.number(),
-  goal: z.string().nullable(),
-});
-
-/** One change a person made to a job. */
-export const jobEventSchema = z.strictObject({
-  actor: person,
-  at: timestamp,
-  before: jobFields,
-  after: jobFields,
-});
-export type JobEvent = z.infer<typeof jobEventSchema>;
