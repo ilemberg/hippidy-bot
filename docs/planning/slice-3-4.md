@@ -1,6 +1,6 @@
 # Slice 3.4: daily briefs by direct message
 
-Status: **planned 2026-11-26 (decision 212).** The wave is in `wave-3.md`.
+Status: **built 2026-11-26, not merged (decisions 212 and 213).** The wave is in `wave-3.md`.
 
 **Demo:** at about 9:00 on a weekday in her own time zone, Ada gets one direct message from the
 bot: two decisions were proposed in `search` yesterday, one waiting for her; a pull request
@@ -30,9 +30,10 @@ dealt with does not hear from it.
 On weekdays, the first reconcile after 9:00 in the person's Slack time zone (read with
 `users.info`, kept, and read again after a week), and before noon there: a brief missed by
 noon is not sent that day. One brief a day at most (rule 13); one row per person and local day,
-written before the message is sent, so a retried run sends it once. A send that fails is tried
-again on the next runs, three times at most. At most ten briefs a reconcile run, so it stays
-short. No time zone known: UTC.
+taken by one run only before it is sent, so overlapping runs send it once (213). A send that
+fails is tried again on the next runs, three times at most. At most ten briefs a reconcile run,
+and no new send after 20 seconds, so it stays short. A time zone that cannot be read is asked
+again later; nobody gets a brief on a guessed clock (213). Slack has no zone for them: UTC.
 
 ## What is in it
 
@@ -49,8 +50,10 @@ brief or one after a weekend is not a wall), with no model and no Slack lookup:
 - **You are waiting on:** their own open waits, so they can end one that is done.
 
 Each section lists at most five lines and says how many more there are; each line links to its
-page in the web app (`WEB_BASE_URL`) or its thread. A brief with nothing in it is not sent
-(rule 13). It ends with "Reply stop briefs to stop these."
+page in the web app (`WEB_BASE_URL`) or its thread. A brief is sent only when something in it is
+new since the last one: what still waits rides along but never sends one alone (rule 13, 213).
+It is one Slack message, links to the whole brief in the web app, and ends with "Reply stop
+briefs to stop these."
 
 ## Stop and start
 

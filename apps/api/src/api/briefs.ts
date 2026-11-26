@@ -14,6 +14,7 @@ import {
   markBriefFailed,
   markBriefSent,
   setTimeZone,
+  takeBrief,
   type BriefPerson,
 } from "../store/briefs.ts";
 import type { Db } from "../store/db.ts";
@@ -36,8 +37,15 @@ export interface BriefDeps {
   deliverer: Deliverer | undefined;
   place: Place | undefined;
   webBaseUrl: string | undefined;
+  /** Decides conflicts recorded with nobody to decide them (209), so they are in its brief. */
+  fallback?: { actorId: string } | undefined;
   now?: () => Date;
+  /** Wall-clock time, for the run's time budget; replaced in tests. */
+  clock?: () => number;
 }
+
+/** A run stops starting sends after this long, so reconcile stays short. */
+export const BRIEF_RUN_BUDGET_MS = 20_000;
 
 /** The date, hour and weekday in a time zone; UTC when it is unknown or not one. */
 export function localTime(
@@ -105,46 +113,64 @@ export async function runBriefs(deps: BriefDeps, log: Logger): Promise<BriefRunR
   const now = deps.now?.() ?? new Date();
   const links = linksFor(deps.webBaseUrl);
   let zonesAsked = 0;
+  const clock = deps.clock ?? Date.now;
+  const started = clock();
   try {
     const people = (await briefPeople(deps.db, place)).filter((p) => !p.stopped);
     for (const person of people) {
       if (result.sent + result.failed >= BRIEFS_PER_RUN) break;
+      if (clock() - started > BRIEF_RUN_BUDGET_MS) break;
       let zone = person.timeZone;
       if (needsTimeZone(person, now) && deliverer.timeZone !== undefined) {
         if (zonesAsked >= TIME_ZONES_PER_RUN) continue;
         zonesAsked++;
-        zone = await askTimeZone(deps.db, deliverer, place, person, log);
+        const asked = await askTimeZone(deps.db, deliverer, place, person, log);
+        // Never read and not readable now: not sent on a guessed clock (from the review).
+        if (asked.kind === "failed" && person.timeZoneCheckedAt === null) continue;
+        zone = asked.kind === "read" ? (asked.zone ?? person.timeZone) : person.timeZone;
       }
       const local = localTime(now, zone);
       if (!isBriefTime(local)) continue;
       if (await briefExists(deps.db, place, person.actorId, local.date)) continue;
       const since = sinceFor(await lastBriefSent(deps.db, place, person.actorId), now);
-      const brief = await buildBrief(deps.db, place, person.actorId, since, now, links);
-      // Written before it is sent, so a retried run sends it once.
+      const built = await buildBrief(
+        deps.db,
+        place,
+        person.actorId,
+        since,
+        now,
+        links,
+        deps.fallback,
+      );
       const row = await claimBrief(
         deps.db,
         place,
         person.actorId,
         local.date,
-        brief.sections.length === 0 ? null : briefText(brief),
+        built.fresh ? briefText(built.brief, deps.webBaseUrl) : null,
       );
       if (row.status === "empty") {
         result.empty++;
         continue;
       }
-      if (row.status !== "pending" || row.text === null) continue;
+      // Only one run gets to send it, and only while the person still wants briefs.
+      const text = await takeBrief(deps.db, row.id);
+      if (text === undefined) continue;
       try {
         await deliverer.direct(
-          { workspaceId: place.workspaceId, userId: person.actorId, text: row.text },
+          { workspaceId: place.workspaceId, userId: person.actorId, text },
           `brief:${row.id}`,
         );
-        await markBriefSent(deps.db, row.id);
-        result.sent++;
       } catch (error) {
         result.failed++;
         log.warn("brief.send_failed", { briefId: row.id, attempts: row.attempts + 1, error });
         await markBriefFailed(deps.db, row.id, String(error));
+        continue;
       }
+      // Sent: marked so, and never sent again, even if marking it fails (it stays `sending`
+      // until it is stale, and is then tried again: a duplicate only if the database fails).
+      await markBriefSent(deps.db, row.id);
+      result.sent++;
     }
   } catch (error) {
     log.error("brief.run_failed", { error });
@@ -160,24 +186,26 @@ function needsTimeZone(person: BriefPerson, now: Date): boolean {
   );
 }
 
+/**
+ * Asks the source for a person's time zone. A failure is not kept: it is asked again on a
+ * later run, rather than the person getting briefs on UTC for a week (from the review).
+ */
 async function askTimeZone(
   db: Db,
   deliverer: Deliverer,
   place: Place,
   person: BriefPerson,
   log: Logger,
-): Promise<string | null> {
+): Promise<{ kind: "read"; zone: string | null } | { kind: "failed" }> {
   try {
     const zone =
       (await deliverer.timeZone?.({ workspaceId: place.workspaceId, userId: person.actorId })) ??
       null;
     await setTimeZone(db, place, person.actorId, zone);
-    return zone ?? person.timeZone;
+    return { kind: "read", zone };
   } catch (error) {
     log.warn("brief.time_zone_failed", { actorId: person.actorId, error });
-    // Asked again next week, not every minute.
-    await setTimeZone(db, place, person.actorId, null);
-    return person.timeZone;
+    return { kind: "failed" };
   }
 }
 
@@ -188,6 +216,7 @@ export async function myBrief(
   actorId: string,
   webBaseUrl: string | undefined,
   now = new Date(),
+  fallback?: { actorId: string },
 ): Promise<MyBrief> {
   const person = await briefPerson(db, place, actorId);
   const since = sinceFor(person.lastSentAt, now);
@@ -195,6 +224,6 @@ export async function myBrief(
     on: !person.stopped,
     timeZone: person.timeZone,
     lastSentAt: person.lastSentAt?.toISOString() ?? null,
-    brief: await buildBrief(db, place, actorId, since, now, linksFor(webBaseUrl)),
+    brief: (await buildBrief(db, place, actorId, since, now, linksFor(webBaseUrl), fallback)).brief,
   };
 }

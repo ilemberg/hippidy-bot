@@ -22,8 +22,9 @@ create table public.briefs (
   actor_id text not null,
   -- The day in the person's time zone it is for: one brief a day at most.
   local_date date not null,
-  -- `empty`: nothing new, nothing sent. `abandoned`: three sends failed.
-  status text not null check (status in ('empty', 'pending', 'sent', 'abandoned')),
+  -- `empty`: nothing new, nothing sent. `sending`: one run took it to send (only one may).
+  -- `abandoned`: three sends failed.
+  status text not null check (status in ('empty', 'pending', 'sending', 'sent', 'abandoned')),
   text text check (text is null or char_length(text) <= 20000),
   attempts integer not null default 0 check (attempts >= 0),
   last_error text check (last_error is null or char_length(last_error) <= 500),
@@ -32,6 +33,10 @@ create table public.briefs (
   updated_at timestamptz not null default now(),
   unique (source, workspace_id, actor_id, local_date)
 );
+
+-- Who has written to the bot, read each minute to find who may get a brief.
+create index if not exists inbound_messages_people_idx
+  on public.inbound_messages (source, workspace_id, actor_id);
 
 create index briefs_person_idx on public.briefs (source, workspace_id, actor_id, sent_at desc);
 

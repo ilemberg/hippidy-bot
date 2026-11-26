@@ -116,7 +116,7 @@ describe("what a brief says", () => {
     });
     expect(area).toBeDefined();
 
-    const brief = await buildBrief(
+    const { brief, fresh } = await buildBrief(
       db,
       place,
       "U2",
@@ -124,23 +124,44 @@ describe("what a brief says", () => {
       new Date(),
       linksFor("https://web.example"),
     );
+    expect(fresh).toBe(true);
     expect(brief.sections.map((s) => [s.kind, s.lines.map((l) => l.text)])).toEqual([
       ["waiting_on_you", ["Grace is waiting on you: review the ranking (under an hour)"]],
       ["to_decide", ["Conflict 1: Vectors or full-text?"]],
-      ["your_areas", ["You no longer own billing (changed by Mallory)"]],
+      // Areas someone else made theirs count too, from when they were created (from the review).
+      [
+        "your_areas",
+        [
+          "You now own search (set by UMAKER)",
+          "You now own billing (set by UMAKER)",
+          "You no longer own billing (changed by Mallory)",
+        ],
+      ],
       ["you_wait_on", ["U3: the spec (under an hour)"]],
     ]);
     expect(brief.sections[1]?.lines[0]?.href).toBe("https://web.example/conflicts/1");
 
     const nothing = await buildBrief(db, place, "U7", new Date(), new Date(), linksFor(undefined));
-    expect(nothing.sections).toEqual([]);
+    expect(nothing.brief.sections).toEqual([]);
+    expect(nothing.fresh).toBe(false);
   });
 
   it("shows five lines a section and counts the rest", async () => {
     for (let i = 0; i < 7; i++) await waitOn("U1", "U2", `thing ${String(i)}`);
-    const brief = await buildBrief(db, place, "U2", new Date(0), new Date(), linksFor(undefined));
+    const { brief } = await buildBrief(
+      db,
+      place,
+      "U2",
+      new Date(0),
+      new Date(),
+      linksFor(undefined),
+    );
     expect(brief.sections[0]).toMatchObject({ kind: "waiting_on_you", more: 2 });
     expect(brief.sections[0]?.lines).toHaveLength(5);
+    // Past the twenty read, the count is still right.
+    for (let i = 0; i < 30; i++) await waitOn("U1", "U2", `more ${String(i)}`);
+    const many = await buildBrief(db, place, "U2", new Date(0), new Date(), linksFor(undefined));
+    expect(many.brief.sections[0]?.more).toBe(32);
   });
 });
 
@@ -204,6 +225,110 @@ describe("sending briefs from reconcile", () => {
     ).toBe(BRIEFS_PER_RUN);
     const none = await runBriefs({ ...deps(slack), deliverer: new RecordingDeliverer() }, log);
     expect(none).toEqual({ sent: 0, empty: 0, failed: 0 });
+  });
+});
+
+describe("what the review of 3.4 found", () => {
+  function deps(slack: FakeDirect, now = monday): BriefDeps {
+    return { db, deliverer: slack, place, webBaseUrl: "https://web.example", now: () => now };
+  }
+
+  it("sends a brief once when two runs overlap", async () => {
+    await waitOn("U1", "U2", "review the ranking");
+    const slack = new FakeDirect();
+    slack.zones = { U2: "America/New_York" };
+    await Promise.all([runBriefs(deps(slack), log), runBriefs(deps(slack), log)]);
+    expect(slack.sent.map((m) => m.userId)).toEqual(["U2"]);
+    const [row] = await db.query(`select status, attempts from briefs where actor_id = 'U2'`);
+    expect(row).toEqual({ status: "sent", attempts: 1 });
+  });
+
+  it("sends nothing when only standing items are left: nothing is new", async () => {
+    await waitOn("U1", "U2", "review the ranking");
+    await db.query(`update waits set created_at = now() - interval '10 days'`);
+    const slack = new FakeDirect();
+    slack.zones = { U2: "America/New_York" };
+    expect(await runBriefs(deps(slack), log)).toEqual({ sent: 0, empty: 1, failed: 0 });
+    // A new item brings the standing one along.
+    await waitOn("U3", "U2", "the spec");
+    await db.query(`delete from briefs`);
+    await runBriefs(deps(slack), log);
+    expect(slack.sent[0]?.text).toContain("review the ranking");
+    expect(slack.sent[0]?.text).toContain("the spec");
+  });
+
+  it("does not send on a guessed clock when the time zone could not be read", async () => {
+    await waitOn("U1", "U2", "review the ranking");
+    const slack = new FakeDirect();
+    slack.timeZone = () => Promise.reject(new Error("ratelimited"));
+    await runBriefs({ ...deps(slack), now: () => new Date("2026-11-23T09:30:00Z") }, log);
+    expect(slack.sent).toEqual([]);
+    const people = await db.query(`select time_zone_checked_at from brief_people`);
+    expect(people).toEqual([]);
+  });
+
+  it("keeps what people and the model wrote from making links or formatting", async () => {
+    await waitOn("U1", "U2", "[Approve payroll](https://evil.example/login) `x` *y*");
+    const slack = new FakeDirect();
+    slack.zones = { U2: "America/New_York" };
+    await runBriefs({ ...deps(slack), webBaseUrl: undefined }, log);
+    const text = slack.sent[0]?.text ?? "";
+    expect(text).toContain("Approve payrollhttps://evil.example/login x y");
+    expect(text).not.toContain("](https://evil");
+  });
+
+  it("puts conflicts with nobody to decide them in the fallback's brief", async () => {
+    await recordConflict(db, {
+      place,
+      kind: "raised",
+      summary: "Nobody owns this",
+      conversationId: null,
+      channelId: null,
+      threadId: null,
+      area: null,
+      decisionIds: [],
+      proposalId: null,
+      positions: [],
+      deciders: [],
+    });
+    const forOwner = await buildBrief(
+      db,
+      place,
+      "UOWNER",
+      new Date(0),
+      new Date(),
+      linksFor(undefined),
+      {
+        actorId: "UOWNER",
+      },
+    );
+    expect(forOwner.brief.sections.map((s) => s.kind)).toEqual(["to_decide"]);
+    const forOther = await buildBrief(
+      db,
+      place,
+      "U2",
+      new Date(0),
+      new Date(),
+      linksFor(undefined),
+      {
+        actorId: "UOWNER",
+      },
+    );
+    expect(forOther.brief.sections).toEqual([]);
+  });
+
+  it("does not send to someone who said stop after the run began", async () => {
+    await waitOn("U1", "U2", "review the ranking");
+    const slack = new FakeDirect();
+    slack.zones = { U2: "America/New_York" };
+    const original = slack.timeZone.bind(slack);
+    slack.timeZone = async (p) => {
+      const zone = await original(p);
+      await setBriefs(db, place, "U2", false);
+      return zone;
+    };
+    await runBriefs(deps(slack), log);
+    expect(slack.sent).toEqual([]);
   });
 });
 

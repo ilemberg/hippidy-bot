@@ -224,7 +224,11 @@ export function slackPosterFromEnv(env: Env, log: Logger): () => SlackPoster {
     if (client === undefined) {
       const config = readSlackConfig(env, log);
       if (config === undefined) throw new Error("Slack is not configured");
-      client = new webApi.WebClient(config.botToken, { retryConfig: { retries: 1 } });
+      // A slow Slack must not hold reconcile, which sends briefs (from the review of 3.4).
+      client = new webApi.WebClient(config.botToken, {
+        retryConfig: { retries: 1 },
+        timeout: 10_000,
+      });
     }
     const web = client;
     return {

@@ -919,7 +919,16 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
     const at = storage(c);
     if (at === undefined)
       return errorResponse(c, 503, "not_configured", "Storage is not configured");
-    return c.json(await myBrief(at.db, at.place, caller.actorId, deps.webBaseUrl));
+    return c.json(
+      await myBrief(
+        at.db,
+        at.place,
+        caller.actorId,
+        deps.webBaseUrl,
+        new Date(),
+        deps.conversations?.fallback,
+      ),
+    );
   });
 
   api.post("/v1/briefs/me", people, limitBody, async (c) => {
@@ -1087,6 +1096,7 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
             ? undefined
             : { source: "slack", workspaceId: deps.config.workspaceId },
         webBaseUrl: deps.webBaseUrl,
+        fallback: deps.conversations.fallback,
       },
       c.var.log.child({ area: "briefs" }),
     );
