@@ -74,7 +74,11 @@ Planned in detail in `slice-4-1.md` (decision 215).
 - **Posted (G20)** as a comment review on the pull request with a token that can only comment,
   linked from the change's thread. One review per head commit; a new push gets a new one.
 
-## Slice 4.4 (outline)
+## Slice 4.4
+
+Planned in detail in `slice-4-4.md` (decision 221).
+
+### The outline it came from
 
 - A goal job owns one feature: its tickets (Jira or the built-in tracker), its owner and its
   limit on pull requests waiting for review (two unless said).
