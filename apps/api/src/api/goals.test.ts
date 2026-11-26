@@ -663,6 +663,34 @@ describe("a goal's wakes", () => {
     expect(await s.wake()).toMatchObject({ outcome: "said", summary: "posted the brief for T-2" });
   });
 
+  it("a ticket removed while its brief is written is not posted; added again, the brief is", async () => {
+    const s = await setup();
+    await s.create({ tickets: ["T-1", "T-2"] });
+    const jobId = await goalJobId();
+    const removing: GoalDeps = {
+      ...s.goalDeps(),
+      writer: {
+        model: "claude-opus-5-5",
+        async write(input) {
+          // A person removes T-1 while the model writes its brief.
+          await db.query(`delete from goal_tickets where key = $1`, [input.ticket.key]);
+          return s.writer.write(input);
+        },
+      },
+    };
+    expect(await runGoal(removing, db, place, await goalJob(), log)).toEqual({
+      outcome: "silent",
+      summary: "T-1 changed while this wake ran",
+      costMicros: 40_000,
+    });
+    expect(s.deliverer.delivered.filter((d) => d.kind === "brief")).toHaveLength(0);
+    expect(await s.edit(jobId, { version: 1, tickets: ["T-1", "T-2"] })).toMatchObject({
+      status: "edited",
+    });
+    expect(await s.wake()).toMatchObject({ outcome: "said", summary: "posted the brief for T-1" });
+    expect(s.writer.calls).toHaveLength(1);
+  });
+
   it("a ticket done in the tracker already is not briefed, and the next is taken", async () => {
     const s = await setup();
     await s.create({ tickets: ["T-1", "T-2"] });

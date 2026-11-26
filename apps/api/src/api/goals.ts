@@ -365,12 +365,13 @@ async function briefNext(
         doneWhen: earlier.doneWhen,
         links: earlier.links,
       };
-      await post(db, conversation, ticket, {
+      const posted = await post(db, conversation, ticket, {
         changeId: earlier.changeId,
         briefId: earlier.briefId,
         title: ticket.title,
         text: briefForThread(brief, earlier.startReason ?? goalStartReason(job.name, ticket.key)),
       });
+      if (!posted) return done("silent", `${ticket.key} changed while this wake ran`);
       said.queued++;
       said.events.push(`posted the brief for ${ticket.key}`);
       return done("said", "");
@@ -480,12 +481,16 @@ async function briefNext(
         error: `the brief was not kept (${created.kind})`,
       };
     }
-    await post(db, conversation, ticket, {
+    const posted = await post(db, conversation, ticket, {
       changeId: created.changeId,
       briefId: created.briefId,
       title: task.title,
       text: briefForThread(brief, reason),
     });
+    if (!posted) {
+      log.warn("goal.ticket_changed", { ticket: ticket.key });
+      return done("silent", `${ticket.key} changed while this wake ran`, cost);
+    }
     said.queued++;
     said.events.push(`posted the brief for ${ticket.key}`);
     log.info("goal.briefed", { ticket: ticket.key, costMicros: cost });
@@ -500,8 +505,10 @@ async function post(
   conversation: Conversation,
   ticket: StoredTicket,
   brief: { changeId: string; briefId: string; title: string; text: string },
-): Promise<void> {
-  await markTicketBriefed(
+): Promise<boolean> {
+  // A person removed the ticket (or it was settled) since this wake read it: nothing is
+  // posted, and the brief kept under its key is posted if the ticket is pending again.
+  const marked = await markTicketBriefed(
     db,
     ticket.id,
     { changeId: brief.changeId, briefId: brief.briefId, title: brief.title },
@@ -517,5 +524,6 @@ async function post(
       },
     },
   );
-  ticket.state = "briefed";
+  if (marked) ticket.state = "briefed";
+  return marked;
 }

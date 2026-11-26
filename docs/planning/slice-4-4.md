@@ -1,7 +1,7 @@
 # Slice 4.4: a feature goal
 
-Status: **planned 2026-11-26 (decision 221).** The wave is in `wave-4.md`; jobs in `slice-4-1.md`
-and `slice-4-2.md`; the checker in `slice-4-3.md`.
+Status: **built 2026-11-26, not merged (decision 221).** The wave is in `wave-4.md`; jobs in
+`slice-4-1.md` and `slice-4-2.md`; the checker in `slice-4-3.md`.
 
 **Demo:** Grace mentions the bot in a thread about the export feature, then opens the web app,
 pastes the thread's link into "New goal", and lists the feature's tickets: T-4, T-5, T-6, T-7,
@@ -81,6 +81,52 @@ its pull request, and each wake, most of them silent.
 ## By hand, the owner's
 
 - Nothing new. Before rolling the API back past this slice, pause or delete the goal jobs.
+
+## As built
+
+What the build decided that the plan did not say, or decided differently:
+
+- **Settling reads the pull request first.** A merged or closed pull request settles its ticket
+  even when its change was stopped: a stop said in the thread stops every change of the thread,
+  finished ones too, and must not hide a merge. A change with no pull request, or one still
+  open, that was stopped is `stopped`.
+- **The thread link is read in the web app.** `https://x.slack.com/archives/C123ABC/p1700000000000200`
+  is channel `C123ABC`, thread `1700000000.000200`; a link to a reply names its thread in
+  `thread_ts`. The API takes the channel and thread ids, as it stays channel-agnostic.
+- **Names.** A goal's name is lowercase letters, digits and hyphens, since it is in its page's
+  address. `new-goal` and the built-in jobs' names are refused, as taken.
+- **Changing tickets** sends the whole list in order. A ticket left out that has had a brief is
+  refused, named (`briefed_tickets`); tickets `done_elsewhere` or `skipped` may be removed. The
+  version is the job's, shared with `PATCH /v1/jobs/:jobId`. Making the goal is the first entry
+  of its history (nothing before, what it was made with after). Adding a ticket lets the goal
+  say again, later, that every ticket is settled.
+- **Refusals come back as statuses, not errors** (`no_thread`, `thread_taken`, `name_taken`,
+  `unknown_tickets`, `tracker_unavailable`, `briefed_tickets`, `changed`), so the web app's form
+  can say each; the tickets not found are named.
+- **A ticket's title and link** are kept when it is added (its check in the tracker) and its
+  title refreshed when it is briefed, so the model is given the other tickets' titles without a
+  call per ticket. A Jira ticket's description is not read (3.3 reads only its key, title,
+  status and assignee), so its brief is written from its title; a built-in task's description
+  is given. The link added to the brief is the Jira issue's, or the built-in task's page in the
+  web app (`WEB_BASE_URL`).
+- **The start reason** reads "read ticket T-4 for the export goal", so the brief's line says "I
+  read ticket T-4 for the export goal before writing this, so someone needs to press Start".
+- **The brief writer** is `agent/brief-writer.ts`: Opus 5.5, medium effort, server-side
+  fallbacks, at most 6,000 tokens and 60 seconds, its own client with no retries. Each part of
+  the brief is cut to fit 2.1's limits (title 200 characters, the others 1,100 each). A call
+  that fails after it was sent is counted at an estimate of its input, as the checker's (220).
+  The cost code the checker and the goal share is `agent/usage.ts`.
+- **Who marks a task done:** the built-in task's history keeps actor `job:<name>`, named "the
+  <name> goal".
+- **A ticket the tracker no longer has** is `skipped`, said in the thread. A tracker that does
+  not answer fails the wake and counts nothing against the ticket. A wake looks up at most five
+  tickets while looking for one to brief.
+- **A brief written but not marked** (the wake died, or a person removed the ticket while the
+  model wrote) is kept under its key: the next wake that takes that ticket posts it without
+  another model call.
+- **What a wake says in its summary:** each event (`T-4 merged`, `posted the brief for T-6`,
+  `T-3 done elsewhere`), or why it was silent (`2 of 2 changes open; waiting`), and pull
+  requests GitHub did not answer for, which are read again on the next wake.
 
 ## Done when
 
