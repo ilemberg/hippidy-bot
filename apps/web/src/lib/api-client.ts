@@ -8,6 +8,7 @@ import {
   decisionActionResultSchema,
   decisionDetailSchema,
   decisionListSchema,
+  goalActionResultSchema,
   jobActionResultSchema,
   jobDetailSchema,
   jobListSchema,
@@ -28,6 +29,7 @@ import {
   type Conflict,
   type ConflictDetail,
   type CreateAreaRequest,
+  type CreateGoalRequest,
   type CreateTaskRequest,
   type CreateWaitRequest,
   type Decision,
@@ -36,7 +38,9 @@ import {
   type DecisionStatus,
   type EditAreaRequest,
   type EditDecisionRequest,
+  type EditGoalRequest,
   type EditJobRequest,
+  type GoalActionResult,
   type EditTaskRequest,
   type JobActionResult,
   type JobDetail,
@@ -504,4 +508,24 @@ export function editJob(
 ): Promise<ApiResult<JobActionResult>> {
   const route = `/v1/jobs/${encodeURIComponent(jobId)}`;
   return apiSend(person, "PATCH", route, edit, jobActionResultSchema, deps);
+}
+
+/** `POST /v1/goals` as the person: a goal for a thread the bot is in, with its tickets (4.4). */
+export function createGoal(
+  person: Person,
+  goal: CreateGoalRequest,
+  deps: ApiClientDeps,
+): Promise<ApiResult<GoalActionResult>> {
+  return apiSend(person, "POST", "/v1/goals", goal, goalActionResultSchema, deps);
+}
+
+/** `PATCH /v1/goals/:jobId` as the person: its tickets or limit, on the version shown (4.4). */
+export function editGoal(
+  person: Person,
+  jobId: string,
+  edit: EditGoalRequest,
+  deps: ApiClientDeps,
+): Promise<ApiResult<GoalActionResult>> {
+  const route = `/v1/goals/${encodeURIComponent(jobId)}`;
+  return apiSend(person, "PATCH", route, edit, goalActionResultSchema, deps);
 }

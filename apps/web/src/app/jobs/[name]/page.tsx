@@ -1,7 +1,8 @@
-import type { JobDetail } from "@hippidy/contracts";
+import { MAX_GOAL_LIMIT, type Goal, type JobDetail } from "@hippidy/contracts";
 import { cookies } from "next/headers";
 import { SESSION_COOKIE } from "../../../lib/cookies.ts";
 import { nameOf, when } from "../../../lib/decisions.ts";
+import { goalEditHref, openText, ticketRows, ticketsFieldValue } from "../../../lib/goals.ts";
 import {
   capFieldValue,
   centsText,
@@ -23,7 +24,8 @@ import { serverDeps } from "../../../lib/server.ts";
 export const dynamic = "force-dynamic";
 
 // One job (slices 4.1 and 4.2): its schedule, state and spend, the form that pauses, resumes or
-// changes it, its latest wakes, and the changes people made to it.
+// changes it, its latest wakes, and the changes people made to it. A goal (4.4) shows its
+// tickets, each with its change and pull request, and the form that changes them.
 
 const one = (value: string | string[] | undefined) =>
   typeof value === "string" ? value : undefined;
@@ -43,6 +45,7 @@ export default async function JobPage({
       name,
       done: one(query.done),
       error: one(query.error),
+      tickets: one(query.tickets),
     },
     serverDeps(),
   );
@@ -142,6 +145,9 @@ function Detail({
         <dt>Owner</dt>
         <dd>{job.owner === null ? <span className="muted">None</span> : nameOf(job.owner)}</dd>
       </dl>
+      {detail.goal === null ? null : (
+        <GoalSection name={job.name} version={job.version} goal={detail.goal} />
+      )}
       {job.state === "capped" ? (
         <p className="notice">
           It reached its cap of {centsText(job.capCents)} this month and stopped itself. Raise its
@@ -245,6 +251,79 @@ function Detail({
           ))}
         </ul>
       )}
+    </>
+  );
+}
+
+function GoalSection({ name, version, goal }: { name: string; version: number; goal: Goal }) {
+  const rows = ticketRows(goal);
+  return (
+    <>
+      <h3>Tickets</h3>
+      <p className="muted">
+        In channel {goal.channelId}, thread {goal.threadId}. Changes open: {openText(goal)}.
+        {goal.provider === "jira"
+          ? " Jira tickets are only read: when a pull request merges, close its ticket in Jira."
+          : " When a pull request merges, its task is marked done."}
+      </p>
+      <div className="table">
+        <table className="wakes">
+          <thead>
+            <tr>
+              <th scope="col">Ticket</th>
+              <th scope="col">Where it is</th>
+              <th scope="col">Change</th>
+              <th scope="col">Pull request</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.key}>
+                <td>
+                  <a href={row.href}>{row.key}</a> {row.title}
+                </td>
+                <td className={`ticket-${row.state}`}>{row.label}</td>
+                <td>{row.change ?? <span className="muted">None</span>}</td>
+                <td>
+                  {row.pullRequest === null ? (
+                    <span className="muted">None</span>
+                  ) : (
+                    <a href={row.pullRequest.href}>{row.pullRequest.text}</a>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <section className="actions">
+        <h3>Change its tickets</h3>
+        <form method="post" action={goalEditHref(name)} className="edit">
+          <input type="hidden" name="version" value={version} />
+          <label>
+            Tickets, in order{" "}
+            <span className="muted">
+              (add, reorder, or remove one not yet briefed; one per line or separated by commas)
+            </span>
+            <textarea name="tickets" rows={6} defaultValue={ticketsFieldValue(goal)} required />
+          </label>
+          <label>
+            Limit on open changes <span className="muted">(1 to {MAX_GOAL_LIMIT})</span>
+            <input
+              name="limit"
+              type="number"
+              min={1}
+              max={MAX_GOAL_LIMIT}
+              step={1}
+              defaultValue={goal.limit}
+              required
+            />
+          </label>
+          <button className="button" type="submit">
+            Save tickets
+          </button>
+        </form>
+      </section>
     </>
   );
 }

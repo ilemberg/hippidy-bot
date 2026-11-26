@@ -53,8 +53,8 @@ export function jobNameFromPath(text: string): string | undefined {
   return name;
 }
 
-/** What an action did, as the page is told in its address. */
-export const jobDone = ["edited"] as const;
+/** What an action did, as the page is told in its address: a goal is made, or a job edited. */
+export const jobDone = ["edited", "created"] as const;
 export type JobDone = (typeof jobDone)[number];
 
 /** Why an action did nothing, as the page is told in its address. */
@@ -67,26 +67,56 @@ export const jobErrors = [
   "signed_out",
   "unavailable",
   "failed",
+  // A goal's (slice 4.4).
+  "goal_invalid",
+  "bad_link",
+  "bad_tickets",
+  "no_thread",
+  "thread_taken",
+  "name_taken",
+  "unknown_tickets",
+  "briefed_tickets",
+  "tracker_unavailable",
 ] as const;
 export type JobError = (typeof jobErrors)[number];
 
-export type JobNotice = { kind: "done"; done: JobDone } | { kind: "error"; error: JobError };
+export type JobNotice =
+  | { kind: "done"; done: JobDone }
+  /** `tickets`: the tickets the error is about, when it names some. */
+  | { kind: "error"; error: JobError; tickets?: string[] };
 
-/** The notice for `?done=` or `?error=`, if it is one this app sends. */
+const TICKET_KEY = /^[A-Z][A-Z0-9]{0,19}-[1-9][0-9]{0,8}$/;
+
+/**
+ * The notice for `?done=` or `?error=`, if it is one this app sends, with the tickets
+ * `?tickets=` names (only real keys, at most 30).
+ */
 export function jobNotice(
   done: string | undefined,
   error: string | undefined,
+  tickets?: string,
 ): JobNotice | undefined {
   const isDone = jobDone.find((value) => value === done);
   if (isDone !== undefined) return { kind: "done", done: isDone };
   const isError = jobErrors.find((value) => value === error);
-  return isError === undefined ? undefined : { kind: "error", error: isError };
+  if (isError === undefined) return undefined;
+  const keys = (tickets ?? "")
+    .split(",")
+    .filter((key) => TICKET_KEY.test(key))
+    .slice(0, 30);
+  return keys.length === 0
+    ? { kind: "error", error: isError }
+    : { kind: "error", error: isError, tickets: keys };
 }
 
 /** The sentence a notice from an action shows. */
 export function jobNoticeText(notice: JobNotice): string {
-  // The only thing an action does is save an edit.
-  if (notice.kind === "done") return "Saved.";
+  if (notice.kind === "done") {
+    return notice.done === "created"
+      ? "Goal made. It wakes within a few minutes and posts its first brief in its thread."
+      : "Saved.";
+  }
+  const named = notice.tickets === undefined ? "" : `: ${notice.tickets.join(", ")}`;
   switch (notice.error) {
     case "invalid":
       return "Not saved: a cap is $0.00 to $100.00 a month, an interval 1 to 1,440 minutes, and a goal at most 2,000 characters.";
@@ -104,6 +134,24 @@ export function jobNoticeText(notice: JobNotice): string {
       return "Sign-in is not set up yet.";
     case "failed":
       return "The API did not answer in time. Reload the page to see whether it was saved, then try again if not.";
+    case "goal_invalid":
+      return "Not saved: a name is lowercase letters, digits and hyphens; the goal 1 to 2,000 characters; the limit 1 to 5; a cap $0.00 to $100.00 a month; an interval 1 to 1,440 minutes.";
+    case "bad_link":
+      return "Not saved: paste the link of a Slack thread (in Slack: More actions, Copy link).";
+    case "bad_tickets":
+      return "Not saved: list 1 to 30 ticket keys, like T-4 or SCRUM-8, one per line or separated by commas.";
+    case "no_thread":
+      return "Not saved: the bot is not in that thread yet. Mention the bot there first, then try again.";
+    case "thread_taken":
+      return "Not saved: that thread has a goal already. One goal per thread.";
+    case "name_taken":
+      return "Not saved: a job has that name already. Choose another.";
+    case "unknown_tickets":
+      return `Not saved: the tracker has no such ticket${named}.`;
+    case "briefed_tickets":
+      return `Not saved: a ticket already briefed stays in the goal${named}.`;
+    case "tracker_unavailable":
+      return "Not saved: the tracker did not answer, so the tickets could not be checked. Try again later.";
   }
 }
 
@@ -127,7 +175,13 @@ export type JobView =
       readAt: string;
     };
 
-function clientDeps(person: Person, config: WebConfig, deps: HomeDeps, now: Date): ApiClientDeps {
+/** The API client's needs for one action, under a correlation id of its own. */
+export function clientDeps(
+  person: Person,
+  config: WebConfig,
+  deps: HomeDeps,
+  now: Date,
+): ApiClientDeps {
   const correlationId = randomUUID();
   return {
     fetch: deps.fetch,
@@ -160,13 +214,15 @@ export async function loadJob(
     name: string;
     done: string | undefined;
     error: string | undefined;
+    /** The tickets a goal's notice names (slice 4.4). */
+    tickets?: string | undefined;
   },
   deps: HomeDeps,
 ): Promise<JobView> {
   const config = deps.config;
   if (config === undefined) return { kind: "unconfigured" };
   const now = deps.now?.() ?? new Date();
-  const notice = jobNotice(input.done, input.error);
+  const notice = jobNotice(input.done, input.error, input.tickets);
   const person = await signedInPerson(input.sessionCookie, config, now);
   if (person === undefined) return { kind: "signed_out", notice };
   const name = jobNameFromPath(input.name);
@@ -440,6 +496,16 @@ function changeLine(who: string, key: string, before: unknown, after: unknown): 
         return `${who} changed the interval from ${everyText(before)} to ${everyText(after)}`;
       }
       break;
+    case "tickets":
+      if (Array.isArray(before) && Array.isArray(after)) {
+        return `${who} changed the tickets from ${before.join(", ")} to ${after.join(", ")}`;
+      }
+      break;
+    case "limit":
+      if (typeof before === "number" && typeof after === "number") {
+        return `${who} changed the limit on open changes from ${String(before)} to ${String(after)}`;
+      }
+      break;
     case "goal":
       if (typeof after === "string" && (before === null || before === undefined)) {
         return `${who} set the goal to ${shortQuote(after)}`;
@@ -453,12 +519,25 @@ function changeLine(who: string, key: string, before: unknown, after: unknown): 
   return `${who} changed its ${key}`;
 }
 
-const fieldOrder = ["state", "capCents", "everyMinutes", "goal"];
+const fieldOrder = ["state", "capCents", "everyMinutes", "goal", "tickets", "limit"];
 
-/** The history to show: who changed what, oldest first. */
+/** The history to show: who made it (a goal, 4.4) and who changed what, oldest first. */
 export function jobHistoryItems(detail: JobDetail): JobHistoryItem[] {
   return detail.history.map((event, index) => {
     const who = nameOf(event.actor);
+    // A goal's first event: nothing before it, what it was made with after.
+    if (Object.keys(event.before).length === 0 && Object.keys(event.after).length > 0) {
+      const tickets = event.after.tickets;
+      return {
+        key: `${index}:${event.at}`,
+        at: event.at,
+        lines: [
+          Array.isArray(tickets)
+            ? `${who} made it, with the tickets ${tickets.join(", ")}`
+            : `${who} made it`,
+        ],
+      };
+    }
     const keys = [...new Set([...Object.keys(event.before), ...Object.keys(event.after)])].sort(
       (a, b) => {
         const rank = (key: string) => {

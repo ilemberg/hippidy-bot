@@ -63,7 +63,8 @@ const styles = `
   .edit input[type="radio"] { display: inline; width: auto; margin: 0 0.5rem 0 0; }
   .job-capped, .outcome-failed { color: var(--danger); }
   .job-paused, .outcome-silent, .outcome-skipped { color: var(--muted); }
-  .outcome-said { color: var(--accent); }
+  .outcome-said, .ticket-merged { color: var(--accent); }
+  .ticket-closed, .ticket-stopped, .ticket-skipped, .ticket-done_elsewhere { color: var(--muted); }
   .table { overflow-x: auto; margin: 0.5rem 0 1rem; }
   .wakes { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
   .wakes th, .wakes td { text-align: left; vertical-align: top; padding: 0.4rem 0.5rem 0.4rem 0;

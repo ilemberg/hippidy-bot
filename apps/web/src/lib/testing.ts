@@ -13,6 +13,7 @@ import type {
   ConflictDetail,
   Decision,
   DecisionDetail,
+  Goal,
   Job,
   JobDetail,
   MyBrief,
@@ -389,6 +390,97 @@ export const jobDetail: JobDetail = {
       at: "2026-11-25T10:00:00.000Z",
       before: { state: "active", capCents: 3000, everyMinutes: 1, goal: job.goal },
       after: { state: "active", capCents: 4000, everyMinutes: 1, goal: job.goal },
+    },
+  ],
+};
+
+/** The export goal's job: Grace's, every 10 minutes, $10 a month (slice 4.4). */
+export const goalJob: Job = {
+  ...job,
+  id: "5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a",
+  name: "export",
+  kind: "goal",
+  goal: "Let people export their data.",
+  owner: { actorId: "U1", name: "Grace" },
+  everyMinutes: 10,
+  capCents: 1000,
+  spentMicrosThisMonth: 80_000,
+  version: 2,
+};
+
+/** Its thread and tickets: T-4 merged, T-5 briefed and started, T-6 and T-7 not yet. */
+export const goal: Goal = {
+  conversationId: "6f1c2b9e-1d2a-4c3b-9e8f-0a1b2c3d4e5f",
+  channelId: "C123ABC",
+  threadId: "1700000000.000200",
+  limit: 2,
+  open: 1,
+  provider: "builtin",
+  tickets: [
+    {
+      key: "T-4",
+      title: "Export button",
+      url: null,
+      state: "merged",
+      change: {
+        id: "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+        status: "started",
+        pullRequestUrl: "https://github.com/ilemberg/hippidy-bot/pull/12",
+      },
+      failures: 0,
+      settledAt: "2026-11-26T10:00:00.000Z",
+    },
+    {
+      key: "T-5",
+      title: "Export as CSV",
+      url: null,
+      state: "briefed",
+      change: {
+        id: "1b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e",
+        status: "started",
+        pullRequestUrl: null,
+      },
+      failures: 0,
+      settledAt: null,
+    },
+    {
+      key: "T-6",
+      title: "Export as PDF",
+      url: null,
+      state: "pending",
+      change: null,
+      failures: 2,
+      settledAt: null,
+    },
+    {
+      key: "T-7",
+      title: "Export history",
+      url: null,
+      state: "pending",
+      change: null,
+      failures: 0,
+      settledAt: null,
+    },
+  ],
+};
+
+/** `GET /v1/jobs/export`: the goal, made by Grace. */
+export const goalDetail: JobDetail = {
+  job: goalJob,
+  goal,
+  wakes: [],
+  history: [
+    {
+      actor: { actorId: "U1", name: "Grace" },
+      at: "2026-11-26T09:00:00.000Z",
+      before: {},
+      after: { goal: goalJob.goal, tickets: ["T-4", "T-5", "T-6"], limit: 2 },
+    },
+    {
+      actor: { actorId: "U2", name: "Ada" },
+      at: "2026-11-26T09:30:00.000Z",
+      before: { tickets: ["T-4", "T-5", "T-6"], limit: 2 },
+      after: { tickets: ["T-4", "T-5", "T-6", "T-7"], limit: 3 },
     },
   ],
 };
