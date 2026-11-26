@@ -962,10 +962,8 @@ describe("tasks and waits through postgres.js (slice 3.3)", () => {
     const place = { source: "slack" as const, workspaceId: "Ttasks" };
     const who = { ...place, actorId: "U1", name: "Grace" };
     const created = await createTask(db, who, { title: 'Rank "results" \u0000 well' });
-    expect(created.row).toMatchObject({
-      number: expect.any(Number),
-      title: 'Rank "results"  well',
-    });
+    expect(created.row?.title).toBe('Rank "results"  well');
+    expect(typeof created.row?.number).toBe("number");
     const id = created.row?.id ?? "";
     expect(await editTask(db, who, id, { version: 1, status: "done" })).toMatchObject({
       status: "edited",
@@ -991,8 +989,8 @@ describe("tasks and waits through postgres.js (slice 3.3)", () => {
     expect((await listWaits(db, place, { person: "U2", limit: 5 })).map((w) => w.id)).toEqual([
       wait.id,
     ]);
-    expect(
-      await endWait(db, { ...place, actorId: "U2", name: null }, { id: wait.id }),
-    ).toMatchObject({ status: "ended", wait: { status: "ended", endedAt: expect.any(String) } });
+    const ended = await endWait(db, { ...place, actorId: "U2", name: null }, { id: wait.id });
+    expect(ended).toMatchObject({ status: "ended", wait: { status: "ended" } });
+    expect(typeof ended.wait?.endedAt).toBe("string");
   });
 });
