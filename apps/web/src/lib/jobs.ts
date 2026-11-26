@@ -326,6 +326,7 @@ export async function handleJobEdit(
 export const jobKindLabel: Record<JobKind, string> = {
   capture: "Capture",
   briefs: "Briefs",
+  checker: "Checker",
 };
 
 export const jobStateLabel: Record<JobState, string> = {

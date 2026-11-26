@@ -135,6 +135,27 @@ export function readFallbackOwner(env: Env, log: Logger): { actorId: string } | 
   return { actorId: raw.trim() };
 }
 
+/**
+ * `GITHUB_REVIEW_TOKEN` (slice 4.3, decision 219): a fine-grained token that can only comment
+ * on this repository's pull requests, for the checker's reviews. Unset or bad: logged (never
+ * its value), and the checker wakes silent.
+ */
+export function readReviewToken(env: Env, log: Logger): string | undefined {
+  const raw = (env.GITHUB_REVIEW_TOKEN ?? "").trim();
+  if (raw === "") {
+    log.warn("config.github_review_token_missing", { variable: "GITHUB_REVIEW_TOKEN" });
+    return undefined;
+  }
+  if (!/^github_pat_\w+$/.test(raw)) {
+    log.error("config.github_review_token_invalid", {
+      variable: "GITHUB_REVIEW_TOKEN",
+      reason: "not a fine-grained GitHub token",
+    });
+    return undefined;
+  }
+  return raw;
+}
+
 /** Where tasks come from (slice 3.3, decision 210). */
 export type TaskConfig =
   | { kind: "builtin" }

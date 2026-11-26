@@ -6,8 +6,11 @@ import { z } from "zod";
 const timestamp = z.iso.datetime({ offset: true });
 const person = z.strictObject({ actorId: z.string(), name: z.string().nullable() });
 
-/** The kinds of job: capture (2.5) and briefs (3.4) first; the checker and goals come later. */
-export const jobKindSchema = z.enum(["capture", "briefs"]);
+/**
+ * The kinds of job: capture (2.5) and briefs (3.4) first, then the checker (4.3), which reviews
+ * pull requests; goals come later.
+ */
+export const jobKindSchema = z.enum(["capture", "briefs", "checker"]);
 export type JobKind = z.infer<typeof jobKindSchema>;
 
 /** `capped`: it reached its monthly cap and paused itself (rule 17 of `wave-4.md`). */

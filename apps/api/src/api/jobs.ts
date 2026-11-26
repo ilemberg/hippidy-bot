@@ -14,16 +14,21 @@ import {
 } from "../store/jobs.ts";
 import { runBriefs, type BriefDeps } from "./briefs.ts";
 import { runCapture, type CaptureDeps } from "./capture.ts";
+import { runChecker, type CheckerDeps } from "./checker.ts";
 
 // The scheduler (slice 4.1, decision 215), run from reconcile: makes the built-in jobs, takes
 // each due job once, checks its monthly cap, runs it and logs the wake, silent ones included
 // (rules 14 to 17 of `wave-4.md`). A job that throws never fails reconcile.
 
-/** What one wake did. */
+/**
+ * What one wake did. `failed` is for a wake that spent money before it failed (the checker's
+ * model call), so its cost still counts against the cap; a wake that throws is failed too.
+ */
 export interface WakeResult {
-  outcome: "said" | "silent";
+  outcome: "said" | "silent" | "failed";
   summary: string;
   costMicros: number;
+  error?: string | undefined;
 }
 
 /** What each kind needs; a kind whose needs are missing wakes silent, saying so. */
@@ -33,6 +38,8 @@ export interface JobDeps {
   fallback?: { actorId: string } | undefined;
   capture?: CaptureDeps | undefined;
   briefs?: Omit<BriefDeps, "db" | "place"> | undefined;
+  /** The checker's GitHub client, review token and reviewer (slice 4.3). */
+  checker?: CheckerDeps | undefined;
   now?: () => Date;
 }
 
@@ -92,6 +99,9 @@ const RUNNERS: Record<JobKind, Runner> = {
       costMicros: 0,
     };
   },
+  async checker(deps, _place, log) {
+    return runChecker(deps.checker, deps.db, log);
+  },
 };
 
 export interface JobsRunResult {
@@ -120,9 +130,11 @@ export async function runJobs(deps: JobDeps, log: Logger): Promise<JobsRunResult
   }
   let due: Job[];
   try {
-    await ensureBuiltinJobs(deps.db, place, deps.fallback, {
+    const unmade = await ensureBuiltinJobs(deps.db, place, deps.fallback, {
       capture: deps.capture === undefined ? undefined : deps.capture.dailyBudgetCents * 31,
     });
+    // Names only. A kind deployed before its migration (decision 86) is made on a later run.
+    if (unmade.length > 0) log.warn("jobs.builtin_failed", { jobs: unmade });
     await uncapForNewMonth(deps.db, place);
     // A wake whose process was killed is told apart from a silent one (from the review).
     await closeUnfinishedWakes(deps.db);
@@ -161,6 +173,10 @@ export async function runJobs(deps: JobDeps, log: Logger): Promise<JobsRunResult
       const wake = await RUNNERS[job.kind](deps, place, jobLog);
       await finishWake(deps.db, wakeId, wake);
       if (wake.outcome === "said") result.said++;
+      if (wake.outcome === "failed") {
+        result.failed++;
+        jobLog.warn("job.wake_failed", { error: wake.error ?? wake.summary });
+      }
     } catch (error) {
       result.failed++;
       jobLog.error("job.wake_failed", { error });

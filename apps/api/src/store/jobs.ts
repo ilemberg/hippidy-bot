@@ -1,4 +1,11 @@
-import type { EditJobRequest, Job, JobDetail, JobKind, JobWake } from "@hippidy/contracts";
+import {
+  jobKindSchema,
+  type EditJobRequest,
+  type Job,
+  type JobDetail,
+  type JobKind,
+  type JobWake,
+} from "@hippidy/contracts";
 import { z } from "zod";
 import type { Place } from "./areas.ts";
 import type { Db, Row } from "./db.ts";
@@ -14,6 +21,8 @@ export const BUILTIN_JOBS: readonly {
   kind: JobKind;
   goal: string;
   capCents: number;
+  /** How often it wakes, in minutes: every minute unless it says otherwise. */
+  everyMinutes?: number;
 }[] = [
   {
     name: "capture",
@@ -28,6 +37,15 @@ export const BUILTIN_JOBS: readonly {
     goal: "Send each person one brief on weekday mornings when something is new.",
     capCents: 100,
   },
+  {
+    // Slice 4.3 (decision 219): reviews each new head commit of the repository's open pull
+    // requests once, as a comment. Its $10 a month (rule 17).
+    name: "checker",
+    kind: "checker",
+    goal: "Review each new commit pushed to an open pull request once, as a comment; never approve.",
+    capCents: 1000,
+    everyMinutes: 2,
+  },
 ];
 
 const columns = `j.id, j.name, j.kind, j.goal, j.owner_actor_id, j.owner_name, j.every_minutes,
@@ -40,7 +58,7 @@ const columns = `j.id, j.name, j.kind, j.goal, j.owner_actor_id, j.owner_name, j
 const jobRow = z.object({
   id: z.string(),
   name: z.string(),
-  kind: z.enum(["capture", "briefs"]),
+  kind: jobKindSchema,
   goal: z.string().nullable(),
   owner_actor_id: z.string().nullable(),
   owner_name: z.string().nullable(),
@@ -71,34 +89,49 @@ function toJob(r: Row | undefined): Job {
   };
 }
 
-/** Makes the built-in jobs that are missing, owned by the fallback if there is one. */
+/**
+ * Makes the built-in jobs that are missing, owned by the fallback if there is one. Answers the
+ * names of those it could not make.
+ */
 export async function ensureBuiltinJobs(
   db: Db,
   place: Place,
   owner: { actorId: string } | undefined,
   caps: { capture?: number | undefined } = {},
-): Promise<void> {
+): Promise<string[]> {
+  const failed: string[] = [];
   for (const builtin of BUILTIN_JOBS) {
     // Capture's cap follows its daily budget for a 31-day month when the job is made.
     const job =
       builtin.kind === "capture" && caps.capture !== undefined
         ? { ...builtin, capCents: caps.capture }
         : builtin;
-    await db.query(
-      `insert into jobs (source, workspace_id, name, kind, goal, owner_actor_id, cap_cents)
-       values ($1, $2, $3, $4, $5, $6, $7)
-       on conflict (source, workspace_id, name) do nothing`,
-      [
-        place.source,
-        place.workspaceId,
-        job.name,
-        job.kind,
-        job.goal,
-        owner?.actorId ?? null,
-        job.capCents,
-      ],
-    );
+    // Each on its own: a kind the database does not take yet (code deployed before its
+    // migration, decision 86) must not keep the other jobs from running.
+    await db
+      .query(
+        `insert into jobs
+           (source, workspace_id, name, kind, goal, owner_actor_id, cap_cents, every_minutes)
+         values ($1, $2, $3, $4, $5, $6, $7, $8)
+         on conflict (source, workspace_id, name) do nothing`,
+        [
+          place.source,
+          place.workspaceId,
+          job.name,
+          job.kind,
+          job.goal,
+          owner?.actorId ?? null,
+          job.capCents,
+          job.everyMinutes ?? 1,
+        ],
+      )
+      // Typed: Vercel's check, without strict null checks, reads `() => undefined` as `any`.
+      .catch((): Row[] => {
+        failed.push(job.name);
+        return [];
+      });
   }
+  return failed;
 }
 
 /** The workspace's jobs, by name, with this month's spend. */

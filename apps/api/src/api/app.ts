@@ -76,6 +76,7 @@ import {
 import { requireServiceOrPerson, requireServiceToken } from "./auth.ts";
 import { startBriefByPerson, syncChange } from "./changes.ts";
 import type { CaptureDeps } from "./capture.ts";
+import type { CheckerServices } from "./checker.ts";
 import { namePullRequestAreas } from "./areas.ts";
 import { settleConflictByPerson } from "./conflicts.ts";
 import { myBrief } from "./briefs.ts";
@@ -136,6 +137,8 @@ export interface ApiDeps {
   status: StatusDeps;
   /** Capture from listened channels (slice 2.5). Undefined until storage and the agent are. */
   capture?: CaptureDeps | undefined;
+  /** The checker's GitHub client, review token and reviewer (slice 4.3). */
+  checker?: CheckerServices | undefined;
   /** Where tasks come from (slice 3.3). Built with storage, whether or not the agent is. */
   tasks?: TaskSource | undefined;
   /** The web app's origin, for the links in briefs (slice 3.4). */
@@ -1124,7 +1127,7 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
     if (result.checked > 0 || backfilled > 0) {
       c.var.log.info("reconcile.done", { ...result, backfilled });
     }
-    // Last, the standing jobs (slice 4.1): capture (2.5) and briefs (3.4) among them, after
+    // Last, the standing jobs (slice 4.1): capture (2.5), briefs (3.4) and the checker (4.3), after
     // every conversation has been let go, each wake logged, and never failing reconcile.
     const jobs = await runJobs(
       {
@@ -1140,6 +1143,11 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
           webBaseUrl: deps.webBaseUrl,
           fallback: deps.conversations.fallback,
         },
+        // The checker (slice 4.3) posts its line in a change's thread through the loop.
+        checker:
+          deps.checker === undefined
+            ? undefined
+            : { ...deps.checker, conversations: deps.conversations },
       },
       c.var.log.child({ area: "jobs" }),
     );

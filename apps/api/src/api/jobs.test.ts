@@ -46,12 +46,15 @@ async function wakes(name: string) {
 describe("the scheduler", () => {
   it("makes the built-in jobs, wakes each once when due, and logs silent wakes with why", async () => {
     const deps: JobDeps = { db, place, fallback: { actorId: "UOWNER" } };
-    expect(await runJobs(deps, log)).toEqual({ woke: 2, said: 0, failed: 0, skipped: 0 });
+    expect(await runJobs(deps, log)).toEqual({ woke: 3, said: 0, failed: 0, skipped: 0 });
     expect(await wakes("capture")).toEqual([
       { outcome: "silent", summary: "the agent is not configured", cost: 0 },
     ]);
     expect(await wakes("briefs")).toEqual([
       { outcome: "silent", summary: "Slack direct messages are not set up", cost: 0 },
+    ]);
+    expect(await wakes("checker")).toEqual([
+      { outcome: "silent", summary: "GitHub is not configured", cost: 0 },
     ]);
     const [owner] = await db.query(`select owner_actor_id from jobs where name = 'capture'`);
     expect(owner?.owner_actor_id).toBe("UOWNER");
@@ -60,7 +63,7 @@ describe("the scheduler", () => {
     // Overlapping runs once it is due again: each job wakes once.
     await db.query(`update jobs set last_wake_at = now() - interval '2 minutes'`);
     const both = await Promise.all([runJobs(deps, log), runJobs(deps, log)]);
-    expect(both.map((r) => r.woke).sort()).toEqual([0, 2]);
+    expect(both.map((r) => r.woke).sort()).toEqual([0, 3]);
   });
 
   it("does not wake a paused job", async () => {
@@ -148,7 +151,7 @@ describe("the scheduler", () => {
     await db.query(`alter table observed_threads rename to observed_threads_gone`);
     const result = await runJobs({ db, place, capture: broken }, log);
     await db.query(`alter table observed_threads_gone rename to observed_threads`);
-    expect(result.woke).toBe(2);
+    expect(result.woke).toBe(3);
     const [capture] = await wakes("capture");
     expect(capture?.outcome).toBe("failed");
   });
@@ -282,6 +285,7 @@ describe("the jobs routes", () => {
     ).toEqual([
       ["briefs", "briefs", "active", 100, 0],
       ["capture", "capture", "active", 3000, 0],
+      ["checker", "checker", "active", 1000, 0],
     ]);
     const detail = jobDetailSchema.parse(
       await (await app.request("/v1/jobs/Capture", { headers })).json(),
@@ -465,5 +469,25 @@ describe("what the review of 4.2 found", () => {
       });
       expect(res.status).toBe(400);
     }
+  });
+});
+
+describe("deploying a new kind before its migration (slice 4.3)", () => {
+  it("still runs the other jobs when one built-in job cannot be made, and names it", async () => {
+    await db.query(`alter table jobs drop constraint jobs_kind_check`);
+    await db.query(
+      `alter table jobs add constraint jobs_kind_check check (kind in ('capture', 'briefs'))`,
+    );
+    const { log: runLog, lines } = memoryLogger();
+    expect((await runJobs({ db, place }, runLog)).woke).toBe(2);
+    expect(lines.filter((line) => line.msg === "jobs.builtin_failed")).toEqual([
+      expect.objectContaining({ level: "warn", jobs: ["checker"] }),
+    ]);
+  });
+
+  it("logs nothing about built-in jobs when all are made", async () => {
+    const { log: runLog, lines } = memoryLogger();
+    await runJobs({ db, place }, runLog);
+    expect(lines.some((line) => line.msg === "jobs.builtin_failed")).toBe(false);
   });
 });
