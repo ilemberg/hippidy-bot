@@ -430,6 +430,8 @@ describe("schema", () => {
     "approvals",
     "area_events",
     "areas",
+    "brief_people",
+    "briefs",
     "capture_runs",
     "change_areas",
     "change_briefs",

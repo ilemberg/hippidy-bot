@@ -38,6 +38,7 @@ import { captureSpentSince } from "./capture.ts";
 import { areaHistory, createArea, editArea, nameAreasForChange } from "./areas.ts";
 import { actOnProposal, decisionHistory, recordDecision } from "./decisions.ts";
 import { createTask, editTask, listBuiltinTasks, taskHistory } from "./tasks.ts";
+import { runBriefs } from "../api/briefs.ts";
 import { endWait, listWaits, recordWait } from "./waits.ts";
 import { conflictDetail, listConflicts, recordConflict, settleConflict } from "./conflicts.ts";
 import { recordObservation, setListening } from "./listening.ts";
@@ -992,5 +993,46 @@ describe("tasks and waits through postgres.js (slice 3.3)", () => {
     const ended = await endWait(db, { ...place, actorId: "U2", name: null }, { id: wait.id });
     expect(ended).toMatchObject({ status: "ended", wait: { status: "ended" } });
     expect(typeof ended.wait?.endedAt).toBe("string");
+  });
+});
+
+describe("briefs through postgres.js (slice 3.4)", () => {
+  it("builds and sends a brief, reading JSON history and dates, once per local day", async () => {
+    const place = { source: "slack" as const, workspaceId: "Tbriefs" };
+    const who = { ...place, actorId: "U1", name: "Grace" };
+    const made = await createArea(db, who, { name: "brief area", ownerActorId: "U2" });
+    await editArea(db, who, made.area?.id ?? "", { version: 1, ownerActorId: "U3" });
+    await recordWait(db, {
+      place,
+      waiter: { actorId: "U1", name: "Grace" },
+      waitingOn: { actorId: "U3", name: null },
+      what: "a review",
+      taskKey: null,
+      conversationId: null,
+      recordedBy: { actorId: "U1", name: "Grace" },
+    });
+    const sent: string[] = [];
+    const deliverer = {
+      deliver: () => Promise.resolve(),
+      direct: (m: { userId: string }) => {
+        sent.push(m.userId);
+        return Promise.resolve();
+      },
+      timeZone: () => Promise.resolve("Europe/London"),
+    };
+    // Monday 10:30 in London: brief time. Only U3 qualifies (owns the area, is waited on).
+    const now = () => new Date("2026-11-23T10:30:00.000Z");
+    const log = memoryLogger().log;
+    expect(await runBriefs({ db, deliverer, place, webBaseUrl: undefined, now }, log)).toEqual({
+      sent: 1,
+      empty: 0,
+      failed: 0,
+    });
+    expect((await runBriefs({ db, deliverer, place, webBaseUrl: undefined, now }, log)).sent).toBe(
+      0,
+    );
+    expect(sent).toEqual(["U3"]);
+    const rows = await db.query(`select local_date::text as d, status from briefs`);
+    expect(rows).toEqual([{ d: "2026-11-23", status: "sent" }]);
   });
 });

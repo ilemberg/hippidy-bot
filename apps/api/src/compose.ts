@@ -15,6 +15,7 @@ import {
   readCaptureBudgetCents,
   readFallbackOwner,
   readTaskConfig,
+  readWebBaseUrl,
   type Env,
 } from "./config.ts";
 import { createTaskSource, type TaskSource } from "./tasks/provider.ts";
@@ -68,6 +69,7 @@ export function configureApp(app: Hono<ApiEnv>, { env, log, services }: AppDeps)
       verifyAgentWebhook: services?.verifyAgentWebhook ?? real.verifyAgentWebhook,
       status: services?.status ?? real.status,
       tasks: services?.conversations?.tasks ?? real.tasks,
+      webBaseUrl: readWebBaseUrl(env, log),
     }),
   );
 
