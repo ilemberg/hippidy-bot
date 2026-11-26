@@ -5,16 +5,18 @@ import {
   type Review,
   type ReviewResult,
 } from "../agent/reviewer.ts";
-import type { OpenPullRequest, PullRequests } from "../github/pulls.ts";
+import { DiffTooLargeError, type OpenPullRequest, type PullRequests } from "../github/pulls.ts";
 import type { Logger } from "../log.ts";
 import { enqueueDelivery, getConversation } from "../store/conversations.ts";
 import type { Db } from "../store/db.ts";
 import { searchDecisions } from "../store/decisions.ts";
 import {
+  abandonReview,
   changeOfPullRequest,
   claimReview,
   markReviewFailed,
   markReviewPosted,
+  saveWrittenReview,
   settledHeads,
   type ChangeOfPullRequest,
   type ReviewClaim,
@@ -45,6 +47,12 @@ export const DECISIONS_PER_REVIEW = 5;
 
 export const REVIEW_FOOTER = "Review by hippidy-bot's checker. It comments only; a person merges.";
 
+/** Most characters of a posted review, its footer included. */
+export const MAX_REVIEW_CHARACTERS = 60_000;
+
+/** Why a head GitHub sends no diff for is given up. */
+const TOO_LARGE = "too large to review";
+
 function plural(count: number, word: string): string {
   return `${String(count)} ${word}${count === 1 ? "" : "s"}`;
 }
@@ -54,23 +62,60 @@ function flat(text: string): string {
   return text.replace(/\s*[\r\n]+\s*/g, " ").trim();
 }
 
-/** The review as the Markdown body of a GitHub comment review. */
+/** Put after `@`, a zero-width joiner keeps GitHub from reading a mention. */
+const ZERO_WIDTH_JOINER = "‍";
+
+/** `[text](url)`, `![alt](url)` and `[text][ref]`, innermost first. */
+const LINK = /!?\[([^[\]]*)\](?:\([^()]*\)|\[[^[\]]*\])/g;
+
+/**
+ * Model text made safe for one line of a public comment: no mention reaches a person or team,
+ * no link or image is shown, no HTML is read. What is left of `[` is escaped, so no reference
+ * definition can make a link either.
+ */
+export function safeText(text: string): string {
+  let out = flat(text);
+  for (let before = ""; before !== out;) {
+    before = out;
+    out = out.replace(LINK, "$1");
+  }
+  return out
+    .replaceAll("<", "&lt;")
+    .replaceAll("[", "\\[")
+    .replaceAll("@", `@${ZERO_WIDTH_JOINER}`);
+}
+
+/** Model text inside a code span, where Markdown reads no link, HTML or mention. */
+function codeText(text: string): string {
+  return flat(text).replaceAll("`", "'").replaceAll("@", `@${ZERO_WIDTH_JOINER}`);
+}
+
+/** The review as the Markdown body of a GitHub comment review, at most 60,000 characters. */
 export function reviewBody(review: Review): string {
-  const parts = [review.summary.trim()];
+  const parts = [safeText(review.summary)];
   parts.push("", "**Concerns**", "");
   if (review.concerns.length === 0) parts.push("Nothing to add.");
   else {
     for (const concern of review.concerns) {
       const where =
         concern.line === null ? concern.file : `${concern.file}:${String(concern.line)}`;
-      parts.push(`- \`${flat(where).replaceAll("`", "'")}\` — ${flat(concern.why)}`);
+      parts.push(`- \`${codeText(where)}\` — ${safeText(concern.why)}`);
     }
   }
   parts.push("", "**Try by hand**", "");
   if (review.tryByHand.length === 0) parts.push("Nothing in particular.");
-  else parts.push(...review.tryByHand.map((step) => `- ${flat(step)}`));
-  parts.push("", "---", `_${REVIEW_FOOTER}_`);
-  return parts.join("\n");
+  else parts.push(...review.tryByHand.map((step) => `- ${safeText(step)}`));
+  // The footer is always kept: a later try finds the review on GitHub by it.
+  const footer = `\n\n---\n_${REVIEW_FOOTER}_`;
+  let content = parts.join("\n");
+  if (content.length + footer.length > MAX_REVIEW_CHARACTERS) {
+    const cut = "\n\n(The rest of the review was cut.)";
+    content = content.slice(0, MAX_REVIEW_CHARACTERS - footer.length - cut.length);
+    // Never half a character.
+    if (/[\uD800-\uDBFF]$/.test(content)) content = content.slice(0, -1);
+    content += cut;
+  }
+  return content + footer;
 }
 
 /** Words to find decisions near a pull request: its title and its files' names. */
@@ -153,27 +198,19 @@ interface ReadyDeps {
   conversations?: ConversationDeps | undefined;
 }
 
-/** The number of concerns in a review body `reviewBody` wrote. */
-export function concernsIn(body: string): number {
-  const start = body.indexOf("**Concerns**");
-  const end = body.indexOf("**Try by hand**");
-  if (start === -1 || end === -1) return 0;
-  return body
-    .slice(start, end)
-    .split("\n")
-    .filter((line) => line.startsWith("- ")).length;
-}
-
 /** Writes the review with one model call: its body, or the wake that ends without one. */
 async function write(
   deps: ReadyDeps,
   db: Db,
   input: { pull: OpenPullRequest; change: ChangeOfPullRequest | undefined; log: Logger },
-): Promise<{ kind: "written"; body: string; costMicros: number } | ReviewResult> {
+): Promise<{ kind: "written"; body: string; concerns: number; costMicros: number } | ReviewResult> {
   const { pull, change, log } = input;
   const diff = await deps.pulls.diff(pull.number);
+  // Only the public planning log (`docs/planning/decisions.md`): the review is posted on
+  // GitHub, so a decision made in a thread or found by listening never goes into it.
   const decisions = await searchDecisions(db, {
     query: decisionQuery(pull.title, diff.files),
+    origin: "import",
     limit: DECISIONS_PER_REVIEW,
     minShared: 2,
   }).catch((error: unknown): Decision[] => {
@@ -193,8 +230,31 @@ async function write(
   return {
     kind: "written",
     body: reviewBody(result.review),
+    concerns: result.review.concerns.length,
     costMicros: reviewCostMicros(result.usage),
   };
+}
+
+/** The link of this checker's review already on the head commit, if an earlier try posted it. */
+async function postedEarlier(pulls: PullRequests, pull: OpenPullRequest) {
+  const reviews = await pulls.listReviews(pull.number);
+  return reviews.find(
+    (posted) => posted.commitId === pull.headSha && posted.body.includes(REVIEW_FOOTER),
+  )?.url;
+}
+
+/** Queues the change thread's one line about the review, keyed so it posts once. */
+async function queueThreadLine(
+  db: Db,
+  input: { change: ChangeOfPullRequest; claimId: string; text: string },
+): Promise<void> {
+  const conversation = await getConversation(db, input.change.conversationId);
+  await enqueueDelivery(db, conversation.id, `checker:${input.claimId}`, "note", {
+    kind: "reply",
+    target: targetOf(conversation),
+    text: input.text,
+    mentions: [],
+  });
 }
 
 async function review(
@@ -209,40 +269,64 @@ async function review(
 ): Promise<WakeResult> {
   const { pull, change, claim, log } = input;
   const name = `#${String(pull.number)}`;
+  // What this wake spent, and the part of it not yet on the review's row.
   let cost = 0;
+  let unsaved = 0;
   try {
-    // A review an earlier try wrote but could not post is posted again, not paid for again.
+    // A review an earlier try wrote is posted, never written or paid for again.
     let body = claim.body;
+    let concerns = claim.concerns ?? 0;
     if (body === null) {
       const written = await write(deps, db, { pull, change, log });
       cost = written.kind === "written" ? written.costMicros : reviewCostMicros(written.usage);
-      if (written.kind !== "written") {
+      unsaved = cost;
+      if (written.kind === "failed") {
         const why = noReview(written);
         const status = await markReviewFailed(db, claim.id, { error: why, costMicros: cost });
+        unsaved = 0;
         log.warn("checker.no_review", { kind: written.kind, status });
-        if (written.kind === "failed") {
-          return {
-            outcome: "failed",
-            summary: `could not review ${name}`,
-            costMicros: cost,
-            error: why,
-          };
-        }
-        // A refusal or a cut-off is the model's answer, not a fault: silent, saying why.
+        return {
+          outcome: "failed",
+          summary: `could not review ${name}`,
+          costMicros: cost,
+          error: why,
+        };
+      }
+      if (written.kind !== "written") {
+        // A refusal or a cut-off is the model's answer, not a fault, and another try would
+        // meet it again: given up at once, silent, saying why.
+        const why = noReview(written);
+        await abandonReview(db, claim.id, { error: why, costMicros: cost });
+        unsaved = 0;
+        log.warn("checker.no_review", { kind: written.kind, status: "abandoned" });
         return { outcome: "silent", summary: `${name}: ${why}`, costMicros: cost };
       }
+      // Saved on its own before posting, so a try that dies after the call never pays again.
+      await saveWrittenReview(db, claim.id, {
+        body: written.body,
+        concerns: written.concerns,
+        costMicros: cost,
+      });
+      unsaved = 0;
       body = written.body;
+      concerns = written.concerns;
     }
-    let posted: { url: string };
+    let url: string;
     try {
-      posted = await deps.pulls.postReview(
-        pull.number,
-        { commitId: pull.headSha, body },
-        deps.reviewToken,
-      );
+      // An earlier try may have died, or timed out, after GitHub took its review.
+      const earlier = claim.body === null ? undefined : await postedEarlier(deps.pulls, pull);
+      url =
+        earlier ??
+        (
+          await deps.pulls.postReview(
+            pull.number,
+            { commitId: pull.headSha, body },
+            deps.reviewToken,
+          )
+        ).url;
     } catch (error) {
       const why = `could not post the review: ${error instanceof Error ? error.message : String(error)}`;
-      const status = await markReviewFailed(db, claim.id, { error: why, costMicros: cost, body });
+      const status = await markReviewFailed(db, claim.id, { error: why, costMicros: 0 });
       log.warn("checker.post_failed", { status, error });
       return {
         outcome: "failed",
@@ -251,25 +335,27 @@ async function review(
         error: why,
       };
     }
-    const concerns = concernsIn(body);
-    const posting = { url: posted.url, body, costMicros: cost };
-    // Marked posted and the thread's line queued together, keyed so it posts once.
-    await db.transaction(async (tx) => {
-      await markReviewPosted(tx, claim.id, posting);
-      if (change === undefined) return;
-      const conversation = await getConversation(tx, change.conversationId);
-      await enqueueDelivery(tx, conversation.id, `checker:${claim.id}`, "note", {
-        kind: "reply",
-        target: targetOf(conversation),
-        text: `The checker reviewed [${name}](${pull.url}): ${plural(concerns, "concern")}.`,
-        mentions: [],
-      });
-    });
+    await markReviewPosted(db, claim.id, url);
     log.info("checker.reviewed", { concerns, costMicros: cost });
-    if (change !== undefined && deps.conversations !== undefined) {
-      await flushSoon(deps.conversations, change.conversationId, log).catch((error: unknown) => {
-        log.warn("checker.flush_failed", { error });
-      });
+    if (change !== undefined) {
+      // After the review is marked posted, and never turning it into a failed one; the key
+      // keeps the line to one.
+      const queued = await queueThreadLine(db, {
+        change,
+        claimId: claim.id,
+        text: `The checker reviewed [${name}](${pull.url}): ${plural(concerns, "concern")}.`,
+      }).then(
+        () => true,
+        (error: unknown) => {
+          log.warn("checker.thread_line_failed", { error });
+          return false;
+        },
+      );
+      if (queued && deps.conversations !== undefined) {
+        await flushSoon(deps.conversations, change.conversationId, log).catch((error: unknown) => {
+          log.warn("checker.flush_failed", { error });
+        });
+      }
     }
     return {
       outcome: "said",
@@ -277,9 +363,15 @@ async function review(
       costMicros: cost,
     };
   } catch (error) {
+    if (error instanceof DiffTooLargeError) {
+      // GitHub will not send it on a later try either: given up at once, silent.
+      await abandonReview(db, claim.id, { error: TOO_LARGE, costMicros: 0 });
+      log.warn("checker.too_large");
+      return { outcome: "silent", summary: `${name}: ${TOO_LARGE}`, costMicros: 0 };
+    }
     // Anything else (the diff, the database): this try failed, and is counted.
     const why = error instanceof Error ? error.message : String(error);
-    await markReviewFailed(db, claim.id, { error: why, costMicros: cost }).catch(
+    await markReviewFailed(db, claim.id, { error: why, costMicros: unsaved }).catch(
       (markError: unknown) => {
         log.error("checker.mark_failed", { error: markError });
       },

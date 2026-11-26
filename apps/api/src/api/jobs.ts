@@ -130,9 +130,11 @@ export async function runJobs(deps: JobDeps, log: Logger): Promise<JobsRunResult
   }
   let due: Job[];
   try {
-    await ensureBuiltinJobs(deps.db, place, deps.fallback, {
+    const unmade = await ensureBuiltinJobs(deps.db, place, deps.fallback, {
       capture: deps.capture === undefined ? undefined : deps.capture.dailyBudgetCents * 31,
     });
+    // Names only. A kind deployed before its migration (decision 86) is made on a later run.
+    if (unmade.length > 0) log.warn("jobs.builtin_failed", { jobs: unmade });
     await uncapForNewMonth(deps.db, place);
     // A wake whose process was killed is told apart from a silent one (from the review).
     await closeUnfinishedWakes(deps.db);

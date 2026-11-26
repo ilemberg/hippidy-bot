@@ -1,10 +1,10 @@
 import { z } from "zod";
 
 // The checker's view of GitHub (slice 4.3, decision 219): the repository's open pull requests
-// and their diffs, read with the token that already reads CI checks (decision 132), and a
-// comment review posted with `GITHUB_REVIEW_TOKEN`, a token that can only comment (G20). It
-// never approves: the review's event is always COMMENT. Nothing here logs; errors name the
-// path and status, never a token.
+// with their diffs and reviews, read with the token that already reads CI checks (decision
+// 132), and a comment review posted with `GITHUB_REVIEW_TOKEN`, a token that can only comment
+// (G20). It never approves: the review's event is always COMMENT. Nothing here logs; errors
+// name the path and status, never a token.
 
 /** Most characters of a diff put before the model; the files past it are named, not read. */
 export const MAX_DIFF_CHARACTERS = 60_000;
@@ -45,12 +45,31 @@ export interface PullRequestDiff {
   omitted: string[];
 }
 
+/** A review already on a pull request. */
+export interface PostedReview {
+  /** The commit it was posted on; null when GitHub no longer knows it. */
+  commitId: string | null;
+  body: string;
+  url: string;
+}
+
+/** GitHub refused a diff as too large to send (HTTP 406): no later try will read it either. */
+export class DiffTooLargeError extends Error {
+  constructor(number: number) {
+    super(`GitHub refused the diff of #${String(number)} as too large`);
+    this.name = "DiffTooLargeError";
+  }
+}
+
 export interface PullRequests {
   /** `owner/name`, lowercase. */
   readonly repository: string;
   /** Open pull requests, the most recently updated first (at most 50). */
   listOpen(): Promise<OpenPullRequest[]>;
+  /** Its diff; throws `DiffTooLargeError` when GitHub will not send it. */
   diff(number: number): Promise<PullRequestDiff>;
+  /** The reviews on a pull request, oldest first (at most 100). */
+  listReviews(number: number): Promise<PostedReview[]>;
   /** Posts a comment review on a head commit, with the review token. Answers its link. */
   postReview(
     number: number,
@@ -76,6 +95,24 @@ const pullsSchema = z.array(
 );
 
 const reviewSchema = z.object({ id: z.number(), html_url: z.string() });
+
+const reviewsSchema = z.array(
+  z.object({
+    html_url: z.string(),
+    body: z.string().nullable().optional(),
+    commit_id: z.string().nullable().optional(),
+  }),
+);
+
+/** A request GitHub answered with an error status. */
+class GitHubError extends Error {
+  readonly status: number;
+
+  constructor(status: number, method: string, path: string) {
+    super(`GitHub answered ${String(status)} for ${method} ${path}`);
+    this.status = status;
+  }
+}
 
 /** `owner/name` of a `https://github.com/owner/name` link, lowercase, or undefined. */
 export function repositoryOf(url: string): string | undefined {
@@ -116,11 +153,7 @@ export function createGitHubPulls(options: {
       ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
       signal: AbortSignal.timeout(init.timeoutMs),
     });
-    if (!response.ok) {
-      throw new Error(
-        `GitHub answered ${String(response.status)} for ${init.method ?? "GET"} ${path}`,
-      );
-    }
+    if (!response.ok) throw new GitHubError(response.status, init.method ?? "GET", path);
     return response;
   }
 
@@ -151,8 +184,26 @@ export function createGitHubPulls(options: {
         token: options.token,
         accept: "application/vnd.github.diff",
         timeoutMs: 15_000,
+      }).catch((error: unknown): never => {
+        // GitHub sends no diff past its own limits (too many files or lines).
+        if (error instanceof GitHubError && error.status === 406) {
+          throw new DiffTooLargeError(number);
+        }
+        throw error;
       });
       return capDiff(await response.text());
+    },
+
+    async listReviews(number) {
+      const response = await call(
+        `/repos/${repository}/pulls/${String(number)}/reviews?per_page=100`,
+        { token: options.token, accept: "application/vnd.github+json", timeoutMs: 10_000 },
+      );
+      return reviewsSchema.parse(await response.json()).map((review) => ({
+        commitId: review.commit_id ?? null,
+        body: review.body ?? "",
+        url: review.html_url,
+      }));
     },
 
     async postReview(number, review, reviewToken) {

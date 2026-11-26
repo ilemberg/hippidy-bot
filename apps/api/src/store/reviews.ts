@@ -4,7 +4,8 @@ import { storable } from "./json.ts";
 
 // The checker's reviews (slice 4.3, decision 219): each head commit of a pull request is
 // reviewed once, whatever happens. A review that could not be written or posted is kept as
-// failed and tried again on a later wake, three tries in all, then abandoned.
+// failed and tried again on a later wake, three tries in all, then abandoned. What another try
+// would meet again (a refusal, a cut-off, a diff too large) is abandoned at once.
 
 /** Tries of one head commit before it is abandoned: the first and two more. */
 export const MAX_REVIEW_ATTEMPTS = 3;
@@ -21,8 +22,10 @@ export interface ReviewClaim {
   id: string;
   /** Tries started, this one included. */
   attempts: number;
-  /** A review an earlier try wrote but could not post: posted again, not written again. */
+  /** A review an earlier try wrote but did not post: posted again, not written again. */
   body: string | null;
+  /** Its concerns, saved with the body. */
+  concerns: number | null;
 }
 
 /**
@@ -80,49 +83,69 @@ export async function claimReview(
          and (pull_request_reviews.status = 'failed'
               or (pull_request_reviews.status = 'pending'
                   and pull_request_reviews.updated_at < now() - make_interval(mins => $6)))
-     returning id, attempts, body`,
+     returning id, attempts, body, concerns`,
     [head.repository, head.number, head.headSha, head.changeId, MAX_REVIEW_ATTEMPTS, STALE_MINUTES],
   );
   if (rows[0] === undefined) return undefined;
   const r = z
-    .object({ id: z.string(), attempts: z.number().int(), body: z.string().nullable() })
+    .object({
+      id: z.string(),
+      attempts: z.number().int(),
+      body: z.string().nullable(),
+      concerns: z.number().int().nullable(),
+    })
     .parse(rows[0]);
-  return { id: r.id, attempts: r.attempts, body: r.body ?? null };
+  return { id: r.id, attempts: r.attempts, body: r.body ?? null, concerns: r.concerns ?? null };
 }
 
-/** Marks a review posted, with its link, body and this try's cost. Inside the caller's transaction. */
-export async function markReviewPosted(
+/** Most characters of a review body kept. */
+const MAX_BODY_CHARACTERS = 65_000;
+
+/**
+ * Saves a review the model just wrote, with its concerns and the call's cost, on its own
+ * before it is posted: a try that dies after this posts it, and never pays for it again.
+ */
+export async function saveWrittenReview(
   db: Db,
   id: string,
-  posted: { url: string; body: string; costMicros: number },
+  written: { body: string; concerns: number; costMicros: number },
 ): Promise<void> {
   await db.query(
     `update pull_request_reviews
-     set status = 'posted', review_url = $2, body = $3, cost_micros = cost_micros + $4,
-         error = null, updated_at = now()
+     set body = $2, concerns = $3, cost_micros = cost_micros + $4, updated_at = now()
      where id = $1`,
     [
       id,
-      posted.url,
-      storable(posted.body).slice(0, 65_000),
-      Math.max(0, Math.round(posted.costMicros)),
+      storable(written.body).slice(0, MAX_BODY_CHARACTERS),
+      Math.max(0, Math.round(written.concerns)),
+      Math.max(0, Math.round(written.costMicros)),
     ],
   );
 }
 
+/** Marks a review posted, with its link. */
+export async function markReviewPosted(db: Db, id: string, url: string): Promise<void> {
+  await db.query(
+    `update pull_request_reviews
+     set status = 'posted', review_url = $2, error = null, updated_at = now()
+     where id = $1`,
+    [id, url],
+  );
+}
+
 /**
- * Marks a try failed, with why and its cost: failed while tries are left, abandoned after the
- * last. Answers the status it now has.
+ * Marks a try failed, with why and any cost not yet saved: failed while tries are left,
+ * abandoned after the last. Answers the status it now has.
  */
 export async function markReviewFailed(
   db: Db,
   id: string,
-  failed: { error: string; costMicros: number; body?: string | undefined },
+  failed: { error: string; costMicros: number },
 ): Promise<"failed" | "abandoned"> {
   const rows = await db.query(
     `update pull_request_reviews
      set status = case when attempts >= $4 then 'abandoned' else 'failed' end,
-         error = $2, cost_micros = cost_micros + $3, body = coalesce($5, body), updated_at = now()
+         error = $2, cost_micros = cost_micros + $3, updated_at = now()
      where id = $1
      returning status`,
     [
@@ -130,10 +153,26 @@ export async function markReviewFailed(
       storable(failed.error).slice(0, 500),
       Math.max(0, Math.round(failed.costMicros)),
       MAX_REVIEW_ATTEMPTS,
-      failed.body === undefined ? null : storable(failed.body).slice(0, 65_000),
     ],
   );
   return z.object({ status: z.enum(["failed", "abandoned"]) }).parse(rows[0]).status;
+}
+
+/**
+ * Gives a head up at once, with why and its cost: what another try would meet again (a
+ * refusal, a cut-off, a diff too large to read).
+ */
+export async function abandonReview(
+  db: Db,
+  id: string,
+  abandoned: { error: string; costMicros: number },
+): Promise<void> {
+  await db.query(
+    `update pull_request_reviews
+     set status = 'abandoned', error = $2, cost_micros = cost_micros + $3, updated_at = now()
+     where id = $1`,
+    [id, storable(abandoned.error).slice(0, 500), Math.max(0, Math.round(abandoned.costMicros))],
+  );
 }
 
 export interface ChangeOfPullRequest {

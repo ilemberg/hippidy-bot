@@ -2,6 +2,7 @@ import { Anthropic } from "@anthropic-ai/sdk";
 import { describe, expect, it } from "vitest";
 import {
   REVIEW_MODEL,
+  REVIEW_SYSTEM,
   createAnthropicReviewer,
   parseReview,
   reviewCostMicros,
@@ -78,7 +79,7 @@ describe("createAnthropicReviewer", () => {
     const sent = requests[0];
     expect(sent?.body).toMatchObject({
       model: "claude-opus-5-5",
-      max_tokens: 16_000,
+      max_tokens: 8_000,
       fallbacks: "default",
       output_config: { effort: "medium", format: { type: "json_schema" } },
     });
@@ -108,7 +109,62 @@ describe("createAnthropicReviewer", () => {
         { status: 500 },
       ),
     );
-    expect(await down.reviewer.review(input)).toMatchObject({ kind: "failed", usage: null });
+    // The API may have run the model before it failed: counted at an estimate of its input,
+    // at the highest input price, never at 0.
+    const failed = await down.reviewer.review(input);
+    const characters = REVIEW_SYSTEM.length + reviewMessage(input).length;
+    expect(failed).toMatchObject({
+      kind: "failed",
+      usage: { inputTokens: Math.ceil(characters / 3.5), outputTokens: 0, model: null },
+    });
+    expect(reviewCostMicros(failed.usage)).toBe(Math.ceil(characters / 3.5) * 5);
+    expect(reviewCostMicros(failed.usage)).toBeGreaterThan(0);
+  });
+
+  it("counts a call that timed out", async () => {
+    const { reviewer } = client(() => {
+      throw new Error("Request timed out.");
+    });
+    const result = await reviewer.review(input);
+    expect(result.kind).toBe("failed");
+    expect(reviewCostMicros(result.usage)).toBeGreaterThan(0);
+  });
+
+  it("counts every model a fallback ran, each at its own price", async () => {
+    const { reviewer } = client(() =>
+      Response.json({
+        ...message([{ type: "text", text: answer }]),
+        model: "claude-opus-4-8",
+        usage: {
+          input_tokens: 20_000,
+          output_tokens: 3_000,
+          iterations: [
+            {
+              type: "message",
+              model: "claude-opus-5-5",
+              input_tokens: 20_000,
+              output_tokens: 500,
+              cache_creation: null,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+            },
+            {
+              type: "fallback_message",
+              model: "claude-opus-4-8",
+              input_tokens: 20_000,
+              output_tokens: 3_000,
+              cache_creation: null,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+            },
+          ],
+        },
+      }),
+    );
+    const result = await reviewer.review(input);
+    expect(result.kind).toBe("ok");
+    // Opus 5.5: 80,000 + 10,000; Opus 4.8 at $5 and $25: 100,000 + 75,000.
+    expect(reviewCostMicros(result.usage)).toBe(265_000);
   });
 });
 
@@ -116,6 +172,32 @@ describe("reviewCostMicros", () => {
   it("prices Opus 5.5 at $4 and $20 per million tokens", () => {
     expect(reviewCostMicros({ inputTokens: 20_000, outputTokens: 3_000 })).toBe(140_000);
     expect(reviewCostMicros(null)).toBe(0);
+  });
+
+  it("prices Opus 5 and 4.8 at $5 and $25, and any other or unknown model at the highest", () => {
+    const tokens = { inputTokens: 20_000, outputTokens: 3_000 };
+    expect(reviewCostMicros({ ...tokens, model: "claude-opus-5" })).toBe(175_000);
+    expect(reviewCostMicros({ ...tokens, model: "claude-opus-4-8" })).toBe(175_000);
+    expect(reviewCostMicros({ ...tokens, model: "claude-something-new" })).toBe(175_000);
+    expect(reviewCostMicros({ ...tokens, model: "constructor" })).toBe(175_000);
+    expect(reviewCostMicros({ ...tokens, model: null })).toBe(175_000);
+    // The parts, when given, are what is counted: here a compaction that names no model.
+    expect(
+      reviewCostMicros({
+        ...tokens,
+        iterations: [
+          { model: REVIEW_MODEL, ...tokens },
+          { model: null, inputTokens: 1_000, outputTokens: 0 },
+        ],
+      }),
+    ).toBe(145_000);
+  });
+});
+
+describe("REVIEW_SYSTEM", () => {
+  it("tells the model to cite decisions by number, never their text", () => {
+    expect(REVIEW_SYSTEM).toContain("cite it by its number alone");
+    expect(REVIEW_SYSTEM).toContain("never quote or paraphrase a decision's text");
   });
 });
 

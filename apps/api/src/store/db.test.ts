@@ -46,10 +46,12 @@ import { conflictDetail, listConflicts, recordConflict, settleConflict } from ".
 import { recordObservation, setListening } from "./listening.ts";
 import { searchDecisions } from "./decisions.ts";
 import {
+  abandonReview,
   changeOfPullRequest,
   claimReview,
   markReviewFailed,
   markReviewPosted,
+  saveWrittenReview,
   settledHeads,
 } from "./reviews.ts";
 import { applyMigration, applyMigrations } from "./testing.ts";
@@ -1101,22 +1103,49 @@ describe("pull request reviews through postgres.js (slice 4.3)", () => {
 
     const head = { repository, number: 3, headSha: "abcdef1", changeId };
     const claim = await claimReview(db, head);
-    expect(claim).toEqual({ id: expect.any(String) as string, attempts: 1, body: null });
+    expect(claim).toEqual({
+      id: expect.any(String) as string,
+      attempts: 1,
+      body: null,
+      concerns: null,
+    });
     expect(await claimReview(db, head)).toBeUndefined();
     expect([...(await settledHeads(db, [head]))]).toEqual(["3@abcdef1"]);
+    await saveWrittenReview(db, claim?.id ?? "", {
+      body: "Body \u0000",
+      concerns: 2,
+      costMicros: 1_234_567_890_123,
+    });
     expect(
-      await markReviewFailed(db, claim?.id ?? "", {
-        error: "no \u0000 post",
-        costMicros: 1_234_567_890_123,
-        body: "Body",
-      }),
+      await markReviewFailed(db, claim?.id ?? "", { error: "no \u0000 post", costMicros: 7 }),
     ).toBe("failed");
-    expect(await claimReview(db, head)).toEqual({ id: claim?.id, attempts: 2, body: "Body" });
-    await markReviewPosted(db, claim?.id ?? "", { url: `${url}#r`, body: "Body", costMicros: 7 });
+    expect(await claimReview(db, head)).toEqual({
+      id: claim?.id,
+      attempts: 2,
+      body: "Body ",
+      concerns: 2,
+    });
+    await markReviewPosted(db, claim?.id ?? "", `${url}#r`);
     const [row] = await db.query(
-      `select status, cost_micros::float8 as cost, error from pull_request_reviews where id = $1`,
+      `select status, cost_micros::float8 as cost, concerns, error, review_url
+       from pull_request_reviews where id = $1`,
       [claim?.id],
     );
-    expect(row).toEqual({ status: "posted", cost: 1_234_567_890_130, error: null });
+    expect(row).toEqual({
+      status: "posted",
+      cost: 1_234_567_890_130,
+      concerns: 2,
+      error: null,
+      review_url: `${url}#r`,
+    });
+    // Given up at once, with its cost (a refusal, a cut-off, a diff too large).
+    const other = await claimReview(db, { ...head, headSha: "abcdef2" });
+    await abandonReview(db, other?.id ?? "", { error: "too large to review", costMicros: 5 });
+    expect(await claimReview(db, { ...head, headSha: "abcdef2" })).toBeUndefined();
+    const [abandoned] = await db.query(
+      `select status, cost_micros::float8 as cost, error from pull_request_reviews where id = $1`,
+      [other?.id],
+    );
+    expect(abandoned).toEqual({ status: "abandoned", cost: 5, error: "too large to review" });
   });
 });

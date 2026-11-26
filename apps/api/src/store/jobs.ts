@@ -89,13 +89,17 @@ function toJob(r: Row | undefined): Job {
   };
 }
 
-/** Makes the built-in jobs that are missing, owned by the fallback if there is one. */
+/**
+ * Makes the built-in jobs that are missing, owned by the fallback if there is one. Answers the
+ * names of those it could not make.
+ */
 export async function ensureBuiltinJobs(
   db: Db,
   place: Place,
   owner: { actorId: string } | undefined,
   caps: { capture?: number | undefined } = {},
-): Promise<void> {
+): Promise<string[]> {
+  const failed: string[] = [];
   for (const builtin of BUILTIN_JOBS) {
     // Capture's cap follows its daily budget for a 31-day month when the job is made.
     const job =
@@ -121,8 +125,13 @@ export async function ensureBuiltinJobs(
           job.everyMinutes ?? 1,
         ],
       )
-      .catch(() => undefined);
+      // Typed: Vercel's check, without strict null checks, reads `() => undefined` as `any`.
+      .catch((): Row[] => {
+        failed.push(job.name);
+        return [];
+      });
   }
+  return failed;
 }
 
 /** The workspace's jobs, by name, with this month's spend. */

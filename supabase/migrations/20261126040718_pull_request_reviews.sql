@@ -14,14 +14,19 @@ create table public.pull_request_reviews (
   head_sha text not null check (head_sha ~ '^[0-9a-f]{7,64}$'),
   -- The change the pull request belongs to, when one does.
   change_id uuid references public.changes (id) on delete set null,
-  -- `pending` while a wake reviews it; `failed` is tried again on a later wake, at most three
-  -- tries in all, then `abandoned`.
+  -- `pending` while a wake reviews it (with `body` set once the review is written, before it
+  -- is posted); `failed` is tried again on a later wake, at most three tries in all, then
+  -- `abandoned`. A refusal, a cut-off or a diff too large is abandoned at once.
   status text not null default 'pending'
     check (status in ('pending', 'posted', 'failed', 'abandoned')),
   -- Tries started, the current one included.
   attempts integer not null default 1 check (attempts between 0 and 10),
   review_url text,
+  -- The review as written, saved right after the model call: a later try posts it, never
+  -- writes it again.
   body text check (body is null or char_length(body) <= 65000),
+  -- How many concerns the written review has, for the line in the change's thread.
+  concerns integer check (concerns is null or concerns >= 0),
   -- What its model calls cost, all tries together, in millionths of a dollar.
   cost_micros bigint not null default 0 check (cost_micros >= 0),
   error text check (error is null or char_length(error) <= 500),

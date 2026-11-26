@@ -473,11 +473,21 @@ describe("what the review of 4.2 found", () => {
 });
 
 describe("deploying a new kind before its migration (slice 4.3)", () => {
-  it("still runs the other jobs when one built-in job cannot be made", async () => {
+  it("still runs the other jobs when one built-in job cannot be made, and names it", async () => {
     await db.query(`alter table jobs drop constraint jobs_kind_check`);
     await db.query(
       `alter table jobs add constraint jobs_kind_check check (kind in ('capture', 'briefs'))`,
     );
-    expect((await runJobs({ db, place }, log)).woke).toBe(2);
+    const { log: runLog, lines } = memoryLogger();
+    expect((await runJobs({ db, place }, runLog)).woke).toBe(2);
+    expect(lines.filter((line) => line.msg === "jobs.builtin_failed")).toEqual([
+      expect.objectContaining({ level: "warn", jobs: ["checker"] }),
+    ]);
+  });
+
+  it("logs nothing about built-in jobs when all are made", async () => {
+    const { log: runLog, lines } = memoryLogger();
+    await runJobs({ db, place }, runLog);
+    expect(lines.some((line) => line.msg === "jobs.builtin_failed")).toBe(false);
   });
 });

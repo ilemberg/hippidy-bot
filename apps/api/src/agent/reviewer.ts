@@ -9,10 +9,38 @@ import { oneLine } from "./extractor.ts";
 
 /** Claude Opus 5.5, at medium effort. */
 export const REVIEW_MODEL = "claude-opus-5-5";
+/** Most tokens of one answer, thinking included. */
+export const REVIEW_MAX_TOKENS = 8_000;
+/** How long one call may take, inside the function's time. */
+export const REVIEW_TIMEOUT_MS = 100_000;
+
+/** List price of a model, in millionths of a dollar per token. */
+interface Price {
+  inputPerToken: number;
+  outputPerToken: number;
+}
+
 /** List prices of `REVIEW_MODEL` ($4 and $20 per million tokens), in millionths of a dollar. */
-export const REVIEW_PRICE_MICROS = { inputPerToken: 4, outputPerToken: 20 };
+export const REVIEW_PRICE_MICROS: Price = { inputPerToken: 4, outputPerToken: 20 };
+/** The highest of the prices below, for any other model or one not named. */
+const HIGHEST_PRICE: Price = { inputPerToken: 5, outputPerToken: 25 };
+
+/** List prices of the models a call may run on: the review model and its fallbacks. */
+const PRICES = new Map<string, Price>([
+  [REVIEW_MODEL, REVIEW_PRICE_MICROS],
+  ["claude-opus-5", HIGHEST_PRICE],
+  ["claude-opus-4-8", HIGHEST_PRICE],
+]);
+
+/** What a model's tokens cost; an unknown model at the highest price. */
+export function priceOf(model: string | null): Price {
+  return (model === null ? undefined : PRICES.get(model)) ?? HIGHEST_PRICE;
+}
+
 /** Most characters of a pull request's description put before the model. */
 export const MAX_DESCRIPTION_CHARACTERS = 8_000;
+/** Characters per token for estimating a call that failed after it was sent. */
+const CHARACTERS_PER_TOKEN = 3.5;
 
 export interface ReviewInput {
   repository: string;
@@ -38,9 +66,24 @@ export interface Review {
   tryByHand: string[];
 }
 
+/** Tokens one model used in a call. */
+export interface ModelUsage {
+  /** Null when not known: priced at the highest. */
+  model: string | null;
+  inputTokens: number;
+  outputTokens: number;
+}
+
 export interface ReviewUsage {
   inputTokens: number;
   outputTokens: number;
+  /** The model the totals are priced at: `REVIEW_MODEL` when not given, the highest when null. */
+  model?: string | null;
+  /**
+   * Each model's part when the API reports them (a refusal retried on a fallback model runs
+   * two): when present, these are what is counted, each at its own model's price.
+   */
+  iterations?: ModelUsage[];
 }
 
 export type ReviewResult =
@@ -53,13 +96,48 @@ export interface PullRequestReviewer {
   review(input: ReviewInput): Promise<ReviewResult>;
 }
 
-/** What a call cost at list price, in millionths of a dollar. */
+function costOf(part: ModelUsage): number {
+  const price = priceOf(part.model);
+  return part.inputTokens * price.inputPerToken + part.outputTokens * price.outputPerToken;
+}
+
+/** What a call cost at list price, in millionths of a dollar: every model it ran on. */
 export function reviewCostMicros(usage: ReviewUsage | null): number {
   if (usage === null) return 0;
-  return (
-    usage.inputTokens * REVIEW_PRICE_MICROS.inputPerToken +
-    usage.outputTokens * REVIEW_PRICE_MICROS.outputPerToken
-  );
+  if (usage.iterations !== undefined && usage.iterations.length > 0) {
+    return usage.iterations.reduce((sum, part) => sum + costOf(part), 0);
+  }
+  return costOf({
+    model: usage.model === undefined ? REVIEW_MODEL : usage.model,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+  });
+}
+
+/**
+ * What a call that failed after it was sent is counted at, since the API may have run it
+ * without answering: its input at about 3.5 characters a token, at the highest input price.
+ * An over-count keeps the job under its cap; 0 would let failures spend unseen.
+ */
+export function estimatedUsage(characters: number): ReviewUsage {
+  return {
+    inputTokens: Math.ceil(characters / CHARACTERS_PER_TOKEN),
+    outputTokens: 0,
+    model: null,
+  };
+}
+
+/** Each model's part of a response's usage, when the API reports them. */
+function iterationsOf(
+  iterations: Anthropic.Beta.BetaIterationsUsage | null | undefined,
+): ModelUsage[] | undefined {
+  if (iterations === null || iterations === undefined || iterations.length === 0) return undefined;
+  return iterations.map((part) => ({
+    // A compaction names no model; a sampling may not either.
+    model: "model" in part ? (part.model ?? null) : null,
+    inputTokens: part.input_tokens,
+    outputTokens: part.output_tokens,
+  }));
 }
 
 export const REVIEW_SYSTEM = `You review one pull request for a small team, before a person decides whether to merge it.
@@ -70,6 +148,8 @@ Write:
 - summary: what the change does, in two or three plain sentences.
 - concerns: only problems you can point to in the diff: a bug, a case it misses, a broken decision, a risk to data or security. Each with the file, the line in the new version of the file (or null when no single line fits) and why it matters, in a sentence or two. Leave out style, naming and anything you cannot point to. No concerns is a good answer when there are none.
 - tryByHand: what a person should try by hand before merging, as short steps; an empty list when nothing needs trying.
+
+Your review is posted publicly on the pull request. When a decision bears on a concern, cite it by its number alone ("decision 42"); never quote or paraphrase a decision's text.
 
 Be concise. When parts of the diff were left out, review what you were given and do not guess at the rest.`;
 
@@ -172,32 +252,42 @@ export function createAnthropicReviewer(client: Anthropic): PullRequestReviewer 
   return {
     model: REVIEW_MODEL,
     async review(input) {
+      const content = reviewMessage(input);
       let response: Anthropic.Beta.BetaMessage;
       try {
-        response = await client.beta.messages.create({
-          model: REVIEW_MODEL,
-          // Thinking is always on for this model and counts against this too.
-          max_tokens: 16_000,
-          system: REVIEW_SYSTEM,
-          messages: [{ role: "user", content: reviewMessage(input) }],
-          output_config: {
-            effort: "medium",
-            format: { type: "json_schema", schema: { ...REVIEW_SCHEMA } },
+        response = await client.beta.messages.create(
+          {
+            model: REVIEW_MODEL,
+            // Thinking is always on for this model and counts against this too.
+            max_tokens: REVIEW_MAX_TOKENS,
+            system: REVIEW_SYSTEM,
+            messages: [{ role: "user", content }],
+            output_config: {
+              effort: "medium",
+              format: { type: "json_schema", schema: { ...REVIEW_SCHEMA } },
+            },
+            // A refusal is retried on the server's default fallback model, in the same call.
+            betas: ["server-side-fallback-2026-07-01"],
+            fallbacks: "default",
           },
-          // A refusal is retried on the server's default fallback model, in the same call.
-          betas: ["server-side-fallback-2026-07-01"],
-          fallbacks: "default",
-        });
+          { timeout: REVIEW_TIMEOUT_MS },
+        );
       } catch (error) {
+        // Whether the API ran the model before the call failed or timed out cannot be told
+        // from here, so it is counted at an estimate of its input, never at 0.
         return {
           kind: "failed",
           error: error instanceof Error ? error.message : String(error),
-          usage: null,
+          usage: estimatedUsage(REVIEW_SYSTEM.length + content.length),
         };
       }
-      const usage = {
+      const iterations = iterationsOf(response.usage.iterations);
+      const usage: ReviewUsage = {
         inputTokens: response.usage.input_tokens,
         outputTokens: response.usage.output_tokens,
+        // Another model's answer is priced as that model's (an unknown one at the highest).
+        ...(response.model === REVIEW_MODEL ? {} : { model: response.model }),
+        ...(iterations === undefined ? {} : { iterations }),
       };
       if (response.stop_reason === "refusal") return { kind: "refused", usage };
       if (response.stop_reason === "max_tokens") return { kind: "cut_off", usage };

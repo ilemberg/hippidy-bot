@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { capDiff, createGitHubPulls, repositoryOf, type PullsFetch } from "./pulls.ts";
+import {
+  DiffTooLargeError,
+  capDiff,
+  createGitHubPulls,
+  repositoryOf,
+  type PullsFetch,
+} from "./pulls.ts";
 
 // Slice 4.3 (decision 219): the checker reads the repository's open pull requests and their
 // diffs with the agent's token, and posts comment reviews with the review token. GitHub is
@@ -114,6 +120,43 @@ describe("createGitHubPulls", () => {
     expect(asked[0]).toMatchObject({
       url: "https://api.github.com/repos/ilemberg/hippidy-bot/pulls/7",
       headers: { Authorization: `Bearer ${AGENT_TOKEN}`, Accept: "application/vnd.github.diff" },
+    });
+  });
+
+  it("throws DiffTooLargeError when GitHub will not send a diff (406)", async () => {
+    const { pulls } = github(() => ({ status: 406, body: { message: "diff too large" } }));
+    const failure = await pulls.diff(7).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(DiffTooLargeError);
+    const other = github(() => ({ status: 500, body: "" }));
+    const plain = await other.pulls.diff(7).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(plain).not.toBeInstanceOf(DiffTooLargeError);
+    expect(String(plain)).toContain(
+      "GitHub answered 500 for GET /repos/ilemberg/hippidy-bot/pulls/7",
+    );
+  });
+
+  it("lists a pull request's reviews with their commit, body and link", async () => {
+    const { pulls, asked } = github(() => ({
+      status: 200,
+      body: [
+        { id: 1, html_url: "u1", body: "Fine.", commit_id: "7abcdef0", user: { login: "bot" } },
+        { id: 2, html_url: "u2", body: null, commit_id: null },
+      ],
+    }));
+    expect(await pulls.listReviews(7)).toEqual([
+      { commitId: "7abcdef0", body: "Fine.", url: "u1" },
+      { commitId: null, body: "", url: "u2" },
+    ]);
+    expect(asked[0]).toMatchObject({
+      url: "https://api.github.com/repos/ilemberg/hippidy-bot/pulls/7/reviews?per_page=100",
+      method: "GET",
+      headers: { Authorization: `Bearer ${AGENT_TOKEN}` },
     });
   });
 

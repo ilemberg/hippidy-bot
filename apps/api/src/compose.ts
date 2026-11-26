@@ -2,7 +2,7 @@ import { Anthropic } from "@anthropic-ai/sdk";
 import type { Hono } from "hono";
 import { readAgentConfig } from "./agent/config.ts";
 import { createAnthropicExtractor } from "./agent/extractor.ts";
-import { createAnthropicReviewer } from "./agent/reviewer.ts";
+import { REVIEW_TIMEOUT_MS, createAnthropicReviewer } from "./agent/reviewer.ts";
 import { createManagedAgentRuntime } from "./agent/managed.ts";
 import { createWebhookVerifier, type VerifyAgentWebhook } from "./agent/webhooks.ts";
 import { createApi } from "./api/app.ts";
@@ -186,7 +186,7 @@ function realServices(
           }),
     reviewToken: readReviewToken(env, log),
     reviewer: createAnthropicReviewer(
-      new Anthropic({ apiKey: agentConfig.apiKey, maxRetries: 0, timeout: 120_000 }),
+      new Anthropic({ apiKey: agentConfig.apiKey, maxRetries: 0, timeout: REVIEW_TIMEOUT_MS }),
     ),
   };
   return verifyAgentWebhook === undefined
