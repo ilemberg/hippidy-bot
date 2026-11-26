@@ -111,7 +111,7 @@ are our own table behind tools the API answers, as `record_approval` was (decisi
 ## Waves 3 to 5 (sketch)
 
 None of this is planned in detail, and each wave is rewritten when the one before it closes.
-Wave 3 is now planned in `wave-3.md` (decision 206).
+Wave 3 is now planned in `wave-3.md` (decision 206), and wave 4 in `wave-4.md` (decision 215).
 
 **Wave 3: who owns what, who waits on whom.** Goal: the right person hears about the right
 thing.

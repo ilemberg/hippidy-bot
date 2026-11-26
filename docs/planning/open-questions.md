@@ -247,10 +247,20 @@ in may change one, each change kept. **Answered 2026-11-25 (decision 205), as re
 
 **G15 (4.3). How does the bot learn of GitHub events?** Decision 108 left the webhook for
 later. *Recommendation:* read the open pull requests on reconcile first, which needs no new
-route; add the webhook when a minute's delay costs something.
+route; add the webhook when a minute's delay costs something. **Answered 2026-11-26 (decision 214),
+as recommended.**
 
 **G16 (4.1). May the bot change what it is responsible for?** *Recommendation:* no. The goal
-is a person's to change, and a changed goal is a recorded decision.
+is a person's to change, and a changed goal is a recorded decision. **Answered 2026-11-26
+(decision 214), as recommended.**
+
+**G20 (4.3). Where does the checker's review go?** *Recommendation:* a comment review on the
+pull request, with a token that can only comment, never approve. **Answered 2026-11-26
+(decision 214), as recommended.**
+
+**G21 (4.1). How is a standing job's spending capped?** *Recommendation:* each job has its own
+monthly cap ($10 unless set), and pauses itself at it. **Answered 2026-11-26 (decision 214),
+as recommended.**
 
 ## Things not yet mentioned at all
 
