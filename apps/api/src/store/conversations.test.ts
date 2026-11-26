@@ -449,6 +449,7 @@ describe("schema", () => {
     "observed_messages",
     "observed_threads",
     "projects",
+    "pull_request_reviews",
     "task_events",
     "tasks",
     "waits",

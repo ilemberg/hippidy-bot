@@ -45,6 +45,13 @@ import { endWait, listWaits, recordWait } from "./waits.ts";
 import { conflictDetail, listConflicts, recordConflict, settleConflict } from "./conflicts.ts";
 import { recordObservation, setListening } from "./listening.ts";
 import { searchDecisions } from "./decisions.ts";
+import {
+  changeOfPullRequest,
+  claimReview,
+  markReviewFailed,
+  markReviewPosted,
+  settledHeads,
+} from "./reviews.ts";
 import { applyMigration, applyMigrations } from "./testing.ts";
 
 // The production client (postgres.js) over a real Postgres connection, served by PGlite.
@@ -1043,12 +1050,13 @@ describe("jobs through postgres.js (slice 4.1)", () => {
   it("makes, takes and logs jobs, with spend as a number and intervals in minutes", async () => {
     const place = { source: "slack" as const, workspaceId: "Tjobs" };
     const log = memoryLogger().log;
-    expect(await runJobs({ db, place }, log)).toMatchObject({ woke: 2 });
+    expect(await runJobs({ db, place }, log)).toMatchObject({ woke: 3 });
     expect(await runJobs({ db, place }, log)).toMatchObject({ woke: 0 });
     const jobs = await listJobs(db, place);
     expect(jobs.map((j) => [j.name, typeof j.spentMicrosThisMonth, typeof j.lastWakeAt])).toEqual([
       ["briefs", "number", "string"],
       ["capture", "number", "string"],
+      ["checker", "number", "string"],
     ]);
     const capture = jobs.find((j) => j.name === "capture");
     const wakes = await jobWakes(db, capture?.id ?? "");
@@ -1061,5 +1069,54 @@ describe("jobs through postgres.js (slice 4.1)", () => {
     });
     expect(edited).toMatchObject({ status: "edited", job: { state: "paused", goal: 'say "hi"' } });
     expect((await jobHistory(db, capture?.id ?? ""))[0]?.after).toMatchObject({ state: "paused" });
+  });
+});
+
+describe("pull request reviews through postgres.js (slice 4.3)", () => {
+  it("claims a head once, keeps cost as a number, and finds the change and its brief", async () => {
+    const repository = "ilemberg/pg-reviews";
+    const conversation = await findOrCreateConversation(db, {
+      source: "slack",
+      workspaceId: "Treviews",
+      channelId: "C",
+      threadId: "reviews.1",
+    });
+    const created = await createBrief(db, {
+      conversationId: conversation.id,
+      customToolUseId: "sevt_review_pg",
+      changeId: undefined,
+      requestedBy: { source: "slack", workspaceId: "Treviews", actorId: "U1", name: null },
+      brief: { title: "T", what: "W", why: "Y", doneWhen: "D", links: [] },
+      startReason: undefined,
+      turnEventIds: [],
+    });
+    const changeId = created.kind === "created" ? created.changeId : "";
+    const url = `https://github.com/${repository}/pull/3`;
+    await db.query(`update changes set pull_request_url = $2 where id = $1`, [changeId, url]);
+    expect(await changeOfPullRequest(db, `${url}/`)).toEqual({
+      changeId,
+      conversationId: conversation.id,
+      brief: { title: "T", what: "W", why: "Y", doneWhen: "D" },
+    });
+
+    const head = { repository, number: 3, headSha: "abcdef1", changeId };
+    const claim = await claimReview(db, head);
+    expect(claim).toEqual({ id: expect.any(String) as string, attempts: 1, body: null });
+    expect(await claimReview(db, head)).toBeUndefined();
+    expect([...(await settledHeads(db, [head]))]).toEqual(["3@abcdef1"]);
+    expect(
+      await markReviewFailed(db, claim?.id ?? "", {
+        error: "no \u0000 post",
+        costMicros: 1_234_567_890_123,
+        body: "Body",
+      }),
+    ).toBe("failed");
+    expect(await claimReview(db, head)).toEqual({ id: claim?.id, attempts: 2, body: "Body" });
+    await markReviewPosted(db, claim?.id ?? "", { url: `${url}#r`, body: "Body", costMicros: 7 });
+    const [row] = await db.query(
+      `select status, cost_micros::float8 as cost, error from pull_request_reviews where id = $1`,
+      [claim?.id],
+    );
+    expect(row).toEqual({ status: "posted", cost: 1_234_567_890_130, error: null });
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readApiConfig } from "./config.ts";
+import { readApiConfig, readReviewToken } from "./config.ts";
 import { memoryLogger } from "./testing.ts";
 
 const goodToken = "a".repeat(32);
@@ -56,5 +56,21 @@ describe("readApiConfig", () => {
     );
     expect(JSON.stringify(lines)).not.toContain(secret);
     expect(JSON.stringify(lines)).not.toContain("team one");
+  });
+});
+
+describe("readReviewToken (slice 4.3)", () => {
+  it("reads a fine-grained token, and logs a missing or bad one without its value", () => {
+    const { log, lines } = memoryLogger();
+    expect(readReviewToken({ GITHUB_REVIEW_TOKEN: " github_pat_abc_123 " }, log)).toBe(
+      "github_pat_abc_123",
+    );
+    expect(readReviewToken({}, log)).toBeUndefined();
+    expect(readReviewToken({ GITHUB_REVIEW_TOKEN: "ghp_classicsecret" }, log)).toBeUndefined();
+    expect(lines).toEqual([
+      expect.objectContaining({ level: "warn", msg: "config.github_review_token_missing" }),
+      expect.objectContaining({ level: "error", msg: "config.github_review_token_invalid" }),
+    ]);
+    expect(JSON.stringify(lines)).not.toContain("classicsecret");
   });
 });

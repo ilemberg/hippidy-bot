@@ -1,4 +1,11 @@
-import type { EditJobRequest, Job, JobDetail, JobKind, JobWake } from "@hippidy/contracts";
+import {
+  jobKindSchema,
+  type EditJobRequest,
+  type Job,
+  type JobDetail,
+  type JobKind,
+  type JobWake,
+} from "@hippidy/contracts";
 import { z } from "zod";
 import type { Place } from "./areas.ts";
 import type { Db, Row } from "./db.ts";
@@ -14,6 +21,8 @@ export const BUILTIN_JOBS: readonly {
   kind: JobKind;
   goal: string;
   capCents: number;
+  /** How often it wakes, in minutes: every minute unless it says otherwise. */
+  everyMinutes?: number;
 }[] = [
   {
     name: "capture",
@@ -28,6 +37,15 @@ export const BUILTIN_JOBS: readonly {
     goal: "Send each person one brief on weekday mornings when something is new.",
     capCents: 100,
   },
+  {
+    // Slice 4.3 (decision 219): reviews each new head commit of the repository's open pull
+    // requests once, as a comment. Its $10 a month (rule 17).
+    name: "checker",
+    kind: "checker",
+    goal: "Review each new commit pushed to an open pull request once, as a comment; never approve.",
+    capCents: 1000,
+    everyMinutes: 2,
+  },
 ];
 
 const columns = `j.id, j.name, j.kind, j.goal, j.owner_actor_id, j.owner_name, j.every_minutes,
@@ -40,7 +58,7 @@ const columns = `j.id, j.name, j.kind, j.goal, j.owner_actor_id, j.owner_name, j
 const jobRow = z.object({
   id: z.string(),
   name: z.string(),
-  kind: z.enum(["capture", "briefs"]),
+  kind: jobKindSchema,
   goal: z.string().nullable(),
   owner_actor_id: z.string().nullable(),
   owner_name: z.string().nullable(),
@@ -85,8 +103,9 @@ export async function ensureBuiltinJobs(
         ? { ...builtin, capCents: caps.capture }
         : builtin;
     await db.query(
-      `insert into jobs (source, workspace_id, name, kind, goal, owner_actor_id, cap_cents)
-       values ($1, $2, $3, $4, $5, $6, $7)
+      `insert into jobs
+         (source, workspace_id, name, kind, goal, owner_actor_id, cap_cents, every_minutes)
+       values ($1, $2, $3, $4, $5, $6, $7, $8)
        on conflict (source, workspace_id, name) do nothing`,
       [
         place.source,
@@ -96,6 +115,7 @@ export async function ensureBuiltinJobs(
         job.goal,
         owner?.actorId ?? null,
         job.capCents,
+        job.everyMinutes ?? 1,
       ],
     );
   }
