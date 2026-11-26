@@ -102,22 +102,26 @@ export async function ensureBuiltinJobs(
       builtin.kind === "capture" && caps.capture !== undefined
         ? { ...builtin, capCents: caps.capture }
         : builtin;
-    await db.query(
-      `insert into jobs
-         (source, workspace_id, name, kind, goal, owner_actor_id, cap_cents, every_minutes)
-       values ($1, $2, $3, $4, $5, $6, $7, $8)
-       on conflict (source, workspace_id, name) do nothing`,
-      [
-        place.source,
-        place.workspaceId,
-        job.name,
-        job.kind,
-        job.goal,
-        owner?.actorId ?? null,
-        job.capCents,
-        job.everyMinutes ?? 1,
-      ],
-    );
+    // Each on its own: a kind the database does not take yet (code deployed before its
+    // migration, decision 86) must not keep the other jobs from running.
+    await db
+      .query(
+        `insert into jobs
+           (source, workspace_id, name, kind, goal, owner_actor_id, cap_cents, every_minutes)
+         values ($1, $2, $3, $4, $5, $6, $7, $8)
+         on conflict (source, workspace_id, name) do nothing`,
+        [
+          place.source,
+          place.workspaceId,
+          job.name,
+          job.kind,
+          job.goal,
+          owner?.actorId ?? null,
+          job.capCents,
+          job.everyMinutes ?? 1,
+        ],
+      )
+      .catch(() => undefined);
   }
 }
 

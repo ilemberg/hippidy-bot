@@ -471,3 +471,13 @@ describe("what the review of 4.2 found", () => {
     }
   });
 });
+
+describe("deploying a new kind before its migration (slice 4.3)", () => {
+  it("still runs the other jobs when one built-in job cannot be made", async () => {
+    await db.query(`alter table jobs drop constraint jobs_kind_check`);
+    await db.query(
+      `alter table jobs add constraint jobs_kind_check check (kind in ('capture', 'briefs'))`,
+    );
+    expect((await runJobs({ db, place }, log)).woke).toBe(2);
+  });
+});
