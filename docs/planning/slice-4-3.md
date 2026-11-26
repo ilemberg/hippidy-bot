@@ -1,6 +1,6 @@
 # Slice 4.3: the checker
 
-Status: **planned 2026-11-26 (decision 219).** The wave is in `wave-4.md`; jobs in `slice-4-1.md`.
+Status: **built 2026-11-26, not merged (decisions 219 and 220).** The wave is in `wave-4.md`; jobs in `slice-4-1.md`.
 
 **Demo:** the worker opens a pull request for Grace's change. Within a few minutes the checker
 posts a review on it, as a comment: what the change does, what may be wrong (each with the
@@ -30,7 +30,9 @@ and `/jobs/checker` shows each wake, the pull request it read and what it cost.
 
 - **One model call**, no tools, no session: the pull request's title and description, its
   diff (at most 60,000 characters, the rest named but not read), the change's brief when the
-  pull request belongs to a change, and up to five active decisions that share words with it.
+  pull request belongs to a change, and up to five active decisions from the public decision
+  log that share words with it, cited by number only. Decisions recorded in threads or from
+  listening are never given to it: the review is public (220).
 - **What it writes:** a short summary; concerns, each with its file and line and why it matters,
   only those it can point to; and what to try by hand before merging (the walkthrough of 142).
   "Nothing to add" is a valid review.
@@ -42,8 +44,12 @@ and `/jobs/checker` shows each wake, the pull request it read and what it cost.
 
 ## Posting (G20)
 
-- As a pull request review with `event: COMMENT`, using `GITHUB_REVIEW_TOKEN`, a token that can
-  only comment on pull requests in this repository. It never approves and cannot (rule 18).
+- As a pull request review with `event: COMMENT`, using `GITHUB_REVIEW_TOKEN`. GitHub has no
+  comment-only permission: "Pull requests: read and write" could also approve, so what stops it
+  is that the code only sends `COMMENT` (rule 18, 220). The comment appears as the account that
+  made the token; a machine user whose approvals do not count for branch protection is better.
+- The text is the model's, so it is made safe before posting: no @mentions, links, images or
+  HTML (220).
 - Without the token, the checker wakes silent ("no review token") and calls no model.
 - Each head commit is reviewed once, whatever happens: a review that could not be posted is
   kept as failed and tried at most twice more on later wakes.

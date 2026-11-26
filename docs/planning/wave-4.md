@@ -32,8 +32,9 @@ The rules of waves 1 to 3 stay. Added:
 17. **Every job has a cap (G21).** A monthly cap in dollars, set when it is made ($10 unless
     said otherwise); a job that reaches it pauses itself until the month turns or a person
     raises it. All jobs together stay inside the $100 a month of decision 11.
-18. **Only a person merges** (decision 117, restated): the checker comments; it never approves
-    and has no token that could.
+18. **Only a person merges** (decision 117, restated): the checker comments; it never approves.
+    GitHub has no comment-only permission, so what stops an approval is that the code only ever
+    sends a comment (220), as 117 found for merging.
 
 ## Slices
 
