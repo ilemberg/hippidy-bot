@@ -9,8 +9,10 @@ import {
   decisionDetailSchema,
   decisionListSchema,
   listeningListSchema,
+  myBriefSchema,
   peopleListSchema,
   sessionListSchema,
+  setBriefsResultSchema,
   settleConflictResultSchema,
   taskActionResultSchema,
   taskDetailSchema,
@@ -33,8 +35,10 @@ import {
   type EditDecisionRequest,
   type EditTaskRequest,
   type ListeningList,
+  type MyBrief,
   type PeopleList,
   type SessionActivity,
+  type SetBriefsResult,
   type SettleConflictRequest,
   type SettleConflictResult,
   type TaskActionResult,
@@ -447,4 +451,18 @@ export function endWait(
 ): Promise<ApiResult<WaitActionResult>> {
   const route = `/v1/waits/${encodeURIComponent(waitId)}/end`;
   return apiSend(person, "POST", route, {}, waitActionResultSchema, deps);
+}
+
+/** `GET /v1/briefs/me` as the person: whether their briefs are on, and what one would say now. */
+export function fetchMyBrief(person: Person, deps: ApiClientDeps): Promise<ApiResult<MyBrief>> {
+  return apiGet(person, "/v1/briefs/me", myBriefSchema, deps);
+}
+
+/** `POST /v1/briefs/me` as the person: switch their own briefs on or off (slice 3.4). */
+export function setMyBriefs(
+  person: Person,
+  on: boolean,
+  deps: ApiClientDeps,
+): Promise<ApiResult<SetBriefsResult>> {
+  return apiSend(person, "POST", "/v1/briefs/me", { on }, setBriefsResultSchema, deps);
 }

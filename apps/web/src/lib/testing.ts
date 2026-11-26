@@ -13,6 +13,7 @@ import type {
   ConflictDetail,
   Decision,
   DecisionDetail,
+  MyBrief,
   Task,
   TaskDetail,
   Wait,
@@ -21,7 +22,7 @@ import type { WebConfig } from "./config.ts";
 import { SLACK_TEAM_CLAIM } from "./slack-oidc.ts";
 
 // Test helpers: a stand-in for Slack's signing keys and its id tokens, and a decision, an area,
-// a conflict, a task and a wait as the API returns them. Nothing here reaches the network.
+// a conflict, a task, a wait and a brief as the API returns them. Nothing here reaches the network.
 
 export const config: WebConfig = {
   slack: {
@@ -288,4 +289,40 @@ export const taskDetail: TaskDetail = {
     },
   ],
   waits: [wait],
+};
+
+/** `GET /v1/briefs/me` for Ada: on, in her time zone, with what waits on her and her areas. */
+export const myBrief: MyBrief = {
+  on: true,
+  timeZone: "Europe/London",
+  lastSentAt: "2026-11-24T09:05:00.000Z",
+  brief: {
+    since: "2026-11-24T09:05:00.000Z",
+    sections: [
+      {
+        kind: "waiting_on_you",
+        title: "Waiting on you",
+        lines: [
+          {
+            text: "Grace, for review the ranking (2 days)",
+            href: "https://slack.com/archives/C1/p1700000100",
+          },
+        ],
+        more: 0,
+      },
+      {
+        kind: "in_your_areas",
+        title: "In your areas",
+        lines: [
+          {
+            text: "#7 proposed in search: Use Postgres for search",
+            href: `${config.webBaseUrl}/decisions/7`,
+          },
+          { text: "#8 recorded in search: Rank by recency", href: "/decisions/8" },
+          { text: "A pull request touched search", href: null },
+        ],
+        more: 4,
+      },
+    ],
+  },
 };

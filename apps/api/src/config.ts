@@ -15,6 +15,8 @@ export interface ApiConfig {
    * variable is missing or bad: every person token is rejected.
    */
   personAuth: PersonAuthConfig | undefined;
+  /** The one Slack workspace (`SLACK_WORKSPACE_ID`), for briefs (slice 3.4); with or without the web app. */
+  workspaceId: string | undefined;
 }
 
 export interface PersonAuthConfig {
@@ -59,24 +61,37 @@ export function readApiConfig(env: Env, log: Logger): ApiConfig {
     serviceToken: readToken(env, "API_SERVICE_TOKEN", log, "service_token"),
     reconcileToken: readToken(env, "RECONCILE_TOKEN", log, "reconcile_token"),
     personAuth: readPersonAuth(env, log),
+    workspaceId: readWorkspaceId(env, () => undefined),
   };
 }
 
 function readPersonAuth(env: Env, log: Logger): PersonAuthConfig | undefined {
   const secret = readToken(env, "WEB_API_SECRET", log, "web_api_secret");
+  const workspaceId = readWorkspaceId(env, (event, fields) => {
+    if (event === "missing") log.warn("config.slack_workspace_id_missing", fields);
+    else log.error("config.slack_workspace_id_invalid", fields);
+  });
+  return secret === undefined || workspaceId === undefined ? undefined : { secret, workspaceId };
+}
+
+/** `SLACK_WORKSPACE_ID`, the one workspace, or undefined; `report` hears why (logged once). */
+function readWorkspaceId(
+  env: Env,
+  report: (event: "missing" | "invalid", fields: Record<string, string>) => void,
+): string | undefined {
   const raw = env.SLACK_WORKSPACE_ID;
-  let workspaceId: string | undefined;
   if (raw === undefined || raw === "") {
-    log.warn("config.slack_workspace_id_missing", { variable: "SLACK_WORKSPACE_ID" });
-  } else if (!workspaceIdSchema.safeParse(raw).success) {
-    log.error("config.slack_workspace_id_invalid", {
+    report("missing", { variable: "SLACK_WORKSPACE_ID" });
+    return undefined;
+  }
+  if (!workspaceIdSchema.safeParse(raw).success) {
+    report("invalid", {
       variable: "SLACK_WORKSPACE_ID",
       reason: "must be a Slack team id, like T0123456789",
     });
-  } else {
-    workspaceId = raw;
+    return undefined;
   }
-  return secret === undefined || workspaceId === undefined ? undefined : { secret, workspaceId };
+  return raw;
 }
 
 /** What capture may spend in a UTC day unless `CAPTURE_DAILY_BUDGET_CENTS` says otherwise. */
@@ -156,4 +171,21 @@ export function readTaskConfig(env: Env, log: Logger): TaskConfig {
     return { kind: "jira_unconfigured" };
   }
   return { kind: "jira", baseUrl, email, token, project };
+}
+
+/** The web app's https origin (`WEB_BASE_URL`), for links; undefined when unset or bad. */
+export function readWebBaseUrl(env: Env, log: Logger): string | undefined {
+  const raw = env.WEB_BASE_URL;
+  if (raw === undefined || raw === "") return undefined;
+  try {
+    const url = new URL(raw);
+    if (url.protocol === "https:" && url.pathname === "/" && url.search === "") return url.origin;
+  } catch {
+    // Reported below.
+  }
+  log.error("config.web_base_url_invalid", {
+    variable: "WEB_BASE_URL",
+    reason: "must be an https origin, like https://hippidy-web.vercel.app",
+  });
+  return undefined;
 }

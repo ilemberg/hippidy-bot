@@ -1,4 +1,5 @@
 import type { ErrorResponse } from "@hippidy/contracts";
+import { handleDirectMessage, isDirectMessageEvent } from "./briefs.ts";
 import { handleChannelMessage } from "./listening.ts";
 import { App, type webApi } from "@slack/bolt";
 import { createHandler, VercelReceiver } from "@vercel/slack-bolt";
@@ -186,15 +187,27 @@ export function createSlackEventsHandler(deps: SlackRouteDeps): SlackEventsHandl
     });
     // Messages in channels the bot is in (slice 2.5). The API keeps only those of channels
     // listened to; nothing is ever posted in reply (176). Bolt drops the bot's own messages.
+    // A message in the bot's direct message (`message.im`, slice 3.4) is "stop briefs",
+    // "start briefs", or gets one line saying what the bot does there.
     app.event("message", async ({ body, context, client }) => {
-      await handleChannelMessage(
-        { body, retryNum: context.retryNum ?? 0, retryReason: context.retryReason ?? "" },
-        {
+      const delivery = {
+        body,
+        retryNum: context.retryNum ?? 0,
+        retryReason: context.retryReason ?? "",
+      };
+      if (isDirectMessageEvent(body)) {
+        await handleDirectMessage(delivery, {
           api: deps.api,
-          userName: (userId) => slackActions(client).userName(userId),
+          slack: slackActions(client),
           log: deps.log,
-        },
-      );
+        });
+        return;
+      }
+      await handleChannelMessage(delivery, {
+        api: deps.api,
+        userName: (userId) => slackActions(client).userName(userId),
+        log: deps.log,
+      });
     });
     app.event("reaction_added", async ({ body }) => {
       await handleReaction(body, { api: deps.api, log: deps.log });

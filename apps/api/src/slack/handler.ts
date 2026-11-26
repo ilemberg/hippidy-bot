@@ -1,7 +1,13 @@
-import type { ConfirmDecisionResult, ContextMessage, StartBriefResult } from "@hippidy/contracts";
+import {
+  briefsCommand,
+  type ConfirmDecisionResult,
+  type ContextMessage,
+  type StartBriefResult,
+} from "@hippidy/contracts";
 import type { Logger } from "../log.ts";
 import type { ApiClient } from "./api-client.ts";
 import { z } from "zod";
+import { switchBriefs, type BriefsOutcome } from "./briefs.ts";
 import { handleListenCommand, listenCommand, type ListenOutcome } from "./listening.ts";
 import {
   appMentionEnvelopeSchema,
@@ -60,7 +66,8 @@ export type MentionOutcome =
   | "invalid_event"
   | "api_rejected"
   | "reaction_failed"
-  | ListenOutcome;
+  | ListenOutcome
+  | BriefsOutcome;
 
 export const RECEIVED_REACTION = "eyes";
 /** The reaction that stops the agent in a thread (decision 60). */
@@ -130,6 +137,23 @@ export async function handleMention(
   const envelope = parsed.data;
   const correlationId = envelope.event_id;
   const message = toInboundMessage(envelope);
+
+  // "stop briefs" or "start briefs" (slice 3.4) switches the person's daily briefs, wherever
+  // they mention the bot; the answer goes in the thread. It is not a message for the teammate.
+  const briefs = briefsCommand(message.text);
+  if (briefs !== undefined) {
+    return switchBriefs(
+      {
+        workspaceId: envelope.team_id,
+        userId: envelope.event.user,
+        command: briefs,
+        channel: envelope.event.channel,
+        threadTs: message.conversation.threadId,
+        correlationId,
+      },
+      { api: deps.api, slack: deps.slack, log },
+    );
+  }
 
   // "listen" or "stop listening" (slice 2.5) switches listening in the channel; it is not a
   // message for the teammate.

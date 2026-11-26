@@ -532,6 +532,7 @@ describe("POST /v1/reconcile", () => {
       backfilled: 0,
       captured: 0,
       expired: 0,
+      briefs: 0,
     });
     expect(slack.replies()).toEqual(["Recovered."]);
   });

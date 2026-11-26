@@ -133,8 +133,8 @@ function View({ view }: { view: WaitsView }) {
           <footer className="muted">
             <a href="/">Agents at work</a> · <a href="/decisions">Decisions</a> ·{" "}
             <a href="/areas">Areas</a> · <a href="/conflicts">Conflicts</a> ·{" "}
-            <a href="/tasks">Tasks</a> · <a href="/listening">Listening in channels</a> · Signed in
-            as {view.person.name}.
+            <a href="/tasks">Tasks</a> · <a href="/brief">Your brief</a> ·{" "}
+            <a href="/listening">Listening in channels</a> · Signed in as {view.person.name}.
           </footer>
         </>
       );

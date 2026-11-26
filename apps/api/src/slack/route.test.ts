@@ -51,6 +51,7 @@ afterEach(async () => {
 function setup(appEnv: Env = env) {
   const { log, lines } = memoryLogger();
   const reactions: unknown[] = [];
+  const posts: { channel: string; text: string; threadTs?: string }[] = [];
   let reacted: (input: unknown) => void = () => undefined;
   const reaction = new Promise((resolve) => {
     reacted = resolve;
@@ -62,7 +63,10 @@ function setup(appEnv: Env = env) {
       return Promise.resolve();
     },
     userName: () => Promise.resolve(undefined),
-    postMessage: () => Promise.resolve(),
+    postMessage: (input) => {
+      posts.push(input);
+      return Promise.resolve();
+    },
     postEphemeral: () => Promise.resolve(),
     threadReplies: () => Promise.resolve([]),
   });
@@ -77,7 +81,7 @@ function setup(appEnv: Env = env) {
     log,
     services: { conversations, slackActions },
   });
-  return { app, lines, reaction, reactions };
+  return { app, lines, reaction, reactions, posts };
 }
 
 /** Waits for background work (Slack events are processed after the response is sent). */
@@ -165,6 +169,38 @@ describe("POST /slack/events", () => {
     expect(await db.query(`select message_id, text from observed_messages`)).toEqual([
       { message_id: "1515449600.000002", text: "We'll ship on Tuesdays." },
     ]);
+  });
+
+  it("answers a direct message with one line, and never its own answer (3.4)", async () => {
+    const { app, lines, posts } = setup();
+    const message = (ts: string, from: Record<string, string>) =>
+      JSON.stringify({
+        type: "event_callback",
+        team_id: "T061EG9R6",
+        event_id: `EvDm${ts}`,
+        authorizations: [{ user_id: "U0LAN0Z89" }],
+        event: {
+          type: "message",
+          channel: "D0LAN2Q65",
+          channel_type: "im",
+          text: "hello there",
+          ts,
+          ...from,
+        },
+      });
+    // The bot's own message comes back as an event too; Bolt and the handler both drop it.
+    const own = message("1515449600.000001", { user: "U0LAN0Z89", bot_id: "B0LAN0Z89" });
+    expect((await app.request(signed(own))).status).toBe(200);
+    const person = message("1515449600.000002", { user: "U061F7AUR" });
+    expect((await app.request(signed(person))).status).toBe(200);
+    await waitFor(() => lines.some((line) => line.msg === "slack.direct_message.answered"));
+    expect(posts).toEqual([
+      {
+        channel: "D0LAN2Q65",
+        text: "I send a brief here on weekday mornings. Write stop briefs or start briefs; to ask me anything, mention me in a channel.",
+      },
+    ]);
+    expect(await db.query(`select count(*)::int as n from observed_messages`)).toEqual([{ n: 0 }]);
   });
 
   it("passes Slack's retry headers through: a retry after a timeout is dropped", async () => {

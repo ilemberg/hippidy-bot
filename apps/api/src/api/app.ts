@@ -14,6 +14,9 @@ import {
   MAX_INBOUND_MESSAGE_BYTES,
   confirmDecisionRequestSchema,
   listConflictsQuerySchema,
+  setBriefsRequestSchema,
+  setMyBriefsRequestSchema,
+  type SetBriefsResult,
   createTaskRequestSchema,
   createWaitRequestSchema,
   editTaskRequestSchema,
@@ -71,6 +74,8 @@ import { startBriefByPerson, syncChange } from "./changes.ts";
 import { runCapture, type CaptureDeps } from "./capture.ts";
 import { namePullRequestAreas } from "./areas.ts";
 import { settleConflictByPerson } from "./conflicts.ts";
+import { myBrief, runBriefs } from "./briefs.ts";
+import { setBriefs } from "../store/briefs.ts";
 import { createTaskSource, type TaskSource } from "../tasks/provider.ts";
 import {
   createTask,
@@ -127,6 +132,8 @@ export interface ApiDeps {
   capture?: CaptureDeps | undefined;
   /** Where tasks come from (slice 3.3). Built with storage, whether or not the agent is. */
   tasks?: TaskSource | undefined;
+  /** The web app's origin, for the links in briefs (slice 3.4). */
+  webBaseUrl?: string | undefined;
 }
 
 /** Webhook types after which the session may have something new to deliver. */
@@ -902,6 +909,58 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
     return c.json(body);
   });
 
+  // Daily briefs (slice 3.4, decision 212): a person's preview and switch in the web app, and
+  // "stop briefs" or "start briefs" written to the bot, which Slack passes on.
+  api.get("/v1/briefs/me", people, async (c) => {
+    const caller = c.var.caller;
+    if (caller.kind !== "person") {
+      return errorResponse(c, 400, "invalid_request", "Only a signed-in person has a brief");
+    }
+    const at = storage(c);
+    if (at === undefined)
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    return c.json(
+      await myBrief(
+        at.db,
+        at.place,
+        caller.actorId,
+        deps.webBaseUrl,
+        new Date(),
+        deps.conversations?.fallback,
+      ),
+    );
+  });
+
+  api.post("/v1/briefs/me", people, limitBody, async (c) => {
+    const caller = c.var.caller;
+    if (caller.kind !== "person") {
+      return errorResponse(c, 400, "invalid_request", "Only a signed-in person switches briefs");
+    }
+    const parsed = setMyBriefsRequestSchema.safeParse((await jsonBody(c))?.body);
+    if (!parsed.success) return errorResponse(c, 400, "invalid_request", "Request body is invalid");
+    const at = storage(c);
+    if (at === undefined)
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    await setBriefs(at.db, at.place, caller.actorId, parsed.data.on);
+    c.var.log.info("brief.switch", { on: parsed.data.on, via: "web" });
+    const body: SetBriefsResult = { on: parsed.data.on };
+    return c.json(body);
+  });
+
+  api.post("/v1/briefs/people", serviceOnly, limitBody, async (c) => {
+    const parsed = setBriefsRequestSchema.safeParse((await jsonBody(c))?.body);
+    if (!parsed.success) return errorResponse(c, 400, "invalid_request", "Request body is invalid");
+    const db = deps.conversations?.db ?? deps.status.db;
+    if (db === undefined) {
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    }
+    const { source, workspaceId, actor, on } = parsed.data;
+    await setBriefs(db, { source, workspaceId }, actor.id, on);
+    c.var.log.info("brief.switch", { on, via: source });
+    const body: SetBriefsResult = { on };
+    return c.json(body);
+  });
+
   // One decision by its number, its history, and what the signed-in person may do (2.6).
   api.get("/v1/decisions/:number", readers, async (c) => {
     const number = z.coerce
@@ -1027,7 +1086,21 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
         c.var.log.error("capture.failed", { error });
       }
     }
-    return c.json({ ...result, backfilled, captured, expired });
+    // Then the day's briefs (slice 3.4): after everything else, never failing reconcile.
+    const briefs = await runBriefs(
+      {
+        db: deps.conversations.db,
+        deliverer: deps.conversations.deliverers.slack,
+        place:
+          deps.config.workspaceId === undefined
+            ? undefined
+            : { source: "slack", workspaceId: deps.config.workspaceId },
+        webBaseUrl: deps.webBaseUrl,
+        fallback: deps.conversations.fallback,
+      },
+      c.var.log.child({ area: "briefs" }),
+    );
+    return c.json({ ...result, backfilled, captured, expired, briefs: briefs.sent });
   });
 
   return api;

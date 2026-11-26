@@ -139,4 +139,38 @@ describe("createApiClient", () => {
       });
     });
   });
+
+  describe("setBriefs (slice 3.4)", () => {
+    const request = {
+      source: "slack" as const,
+      workspaceId: "T1",
+      actor: { id: "U2", displayName: "Linus" },
+      on: false,
+    };
+
+    it("posts the switch to the people route with the service token, and reads the result", async () => {
+      const { api, seen } = client(() => Response.json({ on: false }, { status: 200 }), "tok");
+      expect(await api.setBriefs(request, "EvB")).toEqual({ kind: "done", result: { on: false } });
+      expect(seen[0]?.url).toBe("http://in-process.invalid/v1/briefs/people");
+      expect(seen[0]?.method).toBe("POST");
+      expect(seen[0]?.headers.get("authorization")).toBe("Bearer tok");
+      expect(seen[0]?.headers.get(CORRELATION_ID_HEADER)).toBe("EvB");
+      expect(await seen[0]?.json()).toEqual(request);
+    });
+
+    it("returns the API's error for a rejection", async () => {
+      const error = { code: "unauthorized", message: "no" };
+      const { api } = client(() => Response.json({ error }, { status: 401 }));
+      expect(await api.setBriefs(request, "c")).toEqual({ kind: "rejected", status: 401, error });
+    });
+
+    it("treats a success whose body breaks the contract as a failure", async () => {
+      const { api } = client(() => Response.json({ on: "off" }, { status: 200 }));
+      expect(await api.setBriefs(request, "c")).toEqual({
+        kind: "rejected",
+        status: 200,
+        error: undefined,
+      });
+    });
+  });
 });
