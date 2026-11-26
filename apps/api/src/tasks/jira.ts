@@ -11,8 +11,21 @@ export interface JiraConfig {
   project: string;
 }
 
+/**
+ * The part of a response this reads, typed by shape: Vercel's build type-checks the global
+ * `Response` as empty (see CLAUDE.md).
+ */
+export interface JiraResponse {
+  readonly status: number;
+  readonly ok: boolean;
+  json(): Promise<unknown>;
+}
+
 /** The part of `fetch` this uses: passed in, so tests fake Jira without the network. */
-export type Fetch = (url: string, init: RequestInit) => Promise<Response>;
+export type Fetch = (
+  url: string,
+  init: { method: string; headers: Record<string, string>; body?: string; signal: AbortSignal },
+) => Promise<JiraResponse>;
 
 export const JIRA_TIMEOUT_MS = 5000;
 
@@ -79,7 +92,9 @@ function searchWords(text: string): string {
     .trim();
 }
 
-export function createJira(config: JiraConfig, fetchJira: Fetch = fetch) {
+export function createJira(config: JiraConfig, fetchJira?: Fetch) {
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- needed on Vercel
+  const doFetch = fetchJira ?? (fetch as unknown as Fetch);
   const headers = {
     authorization: `Basic ${Buffer.from(`${config.email}:${config.token}`).toString("base64")}`,
     accept: "application/json",
@@ -91,9 +106,13 @@ export function createJira(config: JiraConfig, fetchJira: Fetch = fetch) {
    * `JiraUnreachable`, so a caller has one thing to handle (from the review of 3.3). A 404
    * answers undefined.
    */
-  async function call(path: string, init: RequestInit, timeoutMs: number): Promise<unknown> {
+  async function call(
+    path: string,
+    init: { method: string; body?: string },
+    timeoutMs: number,
+  ): Promise<unknown> {
     try {
-      const response = await fetchJira(`${config.baseUrl}${path}`, {
+      const response = await doFetch(`${config.baseUrl}${path}`, {
         ...init,
         headers,
         signal: AbortSignal.timeout(timeoutMs),
