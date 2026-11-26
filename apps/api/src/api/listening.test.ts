@@ -136,7 +136,7 @@ describe("listening routes", () => {
 
 describe("capture on reconcile", () => {
   it("reads a quiet thread after the conversations, and lists its proposal for a person", async () => {
-    const { app, lines } = setup();
+    const { app } = setup();
     await send(app, "PUT", "/v1/listening", { ...channel, listening: true, actor: { id: "U1" } });
     await send(app, "POST", "/v1/observations", posted("100.1", 41));
     await send(app, "POST", "/v1/observations", posted("100.2", 40));
@@ -158,8 +158,14 @@ describe("capture on reconcile", () => {
       method: "POST",
       headers: { authorization: `Bearer ${reconcileToken}` },
     });
-    expect(await res.json()).toMatchObject({ captured: 1 });
-    expect(lines).toContainEqual(expect.objectContaining({ msg: "capture.done", proposed: 1 }));
+    // Capture runs as a standing job (slice 4.1): its wake says what it proposed.
+    expect(await res.json()).toMatchObject({ jobs: { said: 1 } });
+    expect(
+      await db.query(
+        `select w.outcome, w.summary from job_wakes w join jobs j on j.id = w.job_id
+         where j.name = 'capture'`,
+      ),
+    ).toEqual([{ outcome: "said", summary: "1 proposal from 1 thread" }]);
 
     const person = { authorization: `Bearer ${await signPersonToken()}` };
     const decisions = decisionListSchema.parse(
@@ -208,6 +214,6 @@ describe("capture on reconcile", () => {
       headers: { authorization: `Bearer ${reconcileToken}` },
     });
     expect(res.status).toBe(200);
-    expect(lines).toContainEqual(expect.objectContaining({ msg: "capture.failed" }));
+    expect(lines).toContainEqual(expect.objectContaining({ msg: "job.wake_failed" }));
   });
 });

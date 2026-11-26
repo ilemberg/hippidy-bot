@@ -39,6 +39,8 @@ import { areaHistory, createArea, editArea, nameAreasForChange } from "./areas.t
 import { actOnProposal, decisionHistory, recordDecision } from "./decisions.ts";
 import { createTask, editTask, listBuiltinTasks, taskHistory } from "./tasks.ts";
 import { runBriefs } from "../api/briefs.ts";
+import { runJobs } from "../api/jobs.ts";
+import { jobWakes, listJobs } from "./jobs.ts";
 import { endWait, listWaits, recordWait } from "./waits.ts";
 import { conflictDetail, listConflicts, recordConflict, settleConflict } from "./conflicts.ts";
 import { recordObservation, setListening } from "./listening.ts";
@@ -1034,5 +1036,22 @@ describe("briefs through postgres.js (slice 3.4)", () => {
     expect(sent).toEqual(["U3"]);
     const rows = await db.query(`select local_date::text as d, status from briefs`);
     expect(rows).toEqual([{ d: "2026-11-23", status: "sent" }]);
+  });
+});
+
+describe("jobs through postgres.js (slice 4.1)", () => {
+  it("makes, takes and logs jobs, with spend as a number and intervals in minutes", async () => {
+    const place = { source: "slack" as const, workspaceId: "Tjobs" };
+    const log = memoryLogger().log;
+    expect(await runJobs({ db, place }, log)).toMatchObject({ woke: 2 });
+    expect(await runJobs({ db, place }, log)).toMatchObject({ woke: 0 });
+    const jobs = await listJobs(db, place);
+    expect(jobs.map((j) => [j.name, typeof j.spentMicrosThisMonth, typeof j.lastWakeAt])).toEqual([
+      ["briefs", "number", "string"],
+      ["capture", "number", "string"],
+    ]);
+    const capture = jobs.find((j) => j.name === "capture");
+    const wakes = await jobWakes(db, capture?.id ?? "");
+    expect(wakes).toEqual([expect.objectContaining({ outcome: "silent", costMicros: 0 })]);
   });
 });

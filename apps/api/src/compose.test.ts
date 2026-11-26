@@ -530,9 +530,10 @@ describe("POST /v1/reconcile", () => {
       checked: 1,
       failed: 0,
       backfilled: 0,
-      captured: 0,
       expired: 0,
-      briefs: 0,
+      // The standing jobs (slice 4.1) need the workspace (SLACK_WORKSPACE_ID); without it none
+      // wakes, and reconcile still succeeds.
+      jobs: { woke: 0, said: 0, failed: 0, skipped: 0 },
     });
     expect(slack.replies()).toEqual(["Recovered."]);
   });

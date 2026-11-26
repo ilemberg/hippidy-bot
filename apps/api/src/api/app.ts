@@ -23,6 +23,8 @@ import {
   listTasksQuerySchema,
   listWaitsQuerySchema,
   taskKeySchema,
+  type JobDetail,
+  type JobList,
   type TaskActionResult,
   type TaskDetail,
   type WaitActionResult,
@@ -71,10 +73,12 @@ import {
 } from "../store/reading.ts";
 import { requireServiceOrPerson, requireServiceToken } from "./auth.ts";
 import { startBriefByPerson, syncChange } from "./changes.ts";
-import { runCapture, type CaptureDeps } from "./capture.ts";
+import type { CaptureDeps } from "./capture.ts";
 import { namePullRequestAreas } from "./areas.ts";
 import { settleConflictByPerson } from "./conflicts.ts";
-import { myBrief, runBriefs } from "./briefs.ts";
+import { myBrief } from "./briefs.ts";
+import { runJobs } from "./jobs.ts";
+import { findJob, jobWakes, listJobs } from "../store/jobs.ts";
 import { setBriefs } from "../store/briefs.ts";
 import { createTaskSource, type TaskSource } from "../tasks/provider.ts";
 import {
@@ -961,6 +965,26 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
     return c.json(body);
   });
 
+  // Standing jobs (slice 4.1, decision 215): read by the service and anyone signed in; changed
+  // by a person in 4.2.
+  api.get("/v1/jobs", readers, async (c) => {
+    const at = storage(c);
+    if (at === undefined)
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    const body: JobList = { jobs: await listJobs(at.db, at.place) };
+    return c.json(body);
+  });
+
+  api.get("/v1/jobs/:name", readers, async (c) => {
+    const at = storage(c);
+    if (at === undefined)
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    const job = await findJob(at.db, at.place, c.req.param("name"));
+    if (job === undefined) return errorResponse(c, 404, "not_found", "No such job");
+    const body: JobDetail = { job, wakes: await jobWakes(at.db, job.id) };
+    return c.json(body);
+  });
+
   // One decision by its number, its history, and what the signed-in person may do (2.6).
   api.get("/v1/decisions/:number", readers, async (c) => {
     const number = z.coerce
@@ -1072,35 +1096,29 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
     if (result.checked > 0 || backfilled > 0) {
       c.var.log.info("reconcile.done", { ...result, backfilled });
     }
-    // Last, capture from listened channels (slice 2.5): after every conversation has been
-    // let go, and never failing reconcile.
-    let captured = 0;
-    if (deps.capture !== undefined) {
-      try {
-        const capture = await runCapture(deps.capture, c.var.log.child({ area: "capture" }));
-        captured = capture.read;
-        if (capture.read > 0 || capture.failed > 0) {
-          c.var.log.info("capture.done", { ...capture });
-        }
-      } catch (error) {
-        c.var.log.error("capture.failed", { error });
-      }
-    }
-    // Then the day's briefs (slice 3.4): after everything else, never failing reconcile.
-    const briefs = await runBriefs(
+    // Last, the standing jobs (slice 4.1): capture (2.5) and briefs (3.4) among them, after
+    // every conversation has been let go, each wake logged, and never failing reconcile.
+    const jobs = await runJobs(
       {
         db: deps.conversations.db,
-        deliverer: deps.conversations.deliverers.slack,
         place:
           deps.config.workspaceId === undefined
             ? undefined
             : { source: "slack", workspaceId: deps.config.workspaceId },
-        webBaseUrl: deps.webBaseUrl,
         fallback: deps.conversations.fallback,
+        capture: deps.capture,
+        briefs: {
+          deliverer: deps.conversations.deliverers.slack,
+          webBaseUrl: deps.webBaseUrl,
+          fallback: deps.conversations.fallback,
+        },
       },
-      c.var.log.child({ area: "briefs" }),
+      c.var.log.child({ area: "jobs" }),
     );
-    return c.json({ ...result, backfilled, captured, expired, briefs: briefs.sent });
+    if (jobs.woke > 0 && (jobs.said > 0 || jobs.failed > 0 || jobs.skipped > 0)) {
+      c.var.log.info("jobs.done", { ...jobs });
+    }
+    return c.json({ ...result, backfilled, expired, jobs });
   });
 
   return api;
