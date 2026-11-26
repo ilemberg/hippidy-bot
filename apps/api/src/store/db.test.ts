@@ -37,6 +37,8 @@ import { runCapture } from "../api/capture.ts";
 import { captureSpentSince } from "./capture.ts";
 import { areaHistory, createArea, editArea, nameAreasForChange } from "./areas.ts";
 import { actOnProposal, decisionHistory, recordDecision } from "./decisions.ts";
+import { createTask, editTask, listBuiltinTasks, taskHistory } from "./tasks.ts";
+import { endWait, listWaits, recordWait } from "./waits.ts";
 import { conflictDetail, listConflicts, recordConflict, settleConflict } from "./conflicts.ts";
 import { recordObservation, setListening } from "./listening.ts";
 import { searchDecisions } from "./decisions.ts";
@@ -952,5 +954,43 @@ describe("conflicts through postgres.js (slice 3.2)", () => {
       outcome: "changed",
       settledBy: { actorId: "U2", name: "Grace" },
     });
+  });
+});
+
+describe("tasks and waits through postgres.js (slice 3.3)", () => {
+  it("keeps a task's history as JSON, numbers as numbers, and a wait's times as ISO strings", async () => {
+    const place = { source: "slack" as const, workspaceId: "Ttasks" };
+    const who = { ...place, actorId: "U1", name: "Grace" };
+    const created = await createTask(db, who, { title: 'Rank "results" \u0000 well' });
+    expect(created.row?.title).toBe('Rank "results"  well');
+    expect(typeof created.row?.number).toBe("number");
+    const id = created.row?.id ?? "";
+    expect(await editTask(db, who, id, { version: 1, status: "done" })).toMatchObject({
+      status: "edited",
+      row: { status: "done", version: 2 },
+    });
+    expect((await taskHistory(db, id)).map((e) => e.after.status)).toEqual(["todo", "done"]);
+    expect(
+      (await listBuiltinTasks(db, place, { q: "rank", status: "all", limit: 5 })).map((t) => t.id),
+    ).toEqual([id]);
+
+    const { wait } = await recordWait(db, {
+      place,
+      waiter: { actorId: "U1", name: "Grace" },
+      waitingOn: { actorId: "U2", name: null },
+      what: "a review",
+      taskKey: "T-1",
+      conversationId: null,
+      recordedBy: { actorId: "U1", name: "Grace" },
+      customToolUseId: "sevt_wait_pg",
+    });
+    expect(typeof wait.number).toBe("number");
+    expect(typeof wait.since).toBe("string");
+    expect((await listWaits(db, place, { person: "U2", limit: 5 })).map((w) => w.id)).toEqual([
+      wait.id,
+    ]);
+    const ended = await endWait(db, { ...place, actorId: "U2", name: null }, { id: wait.id });
+    expect(ended).toMatchObject({ status: "ended", wait: { status: "ended" } });
+    expect(typeof ended.wait?.endedAt).toBe("string");
   });
 });

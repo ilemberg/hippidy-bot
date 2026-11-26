@@ -444,6 +444,9 @@ describe("schema", () => {
     "observed_messages",
     "observed_threads",
     "projects",
+    "task_events",
+    "tasks",
+    "waits",
   ];
 
   it("has row level security on every table", async () => {

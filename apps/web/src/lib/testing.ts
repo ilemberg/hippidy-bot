@@ -13,12 +13,15 @@ import type {
   ConflictDetail,
   Decision,
   DecisionDetail,
+  Task,
+  TaskDetail,
+  Wait,
 } from "@hippidy/contracts";
 import type { WebConfig } from "./config.ts";
 import { SLACK_TEAM_CLAIM } from "./slack-oidc.ts";
 
-// Test helpers: a stand-in for Slack's signing keys and its id tokens, and a decision, an area
-// and a conflict as the API returns them. Nothing here reaches the network.
+// Test helpers: a stand-in for Slack's signing keys and its id tokens, and a decision, an area,
+// a conflict, a task and a wait as the API returns them. Nothing here reaches the network.
 
 export const config: WebConfig = {
   slack: {
@@ -192,4 +195,97 @@ export const conflict: Conflict = {
 export const conflictDetail: ConflictDetail = {
   conflict,
   youMay: { settle: true, reason: null },
+};
+
+/** A built-in task Grace is doing, created by Ada (slice 3.3). */
+export const task: Task = {
+  key: "T-4",
+  title: "Rank search results by recency",
+  status: "doing",
+  statusName: "Doing",
+  assignee: { actorId: "U2", name: "Grace" },
+  url: null,
+  updatedAt: "2026-11-25T10:00:00.000Z",
+};
+
+/** The same task in Jira's `SCRUM` project. */
+export const jiraTask: Task = {
+  key: "SCRUM-8",
+  title: "Rank search results by recency",
+  status: "doing",
+  statusName: "In Progress",
+  assignee: { actorId: null, name: "Grace Hopper" },
+  url: "https://example.atlassian.net/browse/SCRUM-8",
+  updatedAt: "2026-11-25T10:00:00.000Z",
+};
+
+/** Grace waiting on Ada for a review, said in a thread, about T-4. */
+export const wait: Wait = {
+  id: "7e6d5c4b-3a29-4f18-8e7d-6c5b4a392817",
+  number: 2,
+  waiter: { actorId: "U2", name: "Grace" },
+  waitingOn: { actorId: "U1", name: "Ada" },
+  what: "review the ranking",
+  taskKey: "T-4",
+  since: "2026-11-23T12:00:00.000Z",
+  conversationId: "6f1c2b9e-1d2a-4c3b-9e8f-0a1b2c3d4e5f",
+  channelId: "C1",
+  threadId: "1700.000100",
+  recordedBy: { actorId: "B1", name: "hippidy-bot" },
+  status: "open",
+  endedBy: null,
+  endedAt: null,
+};
+
+/** `GET /v1/tasks/T-4`: created by Ada, then given to Grace and started, worked on in a thread. */
+export const taskDetail: TaskDetail = {
+  provider: "builtin",
+  task,
+  builtin: {
+    id: "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d",
+    description: "Newer decisions first when the words match equally",
+    version: 2,
+    createdBy: { actorId: "U1", name: "Ada" },
+    createdAt: "2026-11-25T09:00:00.000Z",
+    history: [
+      {
+        kind: "created",
+        actor: { actorId: "U1", name: "Ada" },
+        at: "2026-11-25T09:00:00.000Z",
+        before: null,
+        after: {
+          title: task.title,
+          description: "Newer decisions first when the words match equally",
+          status: "todo",
+          assignee: null,
+        },
+      },
+      {
+        kind: "edited",
+        actor: { actorId: "U1", name: "Ada" },
+        at: "2026-11-25T10:00:00.000Z",
+        before: {
+          title: task.title,
+          description: "Newer decisions first when the words match equally",
+          status: "todo",
+          assignee: null,
+        },
+        after: {
+          title: task.title,
+          description: "Newer decisions first when the words match equally",
+          status: "doing",
+          assignee: { actorId: "U2", name: "Grace" },
+        },
+      },
+    ],
+  },
+  threads: [
+    {
+      conversationId: "6f1c2b9e-1d2a-4c3b-9e8f-0a1b2c3d4e5f",
+      channelId: "C1",
+      threadId: "1700.000100",
+      linkedAt: "2026-11-25T11:00:00.000Z",
+    },
+  ],
+  waits: [wait],
 };

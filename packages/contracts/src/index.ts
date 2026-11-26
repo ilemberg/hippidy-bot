@@ -12,3 +12,4 @@ export * from "./messages.ts";
 export * from "./projects.ts";
 export * from "./sessions.ts";
 export * from "./status.ts";
+export * from "./tasks.ts";

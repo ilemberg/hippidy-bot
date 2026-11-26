@@ -12,23 +12,36 @@ import {
   peopleListSchema,
   sessionListSchema,
   settleConflictResultSchema,
+  taskActionResultSchema,
+  taskDetailSchema,
+  taskListSchema,
+  waitActionResultSchema,
+  waitListSchema,
   type AreaActionResult,
   type AreaDetail,
   type AreaList,
   type Conflict,
   type ConflictDetail,
   type CreateAreaRequest,
+  type CreateTaskRequest,
+  type CreateWaitRequest,
   type Decision,
   type DecisionActionResult,
   type DecisionDetail,
   type DecisionStatus,
   type EditAreaRequest,
   type EditDecisionRequest,
+  type EditTaskRequest,
   type ListeningList,
   type PeopleList,
   type SessionActivity,
   type SettleConflictRequest,
   type SettleConflictResult,
+  type TaskActionResult,
+  type TaskDetail,
+  type TaskList,
+  type Wait,
+  type WaitActionResult,
 } from "@hippidy/contracts";
 import type { z } from "zod";
 import type { Logger } from "./log.ts";
@@ -329,4 +342,109 @@ export function settleConflict(
 ): Promise<ApiResult<SettleConflictResult>> {
   const route = `/v1/conflicts/${encodeURIComponent(conflictId)}/settle`;
   return apiSend(person, "POST", route, settle, settleConflictResultSchema, deps);
+}
+
+/** What `GET /v1/tasks` is asked for: words to search for, which status, how many. */
+export interface TasksQuery {
+  q?: string;
+  status?: "open" | "todo" | "doing" | "done" | "all";
+  limit?: number;
+}
+
+/** `GET /v1/tasks` as the person: the provider's tasks, or why it gave none (slice 3.3). */
+export function fetchTasks(
+  person: Person,
+  query: TasksQuery,
+  deps: ApiClientDeps,
+): Promise<ApiResult<TaskList>> {
+  const params = new URLSearchParams();
+  if (query.q !== undefined) params.set("q", query.q);
+  if (query.status !== undefined) params.set("status", query.status);
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  const search = params.toString();
+  return apiGet(person, `/v1/tasks${search === "" ? "" : `?${search}`}`, taskListSchema, deps);
+}
+
+/** A task looked up by its key: found, not in the provider, or why the API gave nothing. */
+export type TaskLookup = ApiResult<TaskDetail> | { kind: "not_found" };
+
+/** `GET /v1/tasks/:key` as the person: one task, its threads and waits, and, built-in, more. */
+export async function fetchTask(
+  person: Person,
+  key: string,
+  deps: ApiClientDeps,
+): Promise<TaskLookup> {
+  const route = `/v1/tasks/${encodeURIComponent(key)}`;
+  const result = await apiGet(person, route, taskDetailSchema, deps);
+  return result.kind === "failed" && result.reason === "status_404"
+    ? { kind: "not_found" }
+    : result;
+}
+
+/** `POST /v1/tasks` as the person, whom the API takes from the token (built-in tracker only). */
+export function createTask(
+  person: Person,
+  task: CreateTaskRequest,
+  deps: ApiClientDeps,
+): Promise<ApiResult<TaskActionResult>> {
+  return apiSend(person, "POST", "/v1/tasks", task, taskActionResultSchema, deps);
+}
+
+/** `PATCH /v1/tasks/:id` as the person: what changes, on the version the form showed. */
+export function editTask(
+  person: Person,
+  taskId: string,
+  edit: EditTaskRequest,
+  deps: ApiClientDeps,
+): Promise<ApiResult<TaskActionResult>> {
+  const route = `/v1/tasks/${encodeURIComponent(taskId)}`;
+  return apiSend(person, "PATCH", route, edit, taskActionResultSchema, deps);
+}
+
+/** What `GET /v1/waits` is asked for: which status, a person's or a task's, how many. */
+export interface WaitsQuery {
+  status?: "open" | "ended" | "all";
+  person?: string;
+  task?: string;
+  limit?: number;
+}
+
+/** `GET /v1/waits` as the person: who is waiting on whom (slice 3.3). */
+export async function fetchWaits(
+  person: Person,
+  query: WaitsQuery,
+  deps: ApiClientDeps,
+): Promise<ApiResult<Wait[]>> {
+  const params = new URLSearchParams();
+  if (query.status !== undefined) params.set("status", query.status);
+  if (query.person !== undefined) params.set("person", query.person);
+  if (query.task !== undefined) params.set("task", query.task);
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  const search = params.toString();
+  const result = await apiGet(
+    person,
+    `/v1/waits${search === "" ? "" : `?${search}`}`,
+    waitListSchema,
+    deps,
+  );
+  return result.kind === "ok" ? { kind: "ok", value: result.value.waits } : result;
+}
+
+/** `POST /v1/waits` as the person: their own wait, the waiter taken from the token. */
+export function recordWait(
+  person: Person,
+  wait: CreateWaitRequest,
+  deps: ApiClientDeps,
+): Promise<ApiResult<WaitActionResult>> {
+  return apiSend(person, "POST", "/v1/waits", wait, waitActionResultSchema, deps);
+}
+
+/** `POST /v1/waits/:id/end` as the person, who must be one of its people. */
+export function endWait(
+  person: Person,
+  waitId: string,
+  deps: ApiClientDeps,
+): Promise<ApiResult<WaitActionResult>> {
+  const route = `/v1/waits/${encodeURIComponent(waitId)}/end`;
+  return apiSend(person, "POST", route, {}, waitActionResultSchema, deps);
 }

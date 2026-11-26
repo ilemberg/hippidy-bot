@@ -63,7 +63,9 @@ Planned in detail in `slice-3-2.md` (decision 208). The outline it came from:
 - **Shown** on the decision's page and in a list of open conflicts; 3.4 puts them in the
   owner's brief.
 
-## Slice 3.3 (outline)
+## Slice 3.3
+
+Planned in detail in `slice-3-3.md` (decision 210). The outline it came from:
 
 - **One home per kind (178).** `TASK_PROVIDER` is `jira` or `builtin`. Both are built behind
   one interface (list, read, link a thread), so the web app's task page is the same for both.

@@ -18,6 +18,7 @@ import {
   type AgentRuntime,
 } from "../agent/runtime.ts";
 import type { PullRequestChecks } from "../github/checks.ts";
+import type { TaskSource } from "../tasks/provider.ts";
 import type { Logger } from "../log.ts";
 import {
   attachSession,
@@ -85,6 +86,8 @@ export interface ConversationDeps {
   newThreadAgent?: AgentKind;
   /** Who decides for anything with no owner (slice 3.1, `FALLBACK_OWNER`). */
   fallback?: Fallback | undefined;
+  /** Where tasks come from (slice 3.3). Without it, the built-in tracker. */
+  tasks?: TaskSource | undefined;
 }
 
 /** How long a message may wait for the agent before reconcile looks at it. */
@@ -800,6 +803,7 @@ async function answerWaitingCalls(
       const answer = await answerCustomToolCall(deps.db, conversationId, call, messages, events, {
         fallback: deps.fallback,
         log,
+        tasks: deps.tasks,
       });
       await deps.runtime.answerCustomTool(sessionId, call.id, answer);
       log.info("conversation.custom_tool_answered", {

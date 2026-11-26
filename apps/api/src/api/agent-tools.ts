@@ -1,7 +1,10 @@
 import {
   customToolNameSchema,
+  endWaitInputSchema,
   linkProjectInputSchema,
+  linkTaskInputSchema,
   raiseConflictInputSchema,
+  recordWaitInputSchema,
   recallDecisionsInputSchema,
   recordApprovalInputSchema,
   recordDecisionInputSchema,
@@ -26,6 +29,8 @@ import {
   rolesFromStored,
 } from "./conflicts.ts";
 import { storedDeciders } from "../store/conflicts.ts";
+import { endWaitFor, linkTask, recordWaitFor } from "./tasks.ts";
+import type { TaskSource } from "../tasks/provider.ts";
 import { findAreaByName, listAreas } from "../store/areas.ts";
 import type { z } from "zod";
 import type { AgentEvent } from "../agent/runtime.ts";
@@ -150,6 +155,21 @@ export async function answerCustomToolCall(
       if (!input.success) return invalid(name.data, input.error);
       return raiseConflict(db, conversationId, context, call, input.data, routing);
     }
+    case "link_task": {
+      const input = linkTaskInputSchema.safeParse(call.input);
+      if (!input.success) return invalid(name.data, input.error);
+      return linkTask(db, conversationId, context, input.data, routing);
+    }
+    case "record_wait": {
+      const input = recordWaitInputSchema.safeParse(call.input);
+      if (!input.success) return invalid(name.data, input.error);
+      return recordWaitFor(db, conversationId, context, call, messages, input.data);
+    }
+    case "end_wait": {
+      const input = endWaitInputSchema.safeParse(call.input);
+      if (!input.success) return invalid(name.data, input.error);
+      return endWaitFor(db, conversationId, context, call, messages, input.data);
+    }
   }
 }
 
@@ -157,6 +177,8 @@ export async function answerCustomToolCall(
 export interface Routing {
   fallback?: Fallback | undefined;
   log?: Logger | undefined;
+  /** Where tasks come from (slice 3.3). */
+  tasks?: TaskSource | undefined;
 }
 
 /** Why a recorded decision is only proposed, for the thread; undefined when it is active. */

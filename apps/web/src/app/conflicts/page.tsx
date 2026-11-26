@@ -101,8 +101,9 @@ function View({ view }: { view: ConflictsView }) {
           {view.truncated ? <p className="muted">Showing the latest {CONFLICTS_LIMIT}.</p> : null}
           <footer className="muted">
             <a href="/">Agents at work</a> · <a href="/decisions">Decisions</a> ·{" "}
-            <a href="/areas">Areas</a> · <a href="/listening">Listening in channels</a> · Signed in
-            as {view.person.name}.
+            <a href="/areas">Areas</a> · <a href="/tasks">Tasks</a> ·{" "}
+            <a href="/waits">Waiting on</a> · <a href="/listening">Listening in channels</a> ·
+            Signed in as {view.person.name}.
           </footer>
         </>
       );

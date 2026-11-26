@@ -14,6 +14,16 @@ import {
   MAX_INBOUND_MESSAGE_BYTES,
   confirmDecisionRequestSchema,
   listConflictsQuerySchema,
+  createTaskRequestSchema,
+  createWaitRequestSchema,
+  editTaskRequestSchema,
+  listTasksQuerySchema,
+  listWaitsQuerySchema,
+  taskKeySchema,
+  type TaskActionResult,
+  type TaskDetail,
+  type WaitActionResult,
+  type WaitList,
   settleConflictRequestSchema,
   type ConflictList,
   listDecisionsQuerySchema,
@@ -61,6 +71,17 @@ import { startBriefByPerson, syncChange } from "./changes.ts";
 import { runCapture, type CaptureDeps } from "./capture.ts";
 import { namePullRequestAreas } from "./areas.ts";
 import { settleConflictByPerson } from "./conflicts.ts";
+import { createTaskSource, type TaskSource } from "../tasks/provider.ts";
+import {
+  createTask,
+  editTask,
+  findBuiltinTask,
+  taskHistory,
+  threadsForTask,
+  toTask,
+} from "../store/tasks.ts";
+import { endWait, listWaits, recordWait } from "../store/waits.ts";
+import { knownName } from "../store/areas.ts";
 import { conflictDetail, listConflicts } from "../store/conflicts.ts";
 import {
   areaHistory,
@@ -104,6 +125,8 @@ export interface ApiDeps {
   status: StatusDeps;
   /** Capture from listened channels (slice 2.5). Undefined until storage and the agent are. */
   capture?: CaptureDeps | undefined;
+  /** Where tasks come from (slice 3.3). Built with storage, whether or not the agent is. */
+  tasks?: TaskSource | undefined;
 }
 
 /** Webhook types after which the session may have something new to deliver. */
@@ -708,6 +731,177 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
     );
   });
 
+  // Tasks behind one provider, and the waiting-on list (slice 3.3, decision 210). Read by
+  // anyone signed in or the service; a person writes as themselves.
+  const taskSource = (db: NonNullable<typeof deps.status.db>) =>
+    deps.tasks ?? deps.conversations?.tasks ?? createTaskSource({ kind: "builtin" }, db, deps.log);
+  const storage = (c: Context<ApiEnv>) => {
+    const db = deps.conversations?.db ?? deps.status.db;
+    const place = placeOf(c.var.caller);
+    return db === undefined || place === undefined ? undefined : { db, place };
+  };
+  const writer = (c: Context<ApiEnv>): AreaActor | undefined => areaWriter(c);
+
+  api.get("/v1/tasks", readers, async (c) => {
+    const query = listTasksQuerySchema.safeParse(c.req.query());
+    if (!query.success) return invalidQuery(c, query.error);
+    const at = storage(c);
+    if (at === undefined)
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    return c.json(await taskSource(at.db).list(at.place, query.data));
+  });
+
+  api.get("/v1/tasks/:key", readers, async (c) => {
+    const key = taskKeySchema.safeParse(c.req.param("key"));
+    if (!key.success) return errorResponse(c, 404, "not_found", "No such task");
+    const at = storage(c);
+    if (at === undefined)
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    const source = taskSource(at.db);
+    const found = await source.get(at.place, key.data);
+    if (found.kind === "missing") return errorResponse(c, 404, "not_found", "No such task");
+    if (found.kind === "unavailable") {
+      return errorResponse(c, 503, "not_configured", "The task provider is not available");
+    }
+    const row =
+      source.provider === "builtin" ? await findBuiltinTask(at.db, at.place, key.data) : undefined;
+    const body: TaskDetail = {
+      provider: source.provider,
+      task: found.task,
+      builtin:
+        row === undefined
+          ? null
+          : {
+              id: row.id,
+              description: row.description,
+              version: row.version,
+              createdBy: { actorId: row.created_by_actor_id, name: row.created_by_name },
+              createdAt: row.created_at.toISOString(),
+              history: await taskHistory(at.db, row.id),
+            },
+      threads: await threadsForTask(at.db, at.place, key.data),
+      waits: await listWaits(at.db, at.place, { status: "all", task: key.data, limit: 50 }),
+    };
+    return c.json(body);
+  });
+
+  api.post("/v1/tasks", people, limitBody, async (c) => {
+    const actor = writer(c);
+    if (actor === undefined) {
+      return errorResponse(c, 400, "invalid_request", "Only a signed-in person changes tasks");
+    }
+    const parsed = createTaskRequestSchema.safeParse((await jsonBody(c))?.body);
+    if (!parsed.success) return errorResponse(c, 400, "invalid_request", "Request body is invalid");
+    const at = storage(c);
+    if (at === undefined)
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    if (taskSource(at.db).provider !== "builtin") {
+      const body: TaskActionResult = { status: "not_builtin" };
+      return c.json(body);
+    }
+    if (!(await knownAssignee(at.db, at.place, actor, parsed.data.assigneeActorId))) {
+      const body: TaskActionResult = { status: "unknown_person" };
+      return c.json(body);
+    }
+    const result = await createTask(at.db, actor, parsed.data);
+    c.var.log.info("task.create", { status: result.status });
+    const body: TaskActionResult =
+      result.row === undefined
+        ? { status: result.status }
+        : { status: result.status, task: toTask(result.row) };
+    return c.json(body, 201);
+  });
+
+  api.patch("/v1/tasks/:taskId", people, limitBody, async (c) => {
+    const actor = writer(c);
+    if (actor === undefined) {
+      return errorResponse(c, 400, "invalid_request", "Only a signed-in person changes tasks");
+    }
+    const taskId = conversationIdSchema.safeParse(c.req.param("taskId"));
+    if (!taskId.success) return errorResponse(c, 404, "not_found", "No such task");
+    const parsed = editTaskRequestSchema.safeParse((await jsonBody(c))?.body);
+    if (!parsed.success) return errorResponse(c, 400, "invalid_request", "Request body is invalid");
+    const at = storage(c);
+    if (at === undefined)
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    if (taskSource(at.db).provider !== "builtin") {
+      const body: TaskActionResult = { status: "not_builtin" };
+      return c.json(body);
+    }
+    if (!(await knownAssignee(at.db, at.place, actor, parsed.data.assigneeActorId))) {
+      const body: TaskActionResult = { status: "unknown_person" };
+      return c.json(body);
+    }
+    const result = await editTask(at.db, actor, taskId.data, parsed.data);
+    c.var.log.info("task.edit", { taskId: taskId.data, status: result.status });
+    const body: TaskActionResult =
+      result.row === undefined
+        ? { status: result.status }
+        : { status: result.status, task: toTask(result.row) };
+    return c.json(body);
+  });
+
+  api.get("/v1/waits", readers, async (c) => {
+    const query = listWaitsQuerySchema.safeParse(c.req.query());
+    if (!query.success) return invalidQuery(c, query.error);
+    const at = storage(c);
+    if (at === undefined)
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    const body: WaitList = { waits: await listWaits(at.db, at.place, query.data) };
+    return c.json(body);
+  });
+
+  api.post("/v1/waits", people, limitBody, async (c) => {
+    const actor = writer(c);
+    if (actor === undefined) {
+      return errorResponse(c, 400, "invalid_request", "Only a signed-in person records a wait");
+    }
+    const parsed = createWaitRequestSchema.safeParse((await jsonBody(c))?.body);
+    if (!parsed.success) return errorResponse(c, 400, "invalid_request", "Request body is invalid");
+    const at = storage(c);
+    if (at === undefined)
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    const on = parsed.data.waitingOnActorId;
+    const onName = await knownName(at.db, at.place, on);
+    // Only someone the record knows, and never oneself.
+    if (on === actor.actorId || (onName === null && !(await isKnown(at.db, at.place, on)))) {
+      const body: WaitActionResult = { status: "unknown_person" };
+      return c.json(body);
+    }
+    const me = { actorId: actor.actorId, name: actor.name };
+    const { wait } = await recordWait(at.db, {
+      place: at.place,
+      waiter: me,
+      waitingOn: { actorId: on, name: onName },
+      what: parsed.data.what,
+      taskKey: parsed.data.taskKey ?? null,
+      conversationId: null,
+      recordedBy: me,
+    });
+    c.var.log.info("wait.record", { number: wait.number });
+    const body: WaitActionResult = { status: "recorded", wait };
+    return c.json(body, 201);
+  });
+
+  api.post("/v1/waits/:waitId/end", people, limitBody, async (c) => {
+    const actor = writer(c);
+    if (actor === undefined) {
+      return errorResponse(c, 400, "invalid_request", "Only a signed-in person ends a wait");
+    }
+    const waitId = conversationIdSchema.safeParse(c.req.param("waitId"));
+    if (!waitId.success) return errorResponse(c, 404, "not_found", "No such wait");
+    const at = storage(c);
+    if (at === undefined)
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    const result = await endWait(at.db, actor, { id: waitId.data });
+    c.var.log.info("wait.end", { waitId: waitId.data, status: result.status });
+    const body: WaitActionResult =
+      result.wait === undefined
+        ? { status: result.status }
+        : { status: result.status, wait: result.wait };
+    return c.json(body);
+  });
+
   // One decision by its number, its history, and what the signed-in person may do (2.6).
   api.get("/v1/decisions/:number", readers, async (c) => {
     const number = z.coerce
@@ -837,4 +1031,32 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
   });
 
   return api;
+}
+
+/** Whether the record knows a person by id, though it has no name for them. */
+async function isKnown(
+  db: NonNullable<StatusDeps["db"]>,
+  place: { source: string; workspaceId: string },
+  actorId: string,
+): Promise<boolean> {
+  const rows = await db.query(
+    `select 1 from inbound_messages where source = $1 and workspace_id = $2 and actor_id = $3
+     union all
+     select 1 from areas where source = $1 and workspace_id = $2
+       and (owner_actor_id = $3 or created_by_actor_id = $3)
+     limit 1`,
+    [place.source, place.workspaceId, actorId],
+  );
+  return rows.length > 0;
+}
+
+/** An assignee is someone the record knows, or the person assigning (from the review of 3.3). */
+async function knownAssignee(
+  db: NonNullable<StatusDeps["db"]>,
+  place: { source: "slack" | "ui"; workspaceId: string },
+  actor: { actorId: string },
+  assignee: string | null | undefined,
+): Promise<boolean> {
+  if (assignee == null || assignee === actor.actorId) return true;
+  return (await knownName(db, place, assignee)) !== null || (await isKnown(db, place, assignee));
 }
