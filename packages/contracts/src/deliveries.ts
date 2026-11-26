@@ -80,4 +80,19 @@ export type OutboundDelivery = z.infer<typeof outboundDeliverySchema>;
  */
 export interface Deliverer {
   deliver(delivery: OutboundDelivery, correlationId: string): Promise<void>;
+  /**
+   * Sends a person a direct message (slice 3.4): Markdown, converted like a reply. Throws when
+   * it did not go out. Optional: a source without direct messages sends no briefs.
+   */
+  direct?(message: DirectMessage, correlationId: string): Promise<void>;
+  /** A person's IANA time zone (`Europe/London`), or undefined if the source cannot say. */
+  timeZone?(person: { workspaceId: string; userId: string }): Promise<string | undefined>;
+}
+
+/** A direct message to one person (slice 3.4). */
+export interface DirectMessage {
+  workspaceId: string;
+  userId: string;
+  /** Markdown. Each source converts it to its own format. */
+  text: string;
 }

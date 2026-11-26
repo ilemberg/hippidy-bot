@@ -1,5 +1,6 @@
 export * from "./agent-tools.ts";
 export * from "./areas.ts";
+export * from "./briefs.ts";
 export * from "./changes.ts";
 export * from "./conflicts.ts";
 export * from "./conversations.ts";

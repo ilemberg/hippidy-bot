@@ -76,7 +76,9 @@ Planned in detail in `slice-3-3.md` (decision 210). The outline it came from:
   either.
 - **A thread's task** (SCRUM-8): the teammate links a thread to the task it works on.
 
-## Slice 3.4 (outline)
+## Slice 3.4
+
+Planned in detail in `slice-3-4.md` (decision 212). The outline it came from:
 
 - **Direct messages.** The manifest gains the `im` scopes and `message.im`. Writing to the bot
   in a direct message stays as today (a mention is not needed there); "stop briefs" and "start
