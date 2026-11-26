@@ -1,4 +1,9 @@
-import { jobDetailSchema, jobListSchema, type Observation } from "@hippidy/contracts";
+import {
+  jobActionResultSchema,
+  jobDetailSchema,
+  jobListSchema,
+  type Observation,
+} from "@hippidy/contracts";
 import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FakeAgentRuntime } from "../agent/fake.ts";
@@ -285,5 +290,180 @@ describe("the jobs routes", () => {
       expect.objectContaining({ outcome: "silent", summary: "the agent is not configured" }),
     ]);
     expect((await app.request("/v1/jobs/nothing", { headers })).status).toBe(404);
+  });
+});
+
+describe("changing a job (slice 4.2)", () => {
+  async function setup() {
+    await runJobs({ db, place }, log);
+    const conversations: ConversationDeps = {
+      db,
+      runtime: new FakeAgentRuntime(),
+      deliverers: { slack: new RecordingDeliverer() },
+      sleep: () => Promise.resolve(),
+    };
+    const app = configureApp(new Hono<ApiEnv>(), {
+      env,
+      log: memoryLogger().log,
+      services: {
+        conversations,
+        status: { db, configured: { agent: true, slack: true, github: true } },
+      },
+    });
+    const as = async (actorId: string) => ({
+      authorization: `Bearer ${await signPersonToken({ subject: actorId, name: "Ada" })}`,
+      "content-type": "application/json",
+    });
+    const [row] = await db.query(`select id from jobs where name = 'capture'`);
+    const id = String(row?.id);
+    const edit = async (body: object, by = "U1") =>
+      jobActionResultSchema.parse(
+        await (
+          await app.request(`/v1/jobs/${id}`, {
+            method: "PATCH",
+            headers: await as(by),
+            body: JSON.stringify(body),
+          })
+        ).json(),
+      );
+    return { app, as, edit, id };
+  }
+
+  it("pauses, raises the cap and changes the interval, each kept, on the version seen", async () => {
+    const { app, as, edit } = await setup();
+    expect(await edit({ version: 1, state: "paused", capCents: 4000 })).toMatchObject({
+      status: "edited",
+      job: { state: "paused", capCents: 4000, version: 2 },
+    });
+    expect((await edit({ version: 1, everyMinutes: 5 })).status).toBe("changed");
+    expect((await edit({ version: 2, state: "paused" })).status).toBe("unchanged");
+    expect(await edit({ version: 2, everyMinutes: 5, goal: "  " })).toMatchObject({
+      status: "edited",
+      job: { everyMinutes: 5, goal: null },
+    });
+    // Paused: it does not wake.
+    await db.query(`update jobs set last_wake_at = null`);
+    await runJobs({ db, place }, log);
+    expect(await wakes("capture")).toHaveLength(1);
+    const detail = jobDetailSchema.parse(
+      await (await app.request("/v1/jobs/capture", { headers: await as("U2") })).json(),
+    );
+    expect(detail.history.map((h) => [h.actor.actorId, h.before.state, h.after.state])).toEqual([
+      ["U1", "active", "paused"],
+      ["U1", "paused", "paused"],
+    ]);
+    // The service token never changes a job.
+    const service = await app.request(`/v1/jobs/${detail.job.id}`, {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${serviceToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ version: 3, state: "active" }),
+    });
+    expect(service.status).toBe(400);
+  });
+
+  it("wakes a capped job again only once its cap is above this month's spend", async () => {
+    const { edit } = await setup();
+    await db.query(
+      `update jobs set state = 'capped', capped_month = current_date where name = 'capture'`,
+    );
+    await db.query(
+      `update job_wakes set cost_micros = 50000000
+       where job_id = (select id from jobs where name = 'capture')`,
+    );
+    // $50 spent: resuming at the $30 cap is refused; raising the cap to $60 resumes it.
+    expect((await edit({ version: 1, state: "active" })).status).toBe("still_capped");
+    expect(await edit({ version: 1, capCents: 6000 })).toMatchObject({
+      status: "edited",
+      job: { state: "active", capCents: 6000 },
+    });
+  });
+});
+
+describe("what the review of 4.2 found", () => {
+  it("does not wake a job paused after the run took it", async () => {
+    await runJobs({ db, place }, log);
+    await db.query(`update jobs set last_wake_at = null`);
+    const { takeDueJobs, startWake } = await import("../store/jobs.ts");
+    const taken = await takeDueJobs(db, place);
+    await db.query(`update jobs set state = 'paused' where name = 'briefs'`);
+    const briefs = taken.find((j) => j.name === "briefs");
+    expect(await startWake(db, briefs?.id ?? "")).toBeUndefined();
+  });
+
+  it("does not cap a job whose cap a person just raised", async () => {
+    await runJobs({ db, place }, log);
+    const { capJob } = await import("../store/jobs.ts");
+    const [row] = await db.query(`select id from jobs where name = 'capture'`);
+    await db.query(`update jobs set cap_cents = 6000 where name = 'capture'`);
+    expect(await capJob(db, String(row?.id), 3000)).toBe(false);
+    const [after] = await db.query(`select state from jobs where name = 'capture'`);
+    expect(after?.state).toBe("active");
+  });
+
+  it("refuses to make active a job at its cap, from paused too, and wakes it again once raised", async () => {
+    await runJobs({ db, place }, log);
+    const { editJob } = await import("../store/jobs.ts");
+    const [row] = await db.query(`select id from jobs where name = 'capture'`);
+    const id = String(row?.id);
+    const ada = { ...place, actorId: "U1", name: "Ada" };
+    await db.query(`update job_wakes set cost_micros = 50000000 where job_id = $1`, [id]);
+    expect((await editJob(db, ada, id, { version: 1, state: "paused" })).status).toBe("edited");
+    expect((await editJob(db, ada, id, { version: 2, state: "active" })).status).toBe(
+      "still_capped",
+    );
+    // Raising a paused job's cap leaves it paused.
+    expect(await editJob(db, ada, id, { version: 2, capCents: 6000 })).toMatchObject({
+      status: "edited",
+      job: { state: "paused" },
+    });
+    expect((await editJob(db, ada, id, { version: 3, state: "active" })).status).toBe("edited");
+    await db.query(`update jobs set last_wake_at = null`);
+    await runJobs({ db, place }, log);
+    expect((await wakes("capture")).at(-1)?.outcome).toBe("silent");
+  });
+
+  it("refuses a bad body, and a job in another workspace", async () => {
+    await runJobs({ db, place }, log);
+    await runJobs({ db, place: { source: "slack", workspaceId: "TOTHER" } }, log);
+    const conversations: ConversationDeps = {
+      db,
+      runtime: new FakeAgentRuntime(),
+      deliverers: { slack: new RecordingDeliverer() },
+      sleep: () => Promise.resolve(),
+    };
+    const app = configureApp(new Hono<ApiEnv>(), {
+      env,
+      log: memoryLogger().log,
+      services: {
+        conversations,
+        status: { db, configured: { agent: true, slack: true, github: true } },
+      },
+    });
+    const headers = {
+      authorization: `Bearer ${await signPersonToken({ subject: "U1", name: "Ada" })}`,
+      "content-type": "application/json",
+    };
+    const [other] = await db.query(`select id from jobs where workspace_id = 'TOTHER' limit 1`);
+    const foreign = await app.request(`/v1/jobs/${String(other?.id)}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ version: 1, state: "paused" }),
+    });
+    expect(jobActionResultSchema.parse(await foreign.json()).status).toBe("not_found");
+    const [mine] = await db.query(`select id from jobs where workspace_id = $1 limit 1`, [ws]);
+    for (const body of [
+      { version: 1, capCents: 10001 },
+      { version: 1, everyMinutes: 0 },
+      { version: 1 },
+      { version: 1, state: "capped" },
+      { version: 1, notes: "x" },
+    ]) {
+      const res = await app.request(`/v1/jobs/${String(mine?.id)}`, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify(body),
+      });
+      expect(res.status).toBe(400);
+    }
   });
 });

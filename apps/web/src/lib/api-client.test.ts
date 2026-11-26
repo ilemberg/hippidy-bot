@@ -25,6 +25,9 @@ import {
   recordWait,
   fetchMyBrief,
   setMyBriefs,
+  editJob,
+  fetchJob,
+  fetchJobs,
 } from "./api-client.ts";
 import { memoryLogger } from "./log.ts";
 import type { Fetch } from "./slack-oidc.ts";
@@ -34,7 +37,10 @@ import {
   config,
   conflict,
   conflictDetail,
+  briefsJob,
   jiraTask,
+  job,
+  jobDetail,
   myBrief,
   proposal as decision,
   proposalDetail as detail,
@@ -579,6 +585,91 @@ describe("briefs", () => {
     expect(await setMyBriefs(person, true, deps(down))).toEqual({
       kind: "failed",
       reason: "unreachable",
+    });
+  });
+});
+
+describe("jobs", () => {
+  it("lists them as the person, checked against the contract", async () => {
+    const list = { jobs: [job, briefsJob] };
+    const api = fakeApi(() => Response.json(list));
+    expect(await fetchJobs(person, deps(api.fetch))).toEqual({ kind: "ok", value: list });
+    expect(api.calls.map(({ url, method }) => [method, url])).toEqual([
+      ["GET", "https://api.example.test/v1/jobs"],
+    ]);
+    expect(await tokenSubject(api.calls[0]?.headers ?? new Headers())).toBe("U0123456789");
+    const odd = fakeApi(() => Response.json({ jobs: [{ ...job, state: "sleeping" }] }));
+    expect(await fetchJobs(person, deps(odd.fetch))).toEqual({
+      kind: "failed",
+      reason: "unexpected_response",
+    });
+  });
+
+  it("reads one by its name, encoded as one segment, and tells not found apart", async () => {
+    const api = fakeApi(() => Response.json(jobDetail));
+    expect(await fetchJob(person, "night watch/2", deps(api.fetch))).toEqual({
+      kind: "ok",
+      value: jobDetail,
+    });
+    expect(api.calls[0]?.url).toBe("https://api.example.test/v1/jobs/night%20watch%2F2");
+    const missing = fakeApi(() =>
+      Response.json({ error: { code: "not_found", message: "No such job" } }, { status: 404 }),
+    );
+    expect(await fetchJob(person, "capture", deps(missing.fetch))).toEqual({ kind: "not_found" });
+    const down = fakeApi(() => new Response(null, { status: 503 }));
+    expect(await fetchJob(person, "capture", deps(down.fetch))).toEqual({
+      kind: "failed",
+      reason: "status_503",
+    });
+    const noHistory = fakeApi(() => Response.json({ job, wakes: [] }));
+    expect(await fetchJob(person, "capture", deps(noHistory.fetch))).toEqual({
+      kind: "failed",
+      reason: "unexpected_response",
+    });
+  });
+
+  it("edits with a PATCH to the job's id, naming no one else", async () => {
+    const api = fakeApi(() =>
+      Response.json({ status: "edited", job: { ...job, state: "paused", version: 4 } }),
+    );
+    expect(
+      await editJob(person, job.id, { version: 3, state: "paused", goal: null }, deps(api.fetch)),
+    ).toEqual({
+      kind: "ok",
+      value: { status: "edited", job: { ...job, state: "paused", version: 4 } },
+    });
+    expect(api.calls.map(({ url, method, body }) => ({ url, method, body }))).toEqual([
+      {
+        url: `https://api.example.test/v1/jobs/${job.id}`,
+        method: "PATCH",
+        body: { version: 3, state: "paused", goal: null },
+      },
+    ]);
+    const call = api.calls[0];
+    expect(call?.headers.get("content-type")).toBe("application/json");
+    expect(call?.headers.get("x-correlation-id")).toBe("corr-1");
+    expect(await tokenSubject(call?.headers ?? new Headers())).toBe("U0123456789");
+  });
+
+  it("passes on a refusal in the body, and reports a failed or odd write", async () => {
+    const capped = fakeApi(() => Response.json({ status: "still_capped", job }));
+    expect(
+      await editJob(person, job.id, { version: 3, state: "active" }, deps(capped.fetch)),
+    ).toEqual({ kind: "ok", value: { status: "still_capped", job } });
+    const bad = fakeApi(() => Response.json({ error: {} }, { status: 400 }));
+    expect(await editJob(person, job.id, { version: 3, capCents: 1 }, deps(bad.fetch))).toEqual({
+      kind: "failed",
+      reason: "status_400",
+    });
+    const down: Fetch = () => Promise.reject(new Error("connection refused"));
+    expect(await editJob(person, job.id, { version: 3, capCents: 1 }, deps(down))).toEqual({
+      kind: "failed",
+      reason: "unreachable",
+    });
+    const odd = fakeApi(() => Response.json({ status: "resumed" }));
+    expect(await editJob(person, job.id, { version: 3, capCents: 1 }, deps(odd.fetch))).toEqual({
+      kind: "failed",
+      reason: "unexpected_response",
     });
   });
 });

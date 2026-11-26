@@ -23,6 +23,8 @@ import {
   listTasksQuerySchema,
   listWaitsQuerySchema,
   taskKeySchema,
+  editJobRequestSchema,
+  type JobActionResult,
   type JobDetail,
   type JobList,
   type TaskActionResult,
@@ -78,7 +80,7 @@ import { namePullRequestAreas } from "./areas.ts";
 import { settleConflictByPerson } from "./conflicts.ts";
 import { myBrief } from "./briefs.ts";
 import { runJobs } from "./jobs.ts";
-import { findJob, jobWakes, listJobs } from "../store/jobs.ts";
+import { editJob, findJob, jobHistory, jobWakes, listJobs } from "../store/jobs.ts";
 import { setBriefs } from "../store/briefs.ts";
 import { createTaskSource, type TaskSource } from "../tasks/provider.ts";
 import {
@@ -981,7 +983,33 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
       return errorResponse(c, 503, "not_configured", "Storage is not configured");
     const job = await findJob(at.db, at.place, c.req.param("name"));
     if (job === undefined) return errorResponse(c, 404, "not_found", "No such job");
-    const body: JobDetail = { job, wakes: await jobWakes(at.db, job.id) };
+    const body: JobDetail = {
+      job,
+      wakes: await jobWakes(at.db, job.id),
+      history: await jobHistory(at.db, job.id),
+    };
+    return c.json(body);
+  });
+
+  // A person changes a job, as themselves, on the version they saw (slice 4.2, decision 217).
+  api.patch("/v1/jobs/:jobId", people, limitBody, async (c) => {
+    const actor = writer(c);
+    if (actor === undefined) {
+      return errorResponse(c, 400, "invalid_request", "Only a signed-in person changes jobs");
+    }
+    const jobId = conversationIdSchema.safeParse(c.req.param("jobId"));
+    if (!jobId.success) return errorResponse(c, 404, "not_found", "No such job");
+    const parsed = editJobRequestSchema.safeParse((await jsonBody(c))?.body);
+    if (!parsed.success) return errorResponse(c, 400, "invalid_request", "Request body is invalid");
+    const at = storage(c);
+    if (at === undefined)
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    const result = await editJob(at.db, actor, jobId.data, parsed.data);
+    c.var.log.info("job.edit", { jobId: jobId.data, status: result.status });
+    const body: JobActionResult =
+      result.job === undefined
+        ? { status: result.status }
+        : { status: result.status, job: result.job };
     return c.json(body);
   });
 

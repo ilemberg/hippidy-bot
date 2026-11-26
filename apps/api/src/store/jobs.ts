@@ -1,8 +1,8 @@
-import type { Job, JobKind, JobWake } from "@hippidy/contracts";
+import type { EditJobRequest, Job, JobDetail, JobKind, JobWake } from "@hippidy/contracts";
 import { z } from "zod";
 import type { Place } from "./areas.ts";
 import type { Db, Row } from "./db.ts";
-import { storable } from "./json.ts";
+import { storable, toJsonText } from "./json.ts";
 
 // Standing jobs (slice 4.1, decision 215): what the bot is responsible for, each wake it makes
 // with what it cost, and the scheduler's bookkeeping. A person changes a job (4.2); a job never
@@ -155,7 +155,8 @@ export async function jobWakes(db: Db, jobId: string, limit = 50): Promise<JobWa
  */
 export async function uncapForNewMonth(db: Db, place: Place): Promise<void> {
   await db.query(
-    `update jobs set state = 'active', capped_month = null, updated_at = now()
+    `update jobs set state = 'active', capped_month = null, version = version + 1,
+       updated_at = now()
      where source = $1 and workspace_id = $2 and state = 'capped'
        and (capped_month is null
             or capped_month < date_trunc('month', now() at time zone 'utc')::date)`,
@@ -186,10 +187,18 @@ export async function takeDueJobs(db: Db, place: Place): Promise<Job[]> {
   return jobs.map(toJob);
 }
 
-/** Starts a wake's row; answers its id. */
-export async function startWake(db: Db, jobId: string): Promise<string> {
-  const rows = await db.query(`insert into job_wakes (job_id) values ($1) returning id`, [jobId]);
-  return z.object({ id: z.string() }).parse(rows[0]).id;
+/**
+ * Starts a wake's row, only while the job is still active: a person may have paused it after
+ * this run took it (from the review of 4.2). Answers its id, or undefined to skip it.
+ */
+export async function startWake(db: Db, jobId: string): Promise<string | undefined> {
+  const rows = await db.query(
+    `insert into job_wakes (job_id)
+     select $1 where exists (select 1 from jobs where id = $1 and state = 'active')
+     returning id`,
+    [jobId],
+  );
+  return rows[0] === undefined ? undefined : z.object({ id: z.string() }).parse(rows[0]).id;
 }
 
 /** Ends a wake with its outcome, what it said or why not, and its cost. */
@@ -217,14 +226,19 @@ export async function finishWake(
   );
 }
 
-/** Caps a job that reached its cap, for this month (G21). */
-export async function capJob(db: Db, jobId: string): Promise<void> {
-  await db.query(
-    `update jobs set state = 'capped',
+/**
+ * Caps a job that reached its cap, for this month (G21), unless a person changed its cap since
+ * the run read it (from the review of 4.2). Answers whether it capped it.
+ */
+export async function capJob(db: Db, jobId: string, capCentsSeen: number): Promise<boolean> {
+  const rows = await db.query(
+    `update jobs set state = 'capped', version = version + 1,
        capped_month = date_trunc('month', now() at time zone 'utc')::date, updated_at = now()
-     where id = $1 and state = 'active'`,
-    [jobId],
+     where id = $1 and state = 'active' and cap_cents = $2
+     returning id`,
+    [jobId, capCentsSeen],
   );
+  return rows.length > 0;
 }
 
 /**
@@ -247,4 +261,104 @@ export async function pruneWakes(db: Db): Promise<number> {
      returning 1`,
   );
   return rows.length;
+}
+
+/** A job's changes by people, oldest first (slice 4.2). */
+export async function jobHistory(db: Db, jobId: string): Promise<JobDetail["history"]> {
+  const rows = await db.query(
+    `select * from (select actor_id, actor_name, at, before, after, seq from job_events
+       where job_id = $1 order by seq desc limit 100) latest order by seq`,
+    [jobId],
+  );
+  return rows.map((r) => {
+    const d = z
+      .object({
+        actor_id: z.string(),
+        actor_name: z.string().nullable(),
+        at: z.date(),
+        before: z.record(z.string(), z.unknown()),
+        after: z.record(z.string(), z.unknown()),
+      })
+      .parse(r);
+    return {
+      actor: { actorId: d.actor_id, name: d.actor_name },
+      at: d.at.toISOString(),
+      before: d.before,
+      after: d.after,
+    };
+  });
+}
+
+export type JobWrite =
+  | { status: "edited" | "unchanged" | "changed" | "still_capped"; job: Job }
+  | { status: "not_found"; job?: undefined };
+
+/**
+ * A person changes a job, on the version they saw (slice 4.2, decision 217): its state (active
+ * or paused), cap, interval or goal; each change kept. A capped job becomes active again when
+ * its cap is raised above this month's spend; resuming it without that is refused.
+ */
+export async function editJob(
+  db: Db,
+  actor: Place & { actorId: string; name: string | null },
+  jobId: string,
+  request: EditJobRequest,
+): Promise<JobWrite> {
+  return db.transaction(async (tx) => {
+    const rows = await tx.query(
+      `select ${columns} from jobs j
+       where j.id = $1 and j.source = $2 and j.workspace_id = $3 for update of j`,
+      [jobId, actor.source, actor.workspaceId],
+    );
+    if (rows[0] === undefined) return { status: "not_found" };
+    const current = toJob(rows[0]);
+    if (current.version !== request.version) return { status: "changed", job: current };
+    const capCents = request.capCents ?? current.capCents;
+    const underCap = current.spentMicrosThisMonth < capCents * 10_000;
+    let state: string = current.state;
+    if (request.state === "paused") state = "paused";
+    else if (request.state === "active") {
+      // Never active at or over its cap, from paused or capped (from the review of 4.2).
+      if (current.state !== "active" && !underCap) return { status: "still_capped", job: current };
+      state = "active";
+    } else if (current.state === "capped" && request.capCents !== undefined && underCap) {
+      // Raising a capped job's cap above its spend lets it wake again.
+      state = "active";
+    }
+    const before = {
+      state: current.state,
+      capCents: current.capCents,
+      everyMinutes: current.everyMinutes,
+      goal: current.goal,
+    };
+    const after = {
+      state,
+      capCents,
+      everyMinutes: request.everyMinutes ?? current.everyMinutes,
+      goal:
+        request.goal === undefined
+          ? current.goal
+          : request.goal === null || request.goal.trim() === ""
+            ? null
+            : storable(request.goal).trim(),
+    };
+    if (JSON.stringify(before) === JSON.stringify(after)) {
+      return { status: "unchanged", job: current };
+    }
+    await tx.query(
+      `update jobs
+       set state = $2, cap_cents = $3, every_minutes = $4, goal = $5,
+           capped_month = case when $2 = 'capped' then capped_month else null end,
+           version = version + 1, updated_at = now()
+       where id = $1`,
+      [jobId, after.state, after.capCents, after.everyMinutes, after.goal],
+    );
+    await tx.query(
+      `insert into job_events (job_id, actor_id, actor_name, before, after)
+       values ($1, $2, $3, $4::text::jsonb, $5::text::jsonb)`,
+      [jobId, actor.actorId, actor.name, toJsonText(before), toJsonText(after)],
+    );
+    const updated = await tx.query(`select ${columns} from jobs j where j.id = $1`, [jobId]);
+    return { status: "edited", job: toJob(updated[0]) };
+  });
 }

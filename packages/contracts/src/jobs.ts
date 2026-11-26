@@ -52,9 +52,20 @@ export type JobWake = z.infer<typeof jobWakeSchema>;
 export const jobListSchema = z.strictObject({ jobs: z.array(jobSchema) });
 export type JobList = z.infer<typeof jobListSchema>;
 
-/** Response of `GET /v1/jobs/:name`: a job and its latest wakes, newest first. */
+/**
+ * Response of `GET /v1/jobs/:name`: a job, its latest wakes (newest first), and the changes
+ * people made to it (oldest first, slice 4.2).
+ */
 export const jobDetailSchema = z.strictObject({
   job: jobSchema,
   wakes: z.array(jobWakeSchema),
+  history: z.array(
+    z.strictObject({
+      actor: z.strictObject({ actorId: z.string(), name: z.string().nullable() }),
+      at: timestamp,
+      before: z.record(z.string(), z.unknown()),
+      after: z.record(z.string(), z.unknown()),
+    }),
+  ),
 });
 export type JobDetail = z.infer<typeof jobDetailSchema>;
