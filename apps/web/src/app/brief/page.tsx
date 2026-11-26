@@ -181,8 +181,8 @@ function Footer({ person }: { person: Person }) {
     <footer className="muted">
       <a href="/">Agents at work</a> · <a href="/decisions">Decisions</a> ·{" "}
       <a href="/areas">Areas</a> · <a href="/conflicts">Conflicts</a> · <a href="/tasks">Tasks</a> ·{" "}
-      <a href="/waits">Waiting on</a> · <a href="/listening">Listening in channels</a> · Signed in
-      as {person.name}.
+      <a href="/waits">Waiting on</a> · <a href="/jobs">Jobs</a> ·{" "}
+      <a href="/listening">Listening in channels</a> · Signed in as {person.name}.
     </footer>
   );
 }

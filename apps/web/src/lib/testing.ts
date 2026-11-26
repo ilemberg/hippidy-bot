@@ -13,6 +13,8 @@ import type {
   ConflictDetail,
   Decision,
   DecisionDetail,
+  Job,
+  JobDetail,
   MyBrief,
   Task,
   TaskDetail,
@@ -22,7 +24,8 @@ import type { WebConfig } from "./config.ts";
 import { SLACK_TEAM_CLAIM } from "./slack-oidc.ts";
 
 // Test helpers: a stand-in for Slack's signing keys and its id tokens, and a decision, an area,
-// a conflict, a task, a wait and a brief as the API returns them. Nothing here reaches the network.
+// a conflict, a task, a wait, a brief and a job as the API returns them. Nothing here reaches the
+// network.
 
 export const config: WebConfig = {
   slack: {
@@ -325,4 +328,66 @@ export const myBrief: MyBrief = {
       },
     ],
   },
+};
+
+/** The capture job, active, $12.34 of its $40.00 spent this month (slices 4.1 and 4.2). */
+export const job: Job = {
+  id: "2b3c4d5e-6f70-4a8b-9c0d-1e2f3a4b5c6d",
+  name: "capture",
+  kind: "capture",
+  goal: "Propose decisions from quiet threads",
+  owner: { actorId: "U1", name: "Ada" },
+  everyMinutes: 1,
+  state: "active",
+  capCents: 4000,
+  spentMicrosThisMonth: 12_340_000,
+  lastWakeAt: "2026-11-25T11:58:00.000Z",
+  version: 3,
+  createdAt: "2026-11-01T00:00:00.000Z",
+};
+
+/** The briefs job: paused by a person, nothing spent, never woken. */
+export const briefsJob: Job = {
+  ...job,
+  id: "8f7e6d5c-4b3a-4291-8f7e-6d5c4b3a2918",
+  name: "briefs",
+  kind: "briefs",
+  goal: null,
+  owner: null,
+  state: "paused",
+  capCents: 100,
+  spentMicrosThisMonth: 0,
+  lastWakeAt: null,
+  version: 1,
+};
+
+/** `GET /v1/jobs/capture`: two wakes, newest first, and Ada raising its cap from $30 to $40. */
+export const jobDetail: JobDetail = {
+  job,
+  wakes: [
+    {
+      startedAt: "2026-11-25T11:58:00.000Z",
+      endedAt: "2026-11-25T11:58:04.000Z",
+      outcome: "silent",
+      summary: "No quiet thread to read",
+      costMicros: 0,
+      error: null,
+    },
+    {
+      startedAt: "2026-11-25T11:57:00.000Z",
+      endedAt: "2026-11-25T11:57:30.000Z",
+      outcome: "said",
+      summary: "Proposed decision #8",
+      costMicros: 42_500,
+      error: null,
+    },
+  ],
+  history: [
+    {
+      actor: { actorId: "U1", name: "Ada" },
+      at: "2026-11-25T10:00:00.000Z",
+      before: { state: "active", capCents: 3000, everyMinutes: 1, goal: job.goal },
+      after: { state: "active", capCents: 4000, everyMinutes: 1, goal: job.goal },
+    },
+  ],
 };

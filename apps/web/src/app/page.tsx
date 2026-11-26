@@ -84,7 +84,8 @@ function View({ view }: { view: HomeView }) {
             <a href="/decisions">Decisions</a> · <a href="/areas">Areas</a> ·{" "}
             <a href="/conflicts">Conflicts</a> · <a href="/tasks">Tasks</a> ·{" "}
             <a href="/waits">Waiting on</a> · <a href="/brief">Your brief</a> ·{" "}
-            <a href="/listening">Listening in channels</a> · Signed in as {view.person.name}.{" "}
+            <a href="/jobs">Jobs</a> · <a href="/listening">Listening in channels</a> · Signed in as{" "}
+            {view.person.name}.{" "}
             <form method="post" action="/auth/signout" className="inline">
               <button className="link" type="submit">
                 Sign out

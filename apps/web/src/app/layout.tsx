@@ -61,6 +61,16 @@ const styles = `
   .edit fieldset { border: 0; padding: 0; margin: 0.75rem 0; }
   .edit fieldset label { margin: 0.25rem 0; }
   .edit input[type="radio"] { display: inline; width: auto; margin: 0 0.5rem 0 0; }
+  .job-capped, .outcome-failed { color: var(--danger); }
+  .job-paused, .outcome-silent, .outcome-skipped { color: var(--muted); }
+  .outcome-said { color: var(--accent); }
+  .table { overflow-x: auto; margin: 0.5rem 0 1rem; }
+  .wakes { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  .wakes th, .wakes td { text-align: left; vertical-align: top; padding: 0.4rem 0.5rem 0.4rem 0;
+    border-top: 1px solid rgba(127,127,127,0.25); }
+  .wakes th { color: var(--muted); font-weight: normal; }
+  .wakes td { overflow-wrap: anywhere; }
+  .wakes td:first-child, .wakes .cost { white-space: nowrap; }
 `;
 
 export default function RootLayout({ children }: { children: ReactNode }) {

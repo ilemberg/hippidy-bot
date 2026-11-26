@@ -8,6 +8,9 @@ import {
   decisionActionResultSchema,
   decisionDetailSchema,
   decisionListSchema,
+  jobActionResultSchema,
+  jobDetailSchema,
+  jobListSchema,
   listeningListSchema,
   myBriefSchema,
   peopleListSchema,
@@ -33,7 +36,11 @@ import {
   type DecisionStatus,
   type EditAreaRequest,
   type EditDecisionRequest,
+  type EditJobRequest,
   type EditTaskRequest,
+  type JobActionResult,
+  type JobDetail,
+  type JobList,
   type ListeningList,
   type MyBrief,
   type PeopleList,
@@ -465,4 +472,36 @@ export function setMyBriefs(
   deps: ApiClientDeps,
 ): Promise<ApiResult<SetBriefsResult>> {
   return apiSend(person, "POST", "/v1/briefs/me", { on }, setBriefsResultSchema, deps);
+}
+
+/** `GET /v1/jobs` as the person: the standing jobs, their state and this month's spend (4.1). */
+export function fetchJobs(person: Person, deps: ApiClientDeps): Promise<ApiResult<JobList>> {
+  return apiGet(person, "/v1/jobs", jobListSchema, deps);
+}
+
+/** A job looked up by its name: found, not on record, or why the API gave nothing. */
+export type JobLookup = ApiResult<JobDetail> | { kind: "not_found" };
+
+/** `GET /v1/jobs/:name` as the person: one job, its latest wakes and the changes people made. */
+export async function fetchJob(
+  person: Person,
+  name: string,
+  deps: ApiClientDeps,
+): Promise<JobLookup> {
+  const route = `/v1/jobs/${encodeURIComponent(name)}`;
+  const result = await apiGet(person, route, jobDetailSchema, deps);
+  return result.kind === "failed" && result.reason === "status_404"
+    ? { kind: "not_found" }
+    : result;
+}
+
+/** `PATCH /v1/jobs/:id` as the person: what changes, on the version the form showed (4.2). */
+export function editJob(
+  person: Person,
+  jobId: string,
+  edit: EditJobRequest,
+  deps: ApiClientDeps,
+): Promise<ApiResult<JobActionResult>> {
+  const route = `/v1/jobs/${encodeURIComponent(jobId)}`;
+  return apiSend(person, "PATCH", route, edit, jobActionResultSchema, deps);
 }
