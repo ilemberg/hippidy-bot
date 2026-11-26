@@ -20,6 +20,9 @@ import {
   type ObservationResult,
   type SetListeningRequest,
   type SetListeningResponse,
+  setBriefsResultSchema,
+  type SetBriefsRequest,
+  type SetBriefsResult,
 } from "@hippidy/contracts";
 
 export type PostMessageResult =
@@ -47,6 +50,10 @@ export type ConfirmDecisionCallResult =
   | { kind: "done"; result: ConfirmDecisionResult }
   | { kind: "rejected"; status: number; error: ErrorResponse["error"] | undefined };
 
+export type SetBriefsCallResult =
+  | { kind: "done"; result: SetBriefsResult }
+  | { kind: "rejected"; status: number; error: ErrorResponse["error"] | undefined };
+
 export interface ApiClient {
   postMessage(message: InboundMessage, correlationId: string): Promise<PostMessageResult>;
   stop(request: StopRequest, correlationId: string): Promise<StopCallResult>;
@@ -69,6 +76,8 @@ export interface ApiClient {
   ): Promise<SetListeningCallResult>;
   /** A message was posted, edited or deleted in a channel (slice 2.5). */
   observe(observation: Observation, correlationId: string): Promise<ObserveCallResult>;
+  /** Someone wrote "stop briefs" or "start briefs" to the bot (slice 3.4). */
+  setBriefs(request: SetBriefsRequest, correlationId: string): Promise<SetBriefsCallResult>;
 }
 
 /** The parts of an HTTP response the client reads. */
@@ -163,6 +172,17 @@ export function createApiClient(options: {
       const { status, body } = await post("/v1/observations", observation, correlationId);
       if (status === 200) {
         const result = observationResultSchema.safeParse(body);
+        if (result.success) return { kind: "done", result: result.data };
+      }
+      const error = errorResponseSchema.safeParse(body);
+      return { kind: "rejected", status, error: error.data?.error };
+    },
+
+    async setBriefs(request, correlationId) {
+      const { status, body } = await post("/v1/briefs/people", request, correlationId);
+      // Any success status: the route answers with what briefs are now for the person.
+      if (status >= 200 && status < 300) {
+        const result = setBriefsResultSchema.safeParse(body);
         if (result.success) return { kind: "done", result: result.data };
       }
       const error = errorResponseSchema.safeParse(body);

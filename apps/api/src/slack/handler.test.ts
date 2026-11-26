@@ -1,6 +1,7 @@
 import type {
   ConfirmDecisionResult,
   InboundMessage,
+  SetBriefsRequest,
   StartBriefRequest,
   StopRequest,
 } from "@hippidy/contracts";
@@ -34,9 +35,11 @@ function setup(
     threadReplies?: (channel: string, threadTs: string) => Promise<SlackThreadMessage[]>;
     startBrief?: () => Promise<StartBriefCallResult>;
     confirmResult?: ConfirmDecisionResult;
+    setBriefs?: ApiClient["setBriefs"];
   } = {},
 ) {
   const threadReads: { channel: string; threadTs: string }[] = [];
+  const briefSwitches: { request: SetBriefsRequest; correlationId: string }[] = [];
   const posted: { message: InboundMessage; correlationId: string }[] = [];
   const stops: StopRequest[] = [];
   const starts: { briefId: string; request: StartBriefRequest; correlationId: string }[] = [];
@@ -65,6 +68,12 @@ function setup(
       });
     },
     observe: () => Promise.resolve({ kind: "done", result: { result: "kept" } }),
+    setBriefs: (request, correlationId) => {
+      briefSwitches.push({ request, correlationId });
+      return options.setBriefs === undefined
+        ? Promise.resolve({ kind: "done", result: { on: request.on } })
+        : options.setBriefs(request, correlationId);
+    },
     postMessage: async (message, correlationId) => {
       posted.push({ message, correlationId });
       return (options.api ?? (() => Promise.resolve(accepted)))();
@@ -110,6 +119,7 @@ function setup(
   const { log, lines } = memoryLogger();
   return {
     deps: { api, slack, log, threadReadTimeoutMs: 50, webBaseUrl: undefined as string | undefined },
+    briefSwitches,
     listening,
     notes,
     ephemerals,
@@ -728,5 +738,104 @@ describe("listen commands", () => {
     expect(await handleMention(dm, deps)).toBe("not_a_channel");
     expect(listening).toEqual([]);
     expect(notes).toEqual([{ channel: "D0123", text: "I only listen in channels." }]);
+  });
+});
+
+// Slice 3.4: "stop briefs" and "start briefs" after a mention, anywhere (decision 212).
+describe("briefs commands", () => {
+  it("stops the person's briefs, answers in the thread, and asks the teammate nothing", async () => {
+    const { deps, briefSwitches, notes, posted, stops, listening, reactions } = setup();
+    expect(await handleMention(mentionSaying("<@U0LAN0Z89> Stop briefs."), deps)).toBe(
+      "briefs_set",
+    );
+    expect(briefSwitches).toEqual([
+      {
+        request: {
+          source: "slack",
+          workspaceId: "T061EG9R6",
+          actor: { id: "U061F7AUR", displayName: "Ilya" },
+          on: false,
+        },
+        correlationId: "Ev0LAN670R",
+      },
+    ]);
+    expect(notes).toEqual([
+      {
+        channel: "C0LAN2Q65",
+        threadTs: "1515449522.000016",
+        text: "Briefs stopped. Write start briefs to get them again.",
+      },
+    ]);
+    expect(posted).toEqual([]);
+    expect(stops).toEqual([]);
+    expect(listening).toEqual([]);
+    expect(reactions).toEqual([]);
+  });
+
+  it("starts them, answering in the thread the mention is in, without a name it cannot get", async () => {
+    const { deps, briefSwitches, notes } = setup({
+      userName: () => Promise.reject(new Error("users.info failed")),
+    });
+    const inThread = mentionSaying("<@U0LAN0Z89> start briefs");
+    inThread.body = {
+      ...fixture,
+      event: {
+        ...fixture.event,
+        text: "<@U0LAN0Z89> start briefs",
+        thread_ts: "1515449000.000001",
+      },
+    };
+    expect(await handleMention(inThread, deps)).toBe("briefs_set");
+    expect(briefSwitches[0]?.request).toMatchObject({ actor: { id: "U061F7AUR" }, on: true });
+    expect(briefSwitches[0]?.request.actor.displayName).toBeUndefined();
+    expect(notes).toEqual([
+      {
+        channel: "C0LAN2Q65",
+        threadTs: "1515449000.000001",
+        text: "Briefs started: one direct message on weekday mornings when something is new.",
+      },
+    ]);
+  });
+
+  it("answers with what the API says briefs now are", async () => {
+    const { deps, notes } = setup({
+      setBriefs: () => Promise.resolve({ kind: "done", result: { on: true } }),
+    });
+    await handleMention(mentionSaying("<@U0LAN0Z89> stop briefs"), deps);
+    expect(notes[0]?.text).toContain("Briefs started");
+  });
+
+  it("logs a refusal and says nothing, as the listen command does", async () => {
+    const { deps, notes, posted, lines } = setup({
+      setBriefs: () =>
+        Promise.resolve({
+          kind: "rejected",
+          status: 401,
+          error: { code: "unauthorized", message: "no" },
+        }),
+    });
+    expect(await handleMention(mentionSaying("<@U0LAN0Z89> stop briefs"), deps)).toBe(
+      "api_rejected",
+    );
+    expect(notes).toEqual([]);
+    expect(posted).toEqual([]);
+    expect(lines).toContainEqual(
+      expect.objectContaining({ msg: "slack.briefs_rejected", status: 401 }),
+    );
+  });
+
+  it("does not throw when the API call does", async () => {
+    const { deps, notes } = setup({ setBriefs: () => Promise.reject(new Error("down")) });
+    expect(await handleMention(mentionSaying("<@U0LAN0Z89> start briefs"), deps)).toBe(
+      "api_rejected",
+    );
+    expect(notes).toEqual([]);
+  });
+
+  it("sends a question about briefs to the teammate", async () => {
+    const { deps, briefSwitches, posted } = setup();
+    await handleMention(mentionSaying("<@U0LAN0Z89> how do I stop briefs?"), deps);
+    expect(briefSwitches).toEqual([]);
+    expect(posted).toHaveLength(1);
   });
 });

@@ -5,6 +5,12 @@ display_information:
   name: hippidy-bot
   description: An AI teammate for a product engineering team.
 features:
+  # The Messages tab, where the bot sends daily briefs and people can write "stop briefs" back
+  # (slice 3.4). Without it Slack tells people sending messages to the app is turned off.
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
   bot_user:
     display_name: hippidy-bot
     always_online: true
@@ -27,8 +33,14 @@ oauth_config:
       - chat:write
       - reactions:read
       - reactions:write
-      # Display names, so the agent can address people (decision 34).
+      # Display names, so the agent can address people (decision 34). Also each person's time
+      # zone, for when their daily brief goes (slice 3.4).
       - users:read
+      # Daily briefs by direct message (slice 3.4, decision 212): open a direct message with a
+      # person, and read "stop briefs" and "start briefs" written there. After changing this,
+      # update the app from this manifest and reinstall it.
+      - im:write
+      - im:history
 settings:
   event_subscriptions:
     # The Vercel production domain. Change it here if the production domain changes.
@@ -41,6 +53,9 @@ settings:
       # those of channels someone switched listening on in; the rest are dropped unread.
       - message.channels
       - message.groups
+      # Messages written to the bot in its direct message (slice 3.4): "stop briefs" and
+      # "start briefs". Needs `im:history`; update the app from this manifest and reinstall it.
+      - message.im
   # The Start button under a brief (slice 2.1, G17). Bolt answers button presses on the same
   # URL as events. After changing this, update the app from this manifest and reinstall it.
   interactivity:

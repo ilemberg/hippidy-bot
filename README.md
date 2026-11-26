@@ -678,6 +678,22 @@ that touches one names its owner in the thread (`docs/planning/slice-3-1.md`).
 2. **The teammate** gets the new `areas` field of `start_change` when CI syncs the agents on
    merge; nothing to do by hand.
 
+## Slice 3.4 setup: daily briefs by direct message
+
+The bot sends people a short brief by direct message on weekday mornings, and they write
+"stop briefs" or "start briefs" to it there or after a mention (`docs/planning/slice-3-4.md`,
+decision 212).
+
+1. **The manifest.** In the Slack app's settings, **App Manifest**, paste `slack/manifest.yaml`
+   and save, then reinstall the app to the workspace when Slack asks. It adds the bot scopes
+   `im:write` (to open a direct message) and `im:history`, the `message.im` event (to read
+   "stop briefs" there), and turns on the app's Messages tab so people can write to it. The bot
+   token stays the same. Until then, sending a brief fails with `missing_scope`, is logged, and
+   is tried again.
+2. **Try it.** Write `stop briefs` to the bot in its Messages tab: it answers "Briefs
+   stopped". `start briefs` switches them back on; anything else gets one line saying what the
+   bot does there.
+
 ## Planning docs
 
 | Doc                                                                  | What it is                                                                                 |
