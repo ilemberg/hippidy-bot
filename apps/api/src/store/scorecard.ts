@@ -57,14 +57,20 @@ const COUNTS: Record<ScorecardCountKind, string> = {
     select ended_at as t from waits
     where source = $1 and workspace_id = $2
       and ended_at >= $3::timestamptz and ended_at <= $4::timestamptz`,
-  // Briefs started, by a person or the start rule, in the workspace's threads.
+  // Changes started in the workspace's threads, each once: when its first brief was started,
+  // by a person or the start rule. A later brief of the same change (more work on it) is not
+  // another change, so a brief with an earlier started one in its change is left out.
   changes_started: `
     select b.started_at as t
     from change_briefs b
     join changes c on c.id = b.change_id
     join conversations v on v.id = c.conversation_id
     where v.source = $1 and v.workspace_id = $2
-      and b.started_at >= $3::timestamptz and b.started_at <= $4::timestamptz`,
+      and b.started_at >= $3::timestamptz and b.started_at <= $4::timestamptz
+      and not exists (select 1 from change_briefs e
+                      where e.change_id = b.change_id and e.started_at is not null
+                        and (e.started_at < b.started_at
+                             or (e.started_at = b.started_at and e.seq < b.seq)))`,
   // Reviews the checker posted. A review is of the deployment's repository, not of a thread, so
   // it belongs to the workspace whose checker job posts it: counted only for a workspace that
   // has one. A posted review is never touched again (`reviews.ts`), so `updated_at` is when it

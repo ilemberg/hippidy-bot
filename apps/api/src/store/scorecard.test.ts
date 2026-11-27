@@ -243,6 +243,48 @@ describe("readScorecard", () => {
     expect((await counts(B)).decisions_made).toEqual([1, 0]);
   });
 
+  it("counts a change once, in the week its first brief was started (from the review)", async () => {
+    const conversationId = await conversation(db, A);
+    const changeBrief = async (changeId: string, at: string | null) => {
+      threads += 1;
+      await db.query(
+        `insert into change_briefs (change_id, custom_tool_use_id, title, what, why, done_when,
+           start_needed, start_reason, started_at)
+         values ($1, $2, 'A change', 'what', 'why', 'done', $3, $4, $5::timestamptz)`,
+        [
+          changeId,
+          `toolu_more_${String(threads)}`,
+          at === null,
+          at === null ? "a person starts it" : null,
+          at,
+        ],
+      );
+    };
+    const change = async () => {
+      const [row] = await db.query(
+        `insert into changes (conversation_id, requested_by_source, requested_by_workspace_id,
+           requested_by_actor_id)
+         values ($1, 'slack', 'TA', 'U1') returning id`,
+        [conversationId],
+      );
+      return String(row?.id);
+    };
+    // Started last week, with more work on it this week and last: one change, last week's.
+    const older = await change();
+    await changeBrief(older, SUNDAY_NIGHT);
+    await changeBrief(older, MONDAY);
+    await changeBrief(older, "2027-03-16T09:00:00.000Z");
+    // Started two weeks ago, more work this week: in neither week.
+    const oldest = await change();
+    await changeBrief(oldest, TOO_OLD);
+    await changeBrief(oldest, MONDAY);
+    // A first brief never started, then one started this week: this week's.
+    const revised = await change();
+    await changeBrief(revised, null);
+    await changeBrief(revised, MONDAY);
+    expect((await counts(A)).changes_started).toEqual([1, 1]);
+  });
+
   it("reads zero for a workspace with no records", async () => {
     expect(Object.values(await counts(B))).toEqual([
       [0, 0],

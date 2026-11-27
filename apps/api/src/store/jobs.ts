@@ -56,7 +56,8 @@ const columns = `j.id, j.name, j.kind, j.goal, j.owner_actor_id, j.owner_name, j
               and w.started_at >= date_trunc('month', now() at time zone 'utc') at time zone 'utc'),
            0)::float8 as spent,
   (select coalesce(w.outcome, 'silent') from job_wakes w
-   where w.job_id = j.id order by w.started_at desc limit 1) as last_outcome`;
+   where w.job_id = j.id and w.started_at >= j.last_wake_at
+   order by w.started_at desc limit 1) as last_outcome`;
 
 const jobRow = z.object({
   id: z.string(),

@@ -10,6 +10,7 @@ import { FakeAgentRuntime } from "../agent/fake.ts";
 import { FakeExtractor } from "../agent/extractor.ts";
 import { configureApp } from "../compose.ts";
 import type { Env } from "../config.ts";
+import { listJobs, pruneWakes } from "../store/jobs.ts";
 import { recordObservation, setListening } from "../store/listening.ts";
 import { createTestDb } from "../store/testing.ts";
 import { memoryLogger } from "../testing.ts";
@@ -489,5 +490,34 @@ describe("deploying a new kind before its migration (slice 4.3)", () => {
     const { log: runLog, lines } = memoryLogger();
     await runJobs({ db, place }, runLog);
     expect(lines.some((line) => line.msg === "jobs.builtin_failed")).toBe(false);
+  });
+});
+
+describe("what the review of 4.5 found", () => {
+  it("gives the outcome of the wake the job last woke for, not of an older one kept", async () => {
+    await runJobs({ db, place }, log);
+    const capture = async () => (await listJobs(db, place)).find((j) => j.name === "capture");
+    expect((await capture())?.lastWakeOutcome).toBe("silent");
+    // Its last wake, silent, three weeks ago (paused since); an older failed one is kept.
+    await db.query(
+      `update jobs set state = 'paused', last_wake_at = now() - interval '21 days'
+       where name = 'capture'`,
+    );
+    await db.query(
+      `update job_wakes set started_at = now() - interval '21 days'
+       where job_id = (select id from jobs where name = 'capture')`,
+    );
+    await db.query(
+      `insert into job_wakes (job_id, started_at, ended_at, outcome, error)
+       select id, now() - interval '25 days', now() - interval '25 days', 'failed', 'boom'
+       from jobs where name = 'capture'`,
+    );
+    expect((await capture())?.lastWakeOutcome).toBe("silent");
+    // The silent one is pruned after 14 days: the older failed one is not the last wake's.
+    expect(await pruneWakes(db)).toBeGreaterThan(0);
+    expect(await capture()).toMatchObject({
+      lastWakeAt: expect.any(String),
+      lastWakeOutcome: null,
+    });
   });
 });

@@ -38,8 +38,9 @@ export const jobSchema = z.strictObject({
   spentMicrosThisMonth: z.number().min(0),
   lastWakeAt: timestamp.nullable(),
   /**
-   * The outcome of its latest wake on record (slice 4.5, for the home page); null when none is
-   * kept. A wake still running reads as silent, as in a job's wakes.
+   * The outcome of the wake at `lastWakeAt` (slice 4.5, for the home page); null when that wake
+   * is not kept (pruned, or never started), never an older wake's. A wake still running reads
+   * as silent, as in a job's wakes.
    */
   lastWakeOutcome: wakeOutcomeSchema.nullable(),
   version: z.number().int().positive(),
