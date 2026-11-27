@@ -18,6 +18,10 @@ export type JobKind = z.infer<typeof jobKindSchema>;
 export const jobStateSchema = z.enum(["active", "paused", "capped"]);
 export type JobState = z.infer<typeof jobStateSchema>;
 
+/** What a wake did; see `jobWakeSchema`. */
+export const wakeOutcomeSchema = z.enum(["said", "silent", "failed", "skipped"]);
+export type WakeOutcome = z.infer<typeof wakeOutcomeSchema>;
+
 /** One job, as the API returns it. */
 export const jobSchema = z.strictObject({
   id: z.guid(),
@@ -33,6 +37,11 @@ export const jobSchema = z.strictObject({
   /** What its wakes cost this calendar month (UTC), in millionths of a dollar. */
   spentMicrosThisMonth: z.number().min(0),
   lastWakeAt: timestamp.nullable(),
+  /**
+   * The outcome of its latest wake on record (slice 4.5, for the home page); null when none is
+   * kept. A wake still running reads as silent, as in a job's wakes.
+   */
+  lastWakeOutcome: wakeOutcomeSchema.nullable(),
   version: z.number().int().positive(),
   createdAt: timestamp,
 });
@@ -45,7 +54,7 @@ export type Job = z.infer<typeof jobSchema>;
 export const jobWakeSchema = z.strictObject({
   startedAt: timestamp,
   endedAt: timestamp.nullable(),
-  outcome: z.enum(["said", "silent", "failed", "skipped"]),
+  outcome: wakeOutcomeSchema,
   summary: z.string().nullable(),
   costMicros: z.number().min(0),
   error: z.string().nullable(),

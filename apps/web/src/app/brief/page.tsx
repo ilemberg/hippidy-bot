@@ -1,11 +1,9 @@
-import type { BriefLine, MyBrief } from "@hippidy/contracts";
+import type { MyBrief } from "@hippidy/contracts";
 import { cookies } from "next/headers";
 import {
-  briefLink,
   briefNoticeText,
   lastSentText,
   loadBrief,
-  moreText,
   SWITCH_BRIEFS_PATH,
   timeZoneText,
   type BriefNotice,
@@ -14,6 +12,7 @@ import {
 import { SESSION_COOKIE } from "../../lib/cookies.ts";
 import { serverDeps } from "../../lib/server.ts";
 import type { Person } from "../../lib/tokens.ts";
+import { BriefSections } from "./sections.tsx";
 
 export const dynamic = "force-dynamic";
 
@@ -136,44 +135,9 @@ function BriefContent({
         </time>
         {brief.on ? null : ", though none is sent while your briefs are off"}.
       </p>
-      {brief.brief.sections.length === 0 ? (
-        <p className="muted">Nothing new: no brief would be sent.</p>
-      ) : (
-        brief.brief.sections.map((section) => {
-          const more = moreText(section.more);
-          return (
-            <section key={section.kind}>
-              <h4>{section.title}</h4>
-              <ul>
-                {section.lines.map((line, i) => (
-                  <li key={i}>
-                    <Line line={line} webBaseUrl={webBaseUrl} />
-                  </li>
-                ))}
-              </ul>
-              {more === undefined ? null : <p className="muted">{more}</p>}
-            </section>
-          );
-        })
-      )}
+      <BriefSections brief={brief.brief} webBaseUrl={webBaseUrl} heading="h4" />
     </>
   );
-}
-
-function Line({ line, webBaseUrl }: { line: BriefLine; webBaseUrl: string }) {
-  const link = briefLink(line, webBaseUrl);
-  switch (link.kind) {
-    case "text":
-      return <>{line.text}</>;
-    case "app":
-      return <a href={link.href}>{line.text}</a>;
-    case "slack":
-      return (
-        <a href={link.href} target="_blank" rel="noreferrer">
-          {line.text}
-        </a>
-      );
-  }
 }
 
 function Footer({ person }: { person: Person }) {

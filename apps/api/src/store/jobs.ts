@@ -1,5 +1,6 @@
 import {
   jobKindSchema,
+  wakeOutcomeSchema,
   type EditJobRequest,
   type Job,
   type JobDetail,
@@ -53,7 +54,9 @@ const columns = `j.id, j.name, j.kind, j.goal, j.owner_actor_id, j.owner_name, j
   coalesce((select sum(w.cost_micros) from job_wakes w
             where w.job_id = j.id
               and w.started_at >= date_trunc('month', now() at time zone 'utc') at time zone 'utc'),
-           0)::float8 as spent`;
+           0)::float8 as spent,
+  (select coalesce(w.outcome, 'silent') from job_wakes w
+   where w.job_id = j.id order by w.started_at desc limit 1) as last_outcome`;
 
 const jobRow = z.object({
   id: z.string(),
@@ -69,6 +72,7 @@ const jobRow = z.object({
   version: z.number().int(),
   created_at: z.date(),
   spent: z.number(),
+  last_outcome: wakeOutcomeSchema.nullable(),
 });
 
 function toJob(r: Row | undefined): Job {
@@ -84,6 +88,7 @@ function toJob(r: Row | undefined): Job {
     capCents: d.cap_cents,
     spentMicrosThisMonth: d.spent,
     lastWakeAt: d.last_wake_at?.toISOString() ?? null,
+    lastWakeOutcome: d.last_outcome,
     version: d.version,
     createdAt: d.created_at.toISOString(),
   };

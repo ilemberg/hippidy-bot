@@ -15,6 +15,7 @@ import {
   listeningListSchema,
   myBriefSchema,
   peopleListSchema,
+  scorecardSchema,
   sessionListSchema,
   setBriefsResultSchema,
   settleConflictResultSchema,
@@ -48,6 +49,7 @@ import {
   type ListeningList,
   type MyBrief,
   type PeopleList,
+  type Scorecard,
   type SessionActivity,
   type SetBriefsResult,
   type SettleConflictRequest,
@@ -481,6 +483,11 @@ export function setMyBriefs(
 /** `GET /v1/jobs` as the person: the standing jobs, their state and this month's spend (4.1). */
 export function fetchJobs(person: Person, deps: ApiClientDeps): Promise<ApiResult<JobList>> {
   return apiGet(person, "/v1/jobs", jobListSchema, deps);
+}
+
+/** `GET /v1/scorecard` as the person: the team's counts this week against last (slice 4.5). */
+export function fetchScorecard(person: Person, deps: ApiClientDeps): Promise<ApiResult<Scorecard>> {
+  return apiGet(person, "/v1/scorecard", scorecardSchema, deps);
 }
 
 /** A job looked up by its name: found, not on record, or why the API gave nothing. */

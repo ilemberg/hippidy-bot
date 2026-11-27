@@ -27,6 +27,7 @@ const styles = `
   .about p { margin: 0.5rem 0; }
   code { font-size: 0.9em; padding: 0 0.25rem; border-radius: 4px; background: rgba(127,127,127,0.15); }
   .bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+  .part { margin: 2rem 0; }
   .sessions { list-style: none; padding: 0; margin: 1rem 0; }
   .session { padding: 0.75rem 0; border-top: 1px solid rgba(127,127,127,0.25); }
   .session p { margin: 0.25rem 0; overflow-wrap: anywhere; }

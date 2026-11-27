@@ -14,6 +14,7 @@ export * from "./listening.ts";
 export * from "./me.ts";
 export * from "./messages.ts";
 export * from "./projects.ts";
+export * from "./scorecard.ts";
 export * from "./sessions.ts";
 export * from "./status.ts";
 export * from "./tasks.ts";

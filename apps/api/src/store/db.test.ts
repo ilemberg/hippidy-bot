@@ -59,6 +59,7 @@ import { FakeBriefWriter } from "../agent/brief-writer.ts";
 import { goalBriefKey, runGoal } from "../api/goals.ts";
 import { createTaskSource } from "../tasks/provider.ts";
 import { briefByKey, createGoal, editGoal, findGoal } from "./goals.ts";
+import { readScorecard } from "./scorecard.ts";
 
 // The production client (postgres.js) over a real Postgres connection, served by PGlite.
 let pg: PGlite;
@@ -1059,10 +1060,17 @@ describe("jobs through postgres.js (slice 4.1)", () => {
     expect(await runJobs({ db, place }, log)).toMatchObject({ woke: 3 });
     expect(await runJobs({ db, place }, log)).toMatchObject({ woke: 0 });
     const jobs = await listJobs(db, place);
-    expect(jobs.map((j) => [j.name, typeof j.spentMicrosThisMonth, typeof j.lastWakeAt])).toEqual([
-      ["briefs", "number", "string"],
-      ["capture", "number", "string"],
-      ["checker", "number", "string"],
+    expect(
+      jobs.map((j) => [
+        j.name,
+        typeof j.spentMicrosThisMonth,
+        typeof j.lastWakeAt,
+        j.lastWakeOutcome,
+      ]),
+    ).toEqual([
+      ["briefs", "number", "string", "silent"],
+      ["capture", "number", "string", "silent"],
+      ["checker", "number", "string", "silent"],
     ]);
     const capture = jobs.find((j) => j.name === "capture");
     const wakes = await jobWakes(db, capture?.id ?? "");
@@ -1259,5 +1267,35 @@ describe("pull request reviews through postgres.js (slice 4.3)", () => {
       [other?.id],
     );
     expect(abandoned).toEqual({ status: "abandoned", cost: 5, error: "too large to review" });
+  });
+});
+
+describe("the scorecard through postgres.js (slice 4.5)", () => {
+  it("reads its counts as numbers, not bigint strings, and its weeks as ISO strings", async () => {
+    const place = { source: "slack" as const, workspaceId: "Tscore" };
+    await db.query(
+      `insert into conflicts (source, workspace_id, kind, summary, status, outcome, settled_at,
+         settled_by_actor_id)
+       values ('slack', 'Tscore', 'raised', 'Postgres or not', 'settled', 'kept', now(), 'U1'),
+              ('slack', 'Tscore', 'raised', 'Redis or not', 'settled', 'kept',
+               now() - interval '7 days', 'U1')`,
+    );
+    await db.query(
+      `insert into waits (source, workspace_id, waiter_actor_id, waiting_on_actor_id, what,
+         recorded_by_actor_id, ended_by_actor_id, ended_at)
+       values ('slack', 'Tscore', 'U1', 'U2', 'the review', 'U1', 'U1', now())`,
+    );
+    const scorecard = await readScorecard(db, place, new Date());
+    expect(scorecard.thisWeekStart).toMatch(/^\d{4}-\d\d-\d\dT00:00:00\.000Z$/);
+    const byKind = Object.fromEntries(scorecard.counts.map((c) => [c.kind, c]));
+    expect(byKind.conflicts_settled).toEqual({
+      kind: "conflicts_settled",
+      thisWeek: 1,
+      lastWeek: 1,
+    });
+    expect(byKind.waits_ended).toEqual({ kind: "waits_ended", thisWeek: 1, lastWeek: 0 });
+    for (const count of scorecard.counts) {
+      expect([typeof count.thisWeek, typeof count.lastWeek]).toEqual(["number", "number"]);
+    }
   });
 });
