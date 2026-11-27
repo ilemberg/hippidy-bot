@@ -1,6 +1,6 @@
 # Slice 4.4: a feature goal
 
-Status: **built 2026-11-26, not merged (decision 221).** The wave is in `wave-4.md`; jobs in
+Status: **built 2026-11-26, reviewed 2026-11-27, not merged (decisions 221 and 222).** The wave is in `wave-4.md`; jobs in
 `slice-4-1.md` and `slice-4-2.md`; the checker in `slice-4-3.md`.
 
 **Demo:** Grace mentions the bot in a thread about the export feature, then opens the web app,
@@ -89,7 +89,12 @@ What the build decided that the plan did not say, or decided differently:
 - **Settling reads the pull request first.** A merged or closed pull request settles its ticket
   even when its change was stopped: a stop said in the thread stops every change of the thread,
   finished ones too, and must not hide a merge. A change with no pull request, or one still
-  open, that was stopped is `stopped`.
+  open, that was stopped is `stopped`. A pull request GitHub did not answer for settles
+  nothing, not even a stop, until a later wake reads it (222).
+- **A closed pull request settles its ticket only once its change is idle** (222). A change
+  keeps one pull request link, its latest. While the change, not stopped, has a brief not yet
+  handed to the worker (a follow-up waiting for Start, say) or a worker still on one, another
+  pull request may follow, so the ticket stays `briefed` and holds its place.
 - **The thread link is read in the web app.** `https://x.slack.com/archives/C123ABC/p1700000000000200`
   is channel `C123ABC`, thread `1700000000.000200`; a link to a reply names its thread in
   `thread_ts`. The API takes the channel and thread ids, as it stays channel-agnostic.
@@ -99,7 +104,9 @@ What the build decided that the plan did not say, or decided differently:
   refused, named (`briefed_tickets`); tickets `done_elsewhere` or `skipped` may be removed. The
   version is the job's, shared with `PATCH /v1/jobs/:jobId`. Making the goal is the first entry
   of its history (nothing before, what it was made with after). Adding a ticket lets the goal
-  say again, later, that every ticket is settled.
+  say again, later, that every ticket is settled. A change locks the goal's tickets and removes
+  only tickets never briefed: a ticket a wake briefed since the change read it makes the change
+  `changed`, and nothing of it is kept (222).
 - **Refusals come back as statuses, not errors** (`no_thread`, `thread_taken`, `name_taken`,
   `unknown_tickets`, `tracker_unavailable`, `briefed_tickets`, `changed`), so the web app's form
   can say each; the tickets not found are named.
@@ -115,7 +122,12 @@ What the build decided that the plan did not say, or decided differently:
   fallbacks, at most 6,000 tokens and 60 seconds, its own client with no retries. Each part of
   the brief is cut to fit 2.1's limits (title 200 characters, the others 1,100 each). A call
   that fails after it was sent is counted at an estimate of its input, as the checker's (220).
-  The cost code the checker and the goal share is `agent/usage.ts`.
+  The cost code the checker and the goal share is `agent/usage.ts`. A wake that fails after its
+  model call (the brief not kept, say) is `failed` with the call's cost (222).
+- **How long a wake takes** (222): up to five pull requests read (10 seconds each at most) and
+  one model call (60 seconds at most). Reconcile runs every due job's wake in turn, so the
+  function's time limit must allow the checker's and the goals' wakes together. Overlapping
+  wakes of a goal woken every minute can pay twice for one brief, which is kept and posted once.
 - **Who marks a task done:** the built-in task's history keeps actor `job:<name>`, named "the
   <name> goal".
 - **A ticket the tracker no longer has** is `skipped`, said in the thread. A tracker that does
