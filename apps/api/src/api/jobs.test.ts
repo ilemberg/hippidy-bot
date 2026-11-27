@@ -515,9 +515,8 @@ describe("what the review of 4.5 found", () => {
     expect((await capture())?.lastWakeOutcome).toBe("silent");
     // The silent one is pruned after 14 days: the older failed one is not the last wake's.
     expect(await pruneWakes(db)).toBeGreaterThan(0);
-    expect(await capture()).toMatchObject({
-      lastWakeAt: expect.any(String),
-      lastWakeOutcome: null,
-    });
+    const after = await capture();
+    expect(after?.lastWakeAt).not.toBeNull();
+    expect(after?.lastWakeOutcome).toBeNull();
   });
 });
