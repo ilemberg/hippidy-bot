@@ -15,6 +15,7 @@ import {
 import { runBriefs, type BriefDeps } from "./briefs.ts";
 import { runCapture, type CaptureDeps } from "./capture.ts";
 import { runChecker, type CheckerDeps } from "./checker.ts";
+import { runGoal, type GoalDeps } from "./goals.ts";
 
 // The scheduler (slice 4.1, decision 215), run from reconcile: makes the built-in jobs, takes
 // each due job once, checks its monthly cap, runs it and logs the wake, silent ones included
@@ -40,10 +41,12 @@ export interface JobDeps {
   briefs?: Omit<BriefDeps, "db" | "place"> | undefined;
   /** The checker's GitHub client, review token and reviewer (slice 4.3). */
   checker?: CheckerDeps | undefined;
+  /** What goals need: GitHub, the brief writer, the tracker and the loop (slice 4.4). */
+  goals?: GoalDeps | undefined;
   now?: () => Date;
 }
 
-type Runner = (deps: JobDeps, place: Place, log: Logger) => Promise<WakeResult>;
+type Runner = (deps: JobDeps, place: Place, log: Logger, job: Job) => Promise<WakeResult>;
 
 const RUNNERS: Record<JobKind, Runner> = {
   async capture(deps, _place, log) {
@@ -101,6 +104,9 @@ const RUNNERS: Record<JobKind, Runner> = {
   },
   async checker(deps, _place, log) {
     return runChecker(deps.checker, deps.db, log);
+  },
+  async goal(deps, place, log, job) {
+    return runGoal(deps.goals, deps.db, place, job, log);
   },
 };
 
@@ -170,7 +176,7 @@ export async function runJobs(deps: JobDeps, log: Logger): Promise<JobsRunResult
         jobLog.warn("job.capped", { capCents: job.capCents });
         continue;
       }
-      const wake = await RUNNERS[job.kind](deps, place, jobLog);
+      const wake = await RUNNERS[job.kind](deps, place, jobLog, job);
       await finishWake(deps.db, wakeId, wake);
       if (wake.outcome === "said") result.said++;
       if (wake.outcome === "failed") {

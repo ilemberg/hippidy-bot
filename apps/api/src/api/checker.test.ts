@@ -10,6 +10,7 @@ import {
   type PostedReview,
   type PullRequestDiff,
   type PullRequests,
+  type PullRequestState,
 } from "../github/pulls.ts";
 import { createBrief } from "../store/changes.ts";
 import { findOrCreateConversation } from "../store/conversations.ts";
@@ -62,6 +63,12 @@ class FakePulls implements PullRequests {
   tooLarge = new Set<number>();
   /** Times the reviews were listed. */
   listed = 0;
+  /** Where each pull request is, for goals (slice 4.4); open unless set. */
+  states: Record<number, PullRequestState> = {};
+
+  pullState(number: number): Promise<PullRequestState> {
+    return Promise.resolve(this.states[number] ?? "open");
+  }
 
   listOpen(): Promise<OpenPullRequest[]> {
     return Promise.resolve(this.open.map((pull) => ({ ...pull })));

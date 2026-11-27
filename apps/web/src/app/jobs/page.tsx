@@ -12,6 +12,7 @@ import {
   spendText,
   type JobsView,
 } from "../../lib/jobs.ts";
+import { NEW_GOAL_PAGE } from "../../lib/goals.ts";
 import { serverDeps } from "../../lib/server.ts";
 
 export const dynamic = "force-dynamic";
@@ -35,8 +36,9 @@ export default async function Jobs() {
       <section className="about">
         <p>
           A job is something the bot does on its own, on a schedule: capture reads quiet threads for
-          decisions, briefs sends each person their morning brief. Each wake is kept, with what it
-          said or why it stayed silent, and what it cost.
+          decisions, briefs sends each person their morning brief, the checker reviews pull
+          requests, and a goal works through a feature&apos;s tickets in its thread. Each wake is
+          kept, with what it said or why it stayed silent, and what it cost.
         </p>
         <p className="muted">
           Each job has a monthly cap; at its cap it stops itself until the month turns or someone
@@ -80,6 +82,12 @@ function View({ view }: { view: JobsView }) {
               <p className="muted">{budgetText(view.list.value.jobs)}</p>
             </>
           )}
+          <p>
+            <a className="button" href={NEW_GOAL_PAGE}>
+              New goal
+            </a>{" "}
+            <span className="muted">for a feature&apos;s tickets, in a thread the bot is in.</span>
+          </p>
           <footer className="muted">
             <a href="/">Agents at work</a> · <a href="/decisions">Decisions</a> ·{" "}
             <a href="/areas">Areas</a> · <a href="/conflicts">Conflicts</a> ·{" "}

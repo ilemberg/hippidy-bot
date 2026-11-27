@@ -7,6 +7,7 @@ export * from "./conversations.ts";
 export * from "./decisions.ts";
 export * from "./deliveries.ts";
 export * from "./errors.ts";
+export * from "./goals.ts";
 export * from "./jobs.ts";
 export * from "./jobs-edit.ts";
 export * from "./listening.ts";

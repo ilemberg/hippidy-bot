@@ -1,6 +1,16 @@
 import { Anthropic } from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { oneLine } from "./extractor.ts";
+import {
+  callCostMicros,
+  estimatedUsage,
+  ONE_CALL_MODEL,
+  ONE_CALL_PRICE_MICROS,
+  usageOf,
+  type CallUsage,
+} from "./usage.ts";
+
+export { estimatedUsage, priceOf, type ModelUsage } from "./usage.ts";
 
 // The model call behind the checker (slice 4.3, decision 219): one request per head commit, no
 // tools and no session, answered in a fixed JSON shape. The pull request, its description and
@@ -8,39 +18,17 @@ import { oneLine } from "./extractor.ts";
 // do is say something wrong in a comment.
 
 /** Claude Opus 5.5, at medium effort. */
-export const REVIEW_MODEL = "claude-opus-5-5";
+export const REVIEW_MODEL = ONE_CALL_MODEL;
 /** Most tokens of one answer, thinking included. */
 export const REVIEW_MAX_TOKENS = 8_000;
 /** How long one call may take, inside the function's time. */
 export const REVIEW_TIMEOUT_MS = 100_000;
 
-/** List price of a model, in millionths of a dollar per token. */
-interface Price {
-  inputPerToken: number;
-  outputPerToken: number;
-}
-
 /** List prices of `REVIEW_MODEL` ($4 and $20 per million tokens), in millionths of a dollar. */
-export const REVIEW_PRICE_MICROS: Price = { inputPerToken: 4, outputPerToken: 20 };
-/** The highest of the prices below, for any other model or one not named. */
-const HIGHEST_PRICE: Price = { inputPerToken: 5, outputPerToken: 25 };
-
-/** List prices of the models a call may run on: the review model and its fallbacks. */
-const PRICES = new Map<string, Price>([
-  [REVIEW_MODEL, REVIEW_PRICE_MICROS],
-  ["claude-opus-5", HIGHEST_PRICE],
-  ["claude-opus-4-8", HIGHEST_PRICE],
-]);
-
-/** What a model's tokens cost; an unknown model at the highest price. */
-export function priceOf(model: string | null): Price {
-  return (model === null ? undefined : PRICES.get(model)) ?? HIGHEST_PRICE;
-}
+export const REVIEW_PRICE_MICROS = ONE_CALL_PRICE_MICROS;
 
 /** Most characters of a pull request's description put before the model. */
 export const MAX_DESCRIPTION_CHARACTERS = 8_000;
-/** Characters per token for estimating a call that failed after it was sent. */
-const CHARACTERS_PER_TOKEN = 3.5;
 
 export interface ReviewInput {
   repository: string;
@@ -66,25 +54,8 @@ export interface Review {
   tryByHand: string[];
 }
 
-/** Tokens one model used in a call. */
-export interface ModelUsage {
-  /** Null when not known: priced at the highest. */
-  model: string | null;
-  inputTokens: number;
-  outputTokens: number;
-}
-
-export interface ReviewUsage {
-  inputTokens: number;
-  outputTokens: number;
-  /** The model the totals are priced at: `REVIEW_MODEL` when not given, the highest when null. */
-  model?: string | null;
-  /**
-   * Each model's part when the API reports them (a refusal retried on a fallback model runs
-   * two): when present, these are what is counted, each at its own model's price.
-   */
-  iterations?: ModelUsage[];
-}
+/** A call's tokens, by model (see `usage.ts`). */
+export type ReviewUsage = CallUsage;
 
 export type ReviewResult =
   | { kind: "ok"; review: Review; usage: ReviewUsage }
@@ -96,49 +67,8 @@ export interface PullRequestReviewer {
   review(input: ReviewInput): Promise<ReviewResult>;
 }
 
-function costOf(part: ModelUsage): number {
-  const price = priceOf(part.model);
-  return part.inputTokens * price.inputPerToken + part.outputTokens * price.outputPerToken;
-}
-
 /** What a call cost at list price, in millionths of a dollar: every model it ran on. */
-export function reviewCostMicros(usage: ReviewUsage | null): number {
-  if (usage === null) return 0;
-  if (usage.iterations !== undefined && usage.iterations.length > 0) {
-    return usage.iterations.reduce((sum, part) => sum + costOf(part), 0);
-  }
-  return costOf({
-    model: usage.model === undefined ? REVIEW_MODEL : usage.model,
-    inputTokens: usage.inputTokens,
-    outputTokens: usage.outputTokens,
-  });
-}
-
-/**
- * What a call that failed after it was sent is counted at, since the API may have run it
- * without answering: its input at about 3.5 characters a token, at the highest input price.
- * An over-count keeps the job under its cap; 0 would let failures spend unseen.
- */
-export function estimatedUsage(characters: number): ReviewUsage {
-  return {
-    inputTokens: Math.ceil(characters / CHARACTERS_PER_TOKEN),
-    outputTokens: 0,
-    model: null,
-  };
-}
-
-/** Each model's part of a response's usage, when the API reports them. */
-function iterationsOf(
-  iterations: Anthropic.Beta.BetaIterationsUsage | null | undefined,
-): ModelUsage[] | undefined {
-  if (iterations === null || iterations === undefined || iterations.length === 0) return undefined;
-  return iterations.map((part) => ({
-    // A compaction names no model; a sampling may not either.
-    model: "model" in part ? (part.model ?? null) : null,
-    inputTokens: part.input_tokens,
-    outputTokens: part.output_tokens,
-  }));
-}
+export const reviewCostMicros: (usage: ReviewUsage | null) => number = callCostMicros;
 
 export const REVIEW_SYSTEM = `You review one pull request for a small team, before a person decides whether to merge it.
 
@@ -281,14 +211,7 @@ export function createAnthropicReviewer(client: Anthropic): PullRequestReviewer 
           usage: estimatedUsage(REVIEW_SYSTEM.length + content.length),
         };
       }
-      const iterations = iterationsOf(response.usage.iterations);
-      const usage: ReviewUsage = {
-        inputTokens: response.usage.input_tokens,
-        outputTokens: response.usage.output_tokens,
-        // Another model's answer is priced as that model's (an unknown one at the highest).
-        ...(response.model === REVIEW_MODEL ? {} : { model: response.model }),
-        ...(iterations === undefined ? {} : { iterations }),
-      };
+      const usage = usageOf(response);
       if (response.stop_reason === "refusal") return { kind: "refused", usage };
       if (response.stop_reason === "max_tokens") return { kind: "cut_off", usage };
       const text = response.content

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { goalSchema } from "./goals.ts";
 
 // Standing jobs (wave 4, slice 4.1, decisions 214 and 215): what the bot is responsible for,
 // each wake it makes, and what it costs.
@@ -8,9 +9,9 @@ const person = z.strictObject({ actorId: z.string(), name: z.string().nullable()
 
 /**
  * The kinds of job: capture (2.5) and briefs (3.4) first, then the checker (4.3), which reviews
- * pull requests; goals come later.
+ * pull requests, and goals (4.4), which people make to work through a feature's tickets.
  */
-export const jobKindSchema = z.enum(["capture", "briefs", "checker"]);
+export const jobKindSchema = z.enum(["capture", "briefs", "checker", "goal"]);
 export type JobKind = z.infer<typeof jobKindSchema>;
 
 /** `capped`: it reached its monthly cap and paused itself (rule 17 of `wave-4.md`). */
@@ -56,11 +57,12 @@ export const jobListSchema = z.strictObject({ jobs: z.array(jobSchema) });
 export type JobList = z.infer<typeof jobListSchema>;
 
 /**
- * Response of `GET /v1/jobs/:name`: a job, its latest wakes (newest first), and the changes
- * people made to it (oldest first, slice 4.2).
+ * Response of `GET /v1/jobs/:name`: a job, its latest wakes (newest first), the changes people
+ * made to it (oldest first, slice 4.2), and, for a goal, its thread and tickets (slice 4.4).
  */
 export const jobDetailSchema = z.strictObject({
   job: jobSchema,
+  goal: goalSchema.nullable(),
   wakes: z.array(jobWakeSchema),
   history: z.array(
     z.strictObject({

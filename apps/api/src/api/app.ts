@@ -24,6 +24,9 @@ import {
   listWaitsQuerySchema,
   taskKeySchema,
   editJobRequestSchema,
+  createGoalRequestSchema,
+  editGoalRequestSchema,
+  type GoalActionResult,
   type JobActionResult,
   type JobDetail,
   type JobList,
@@ -77,11 +80,13 @@ import { requireServiceOrPerson, requireServiceToken } from "./auth.ts";
 import { startBriefByPerson, syncChange } from "./changes.ts";
 import type { CaptureDeps } from "./capture.ts";
 import type { CheckerServices } from "./checker.ts";
+import { createGoalForPerson, editGoalForPerson, type GoalServices } from "./goals.ts";
 import { namePullRequestAreas } from "./areas.ts";
 import { settleConflictByPerson } from "./conflicts.ts";
 import { myBrief } from "./briefs.ts";
 import { runJobs } from "./jobs.ts";
 import { editJob, findJob, jobHistory, jobWakes, listJobs } from "../store/jobs.ts";
+import { findGoal, goalView } from "../store/goals.ts";
 import { setBriefs } from "../store/briefs.ts";
 import { createTaskSource, type TaskSource } from "../tasks/provider.ts";
 import {
@@ -139,6 +144,8 @@ export interface ApiDeps {
   capture?: CaptureDeps | undefined;
   /** The checker's GitHub client, review token and reviewer (slice 4.3). */
   checker?: CheckerServices | undefined;
+  /** Goals' GitHub client and brief writer (slice 4.4). */
+  goals?: GoalServices | undefined;
   /** Where tasks come from (slice 3.3). Built with storage, whether or not the agent is. */
   tasks?: TaskSource | undefined;
   /** The web app's origin, for the links in briefs (slice 3.4). */
@@ -986,11 +993,56 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
       return errorResponse(c, 503, "not_configured", "Storage is not configured");
     const job = await findJob(at.db, at.place, c.req.param("name"));
     if (job === undefined) return errorResponse(c, 404, "not_found", "No such job");
+    const goal = job.kind === "goal" ? await findGoal(at.db, job.id) : undefined;
     const body: JobDetail = {
       job,
+      goal: goal === undefined ? null : goalView(goal, taskSource(at.db).provider),
       wakes: await jobWakes(at.db, job.id),
       history: await jobHistory(at.db, job.id),
     };
+    return c.json(body);
+  });
+
+  // A signed-in person makes a goal for a thread the bot is in, and changes its tickets and
+  // limit, on the version they saw (slice 4.4, decision 221). Never the service token, never a
+  // job (G16): who acts is the person token's.
+  api.post("/v1/goals", people, limitBody, async (c) => {
+    const actor = writer(c);
+    if (actor === undefined) {
+      return errorResponse(c, 400, "invalid_request", "Only a signed-in person makes goals");
+    }
+    const parsed = createGoalRequestSchema.safeParse((await jsonBody(c))?.body);
+    if (!parsed.success) return errorResponse(c, 400, "invalid_request", "Request body is invalid");
+    const at = storage(c);
+    if (at === undefined)
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    const result = await createGoalForPerson(at.db, taskSource(at.db), actor, parsed.data);
+    c.var.log.info("goal.create", { status: result.status, tickets: parsed.data.tickets.length });
+    const body: GoalActionResult = result;
+    return c.json(body, result.status === "created" ? 201 : 200);
+  });
+
+  api.patch("/v1/goals/:jobId", people, limitBody, async (c) => {
+    const actor = writer(c);
+    if (actor === undefined) {
+      return errorResponse(c, 400, "invalid_request", "Only a signed-in person changes goals");
+    }
+    const jobId = conversationIdSchema.safeParse(c.req.param("jobId"));
+    if (!jobId.success) return errorResponse(c, 404, "not_found", "No such goal");
+    const parsed = editGoalRequestSchema.safeParse((await jsonBody(c))?.body);
+    if (!parsed.success) return errorResponse(c, 400, "invalid_request", "Request body is invalid");
+    const at = storage(c);
+    if (at === undefined)
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    const result = await editGoalForPerson(
+      at.db,
+      taskSource(at.db),
+      actor,
+      jobId.data,
+      parsed.data,
+    );
+    c.var.log.info("goal.edit", { jobId: jobId.data, status: result.status });
+    const body: GoalActionResult = result;
     return c.json(body);
   });
 
@@ -1127,8 +1179,9 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
     if (result.checked > 0 || backfilled > 0) {
       c.var.log.info("reconcile.done", { ...result, backfilled });
     }
-    // Last, the standing jobs (slice 4.1): capture (2.5), briefs (3.4) and the checker (4.3), after
-    // every conversation has been let go, each wake logged, and never failing reconcile.
+    // Last, the standing jobs (slice 4.1): capture (2.5), briefs (3.4), the checker (4.3) and
+    // goals (4.4), after every conversation has been let go, each wake logged, and never failing
+    // reconcile.
     const jobs = await runJobs(
       {
         db: deps.conversations.db,
@@ -1148,6 +1201,16 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
           deps.checker === undefined
             ? undefined
             : { ...deps.checker, conversations: deps.conversations },
+        // Goals (slice 4.4) read the team's tracker and post in their threads through the loop.
+        goals:
+          deps.goals === undefined
+            ? undefined
+            : {
+                ...deps.goals,
+                tasks: taskSource(deps.conversations.db),
+                conversations: deps.conversations,
+                webBaseUrl: deps.webBaseUrl,
+              },
       },
       c.var.log.child({ area: "jobs" }),
     );

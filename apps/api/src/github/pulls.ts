@@ -76,6 +76,32 @@ export interface PullRequests {
     review: { commitId: string; body: string },
     reviewToken: string,
   ): Promise<{ url: string }>;
+  /** Where one pull request is: still open, merged, or closed without merging (slice 4.4). */
+  pullState(number: number): Promise<PullRequestState>;
+}
+
+/** Where a pull request is. */
+export type PullRequestState = "open" | "merged" | "closed";
+
+const pullSchema = z.object({
+  state: z.string(),
+  merged: z.boolean().nullable().optional(),
+  merged_at: z.string().nullable().optional(),
+});
+
+/**
+ * The number of a pull request of `repository` from its link
+ * (`https://github.com/owner/name/pull/12`, with anything after it), or undefined for a link
+ * to another repository or not to a pull request.
+ */
+export function pullNumberOf(url: string, repository: string): number | undefined {
+  const match =
+    /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/([1-9]\d{0,9})(?:[/?#].*)?$/i.exec(
+      url.trim(),
+    );
+  if (match === null) return undefined;
+  const of = `${match[1] ?? ""}/${match[2] ?? ""}`.toLowerCase();
+  return of === repository.toLowerCase() ? Number(match[3]) : undefined;
 }
 
 const pullsSchema = z.array(
@@ -216,6 +242,19 @@ export function createGitHubPulls(options: {
         timeoutMs: 15_000,
       });
       return { url: reviewSchema.parse(await response.json()).html_url };
+    },
+
+    async pullState(number) {
+      const response = await call(`/repos/${repository}/pulls/${String(number)}`, {
+        token: options.token,
+        accept: "application/vnd.github+json",
+        timeoutMs: 10_000,
+      });
+      const pull = pullSchema.parse(await response.json());
+      if (pull.merged === true || (pull.merged_at !== null && pull.merged_at !== undefined)) {
+        return "merged";
+      }
+      return pull.state === "closed" ? "closed" : "open";
     },
   };
 }
