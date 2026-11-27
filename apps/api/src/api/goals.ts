@@ -176,10 +176,11 @@ function noBrief(result: BriefWriteResult): string {
   return `the model call failed: ${"error" in result ? result.error : "no answer"}`;
 }
 
-/** What a wake did, to say in its summary. */
+/** What a wake did, to say in its summary, and what its model call cost once it was made. */
 interface Said {
   events: string[];
   queued: number;
+  costMicros: number;
 }
 
 /** A reply line for the goal's thread, keyed to its ticket and event so it is queued once. */
@@ -206,12 +207,23 @@ export async function runGoal(
     return { outcome: "silent", summary: "it has no thread or tickets", costMicros: 0 };
   }
   const conversation = await getConversation(db, goal.conversationId);
-  const said: Said = { events: [], queued: 0 };
+  const said: Said = { events: [], queued: 0, costMicros: 0 };
   const notes: string[] = [];
   try {
     await settle(deps, db, place, job, goal, conversation, said, notes, log);
     const result = await briefNext(deps, db, place, job, goal, conversation, said, notes, log);
     return result;
+  } catch (error) {
+    // A step after the model call failed: the wake fails, but what the call cost is kept on it,
+    // under the cap (from the review). Before any call, the scheduler logs the failure.
+    if (said.costMicros === 0) throw error;
+    log.error("goal.failed_after_call", { error });
+    return {
+      outcome: "failed",
+      summary: [...said.events, "failed after writing a brief", ...notes].join("; "),
+      costMicros: said.costMicros,
+      error: error instanceof Error ? error.message : String(error),
+    };
   } finally {
     // Whatever happened after, what was queued is posted now (outside any transaction).
     if (said.queued > 0 && deps?.conversations !== undefined) {
@@ -249,6 +261,11 @@ async function settle(
           log.warn("goal.pull_state_failed", { ticket: ticket.key, error });
           return undefined;
         });
+        if (pull === undefined) {
+          // Not even a stop settles it until GitHub answers: it may have merged (from the review).
+          unread++;
+          continue;
+        }
       }
       if (pull === undefined) unread++;
     }
@@ -262,6 +279,10 @@ async function settle(
         provider === "builtin"
           ? `${ticket.key}'s pull request ${pullLink(url)} merged, so ${ticket.key} is done.`
           : `${ticket.key}'s pull request ${pullLink(url)} merged. I only read the tracker, so someone needs to close ${ticket.key} there.`;
+    } else if (pull === "closed" && url !== null && ticket.changeBusy) {
+      // Closed while its change (not stopped) has more work in hand, a follow-up brief or a
+      // worker on one: another pull request may follow, so its place is held (from the review).
+      continue;
     } else if (pull === "closed" && url !== null) {
       state = "closed";
       text = `${ticket.key}'s pull request ${pullLink(url)} was closed without merging, so the goal will not brief ${ticket.key} again.`;
@@ -429,6 +450,7 @@ async function briefNext(
         .map((other) => ({ key: other.key, title: other.title })),
     });
     const cost = callCostMicros(result.usage);
+    said.costMicros += cost;
     if (result.kind !== "ok") {
       const why = noBrief(result);
       const failure = await recordBriefFailure(db, ticket.id, why, (failures) =>

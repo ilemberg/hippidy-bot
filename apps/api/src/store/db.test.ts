@@ -1159,6 +1159,8 @@ describe("goals through postgres.js (slice 4.4)", () => {
       [k2, 2, "pending", 0],
     ]);
     expect(goal?.tickets[2]?.title).toBe("Two ");
+    // Whether a change has work in hand comes back as a boolean, false with no change.
+    expect(goal?.tickets.map((t) => t.changeBusy)).toEqual([true, false, false]);
     await db.query(`update changes set pull_request_url = $2 where id = $1`, [
       goal?.tickets[0]?.changeId,
       "https://github.com/ilemberg/pg-goals/pull/4",

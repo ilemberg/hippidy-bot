@@ -35,6 +35,12 @@ export interface StoredTicket {
   briefId: string | null;
   changeStatus: "waiting_for_start" | "started" | "stopped" | null;
   pullRequestUrl: string | null;
+  /**
+   * Whether its change still has work in hand: a brief not yet handed to the worker (a
+   * follow-up waiting for Start, say) or a worker still on one. Its pull request may then be
+   * followed by another, so a closed one does not settle it yet.
+   */
+  changeBusy: boolean;
   failures: number;
   settledAt: Date | null;
 }
@@ -61,6 +67,7 @@ const ticketRow = z.object({
   brief_id: z.string().nullable(),
   change_status: z.enum(["waiting_for_start", "started", "stopped"]).nullable(),
   pull_request_url: z.string().nullable(),
+  change_busy: z.boolean().nullable(),
   failures: z.number().int(),
   settled_at: z.date().nullable(),
 });
@@ -77,7 +84,13 @@ const goalRow = z.object({
 async function ticketsOf(db: Db, jobId: string): Promise<StoredTicket[]> {
   const rows = await db.query(
     `select t.id, t.key, t.position, t.title, t.url, t.state, t.change_id, t.brief_id,
-            c.status as change_status, c.pull_request_url, t.failures, t.settled_at
+            c.status as change_status, c.pull_request_url,
+            (c.status <> 'stopped'
+             and (c.waiting_since is not null
+                  or exists (select 1 from change_briefs b
+                             where b.change_id = c.id and b.worker_event_id is null
+                               and b.gave_up_at is null))) as change_busy,
+            t.failures, t.settled_at
      from goal_tickets t left join changes c on c.id = t.change_id
      where t.job_id = $1
      order by t.position, t.key`,
@@ -96,6 +109,7 @@ async function ticketsOf(db: Db, jobId: string): Promise<StoredTicket[]> {
       briefId: r.brief_id,
       changeStatus: r.change_status,
       pullRequestUrl: r.pull_request_url,
+      changeBusy: r.change_busy === true,
       failures: r.failures,
       settledAt: r.settled_at,
     };
@@ -290,6 +304,31 @@ export async function editGoal(
   request: EditGoalRequest,
   checked: ReadonlyMap<string, CheckedTicket>,
 ): Promise<GoalWrite> {
+  try {
+    return await editGoalOnce(db, actor, jobId, request, checked);
+  } catch (error) {
+    if (error instanceof TicketsChangedMeanwhile) return { status: "changed", name: error.goal };
+    throw error;
+  }
+}
+
+/** A ticket to be removed was briefed after it was read: the edit is undone, as changed. */
+class TicketsChangedMeanwhile extends Error {
+  readonly goal: string;
+  constructor(goal: string) {
+    super(`a ticket of the ${goal} goal was briefed while it was being changed`);
+    this.name = "TicketsChangedMeanwhile";
+    this.goal = goal;
+  }
+}
+
+async function editGoalOnce(
+  db: Db,
+  actor: AreaActor,
+  jobId: string,
+  request: EditGoalRequest,
+  checked: ReadonlyMap<string, CheckedTicket>,
+): Promise<GoalWrite> {
   return db.transaction(async (tx) => {
     const jobs = await tx.query(
       `select j.name, j.version, g.open_limit from jobs j join goals g on g.job_id = j.id
@@ -302,6 +341,9 @@ export async function editGoal(
       .object({ name: z.string(), version: z.number().int(), open_limit: z.number().int() })
       .parse(jobs[0]);
     if (job.version !== request.version) return { status: "changed", name: job.name };
+    // A wake marks a ticket briefed without the job's lock: its tickets' rows are locked too,
+    // so one briefed since they were read cannot be removed (from the review).
+    await tx.query(`select id from goal_tickets where job_id = $1 order by id for update`, [jobId]);
     const current = await ticketsOf(tx, jobId);
     const keys = request.tickets ?? current.map((ticket) => ticket.key);
     const kept = new Set(keys);
@@ -320,10 +362,18 @@ export async function editGoal(
     if (JSON.stringify(before) === JSON.stringify(after)) {
       return { status: "unchanged", name: job.name };
     }
-    await tx.query(`delete from goal_tickets where job_id = $1 and not (key = any($2::text[]))`, [
-      jobId,
-      keys,
-    ]);
+    // Only a ticket never briefed is removed, whatever was read: one briefed meanwhile undoes
+    // the edit rather than leave its change outside the goal and its limit.
+    const removing = current.filter((ticket) => !kept.has(ticket.key));
+    const removed = await tx.query(
+      `delete from goal_tickets
+       where job_id = $1 and not (key = any($2::text[]))
+         and state in ('pending', 'done_elsewhere', 'skipped')
+         and change_id is null and brief_id is null
+       returning key`,
+      [jobId, keys],
+    );
+    if (removed.length !== removing.length) throw new TicketsChangedMeanwhile(job.name);
     // Out of the way first, then in their new places.
     await tx.query(`update goal_tickets set position = position + 50 where job_id = $1`, [jobId]);
     for (const [index, key] of keys.entries()) {

@@ -19,6 +19,8 @@ import type {
   PullRequestState,
 } from "../github/pulls.ts";
 import { createBrief, startBrief, stopChanges } from "../store/changes.ts";
+import type { Db } from "../store/db.ts";
+import { editGoal } from "../store/goals.ts";
 import { findOrCreateConversation } from "../store/conversations.ts";
 import { listJobs } from "../store/jobs.ts";
 import { createTask } from "../store/tasks.ts";
@@ -451,6 +453,48 @@ describe("changing a goal", () => {
   });
 });
 
+/** A person started the ticket's brief, the worker took it and is done with it. */
+async function handedOver(key: string): Promise<void> {
+  const { changeId, briefId } = await ticketChange(key);
+  await startBrief(db, briefId, { ...place, actorId: "U2", name: "Ada" });
+  await db.query(`update change_briefs set worker_event_id = $2 where id = $1`, [
+    briefId,
+    `sevt_${key}`,
+  ]);
+  await db.query(`update changes set waiting_since = null where id = $1`, [changeId]);
+}
+
+describe("a goal changed while a wake briefs it", () => {
+  it("a ticket briefed after the edit read it is not removed: the edit is refused as changed", async () => {
+    const s = await setup();
+    await s.create({ tickets: ["T-1", "T-2"] });
+    const jobId = await goalJobId();
+    // A wake marks T-2 briefed between the edit's read of the tickets and its removal of T-2.
+    const racing: Db = {
+      query: (text, params) => db.query(text, params),
+      transaction: (work) =>
+        db.transaction((tx) =>
+          work({
+            ...tx,
+            query: async (text, params) => {
+              if (text.trimStart().startsWith("delete from goal_tickets")) {
+                await tx.query(`update goal_tickets set state = 'briefed' where key = 'T-2'`);
+              }
+              return tx.query(text, params);
+            },
+          }),
+        ),
+    };
+    const actor = { ...place, actorId: "U1", name: "Grace" };
+    expect(
+      await editGoal(racing, actor, jobId, { version: 1, tickets: ["T-1"] }, new Map()),
+    ).toEqual({ status: "changed", name: "export" });
+    expect((await tickets()).map((t) => t.key)).toEqual(["T-1", "T-2"]);
+    const [job] = await db.query(`select version from jobs where id = $1`, [jobId]);
+    expect(job).toEqual({ version: 1 });
+  });
+});
+
 describe("a goal's wakes", () => {
   it("posts its first brief in its thread, needing Start, with its cost on the wake", async () => {
     const s = await setup();
@@ -559,6 +603,7 @@ describe("a goal's wakes", () => {
     await s.create({ tickets: ["T-1", "T-2"], limit: 2 });
     await s.wake();
     await s.wake();
+    await handedOver("T-1");
     await openPullRequest("T-1", 7);
     s.pulls.states[7] = "closed";
     expect(await s.wake()).toMatchObject({ outcome: "said", summary: "T-1 closed" });
@@ -594,6 +639,82 @@ describe("a goal's wakes", () => {
     s.pulls.states[9] = "merged";
     await stopChanges(db, s.conversationId);
     expect(await s.wake()).toMatchObject({ summary: "T-1 merged; every ticket is settled" });
+  });
+
+  it("a stopped change whose pull request GitHub cannot read waits for GitHub, so a merge is not hidden", async () => {
+    const s = await setup();
+    await s.create({ tickets: ["T-1"] });
+    await s.wake();
+    await handedOver("T-1");
+    await openPullRequest("T-1", 9);
+    await stopChanges(db, s.conversationId);
+    s.pulls.failing.add(9);
+    expect(await s.wake()).toEqual({
+      outcome: "silent",
+      summary: "1 change open; no ticket left to brief; 1 pull request not read from GitHub",
+      cost: 0,
+    });
+    expect((await tickets())[0]).toMatchObject({ state: "briefed" });
+    s.pulls.failing.delete(9);
+    s.pulls.states[9] = "merged";
+    expect(await s.wake()).toMatchObject({ summary: "T-1 merged; every ticket is settled" });
+    const [task] = await db.query(`select status from tasks where number = 1`);
+    expect(task).toEqual({ status: "done" });
+  });
+
+  it("a pull request closed while its change has more work in hand holds its place", async () => {
+    const s = await setup();
+    await s.create({ tickets: ["T-1", "T-2"], limit: 1 });
+    await s.wake();
+    await handedOver("T-1");
+    await openPullRequest("T-1", 7);
+    s.pulls.states[7] = "closed";
+    // Someone asks in the thread for another try: a follow-up brief of the same change.
+    const t1 = await ticketChange("T-1");
+    await createBrief(db, {
+      conversationId: s.conversationId,
+      customToolUseId: "toolu_follow_up",
+      changeId: t1.changeId,
+      requestedBy: { ...place, actorId: "U2", name: "Ada" },
+      brief: { title: "Try again", what: "W", why: "Y", doneWhen: "D", links: [] },
+      startReason: undefined,
+      turnEventIds: [],
+    });
+    expect(await s.wake()).toEqual({
+      outcome: "silent",
+      summary: "1 of 1 changes open; waiting",
+      cost: 0,
+    });
+    expect((await tickets())[0]).toMatchObject({ key: "T-1", state: "briefed" });
+    expect(s.writer.calls).toHaveLength(1);
+    // The worker opens another pull request, which merges: the ticket is merged, not closed.
+    await db.query(
+      `update change_briefs set worker_event_id = 'sevt_follow_up'
+       where custom_tool_use_id = 'toolu_follow_up'`,
+    );
+    await openPullRequest("T-1", 8);
+    s.pulls.states[8] = "merged";
+    expect(await s.wake()).toMatchObject({ summary: "T-1 merged; posted the brief for T-2" });
+    expect(s.deliverer.replies()).toEqual([
+      `T-1's pull request [#8](https://github.com/${REPO}/pull/8) merged, so T-1 is done.`,
+    ]);
+  });
+
+  it("a wake that fails after its model call keeps the call's cost", async () => {
+    const s = await setup();
+    await s.create({ tickets: ["T-1"] });
+    // A brief the database will not keep (its title is over 200 characters): the call is paid.
+    s.writer.answer({
+      kind: "ok",
+      brief: { title: "x".repeat(300), what: "W", why: "Y", doneWhen: "D" },
+      usage: { inputTokens: 5_000, outputTokens: 1_000 },
+    });
+    expect(await s.wake()).toMatchObject({
+      outcome: "failed",
+      summary: "failed after writing a brief",
+      cost: 40_000,
+    });
+    expect((await tickets())[0]).toMatchObject({ state: "pending" });
   });
 
   it("never briefs a ticket twice", async () => {
