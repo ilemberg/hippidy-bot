@@ -86,7 +86,11 @@ Planned in detail in `slice-4-4.md` (decision 221).
   brief for the next ticket (as 2.1, so a person starts it when the start rule says so); when
   a pull request is merged it marks the ticket. It says what it did in the goal's thread.
 
-## Slice 4.5 (outline)
+## Slice 4.5
+
+Planned in detail in `slice-4-5.md` (decision 223).
+
+### The outline it came from
 
 - The web app's home: your brief (3.4), the jobs and their spend this month, and the team's
   scorecard (decisions made, conflicts settled, waits ended, pull requests reviewed and merged,
