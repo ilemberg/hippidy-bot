@@ -123,7 +123,10 @@ export async function saveWrittenReview(
   );
 }
 
-/** Marks a review posted, with its link. */
+/**
+ * Marks a review posted, with its link. Nothing updates a posted review after this: the
+ * scorecard (slice 4.5) reads its `updated_at` as when it was posted.
+ */
 export async function markReviewPosted(db: Db, id: string, url: string): Promise<void> {
   await db.query(
     `update pull_request_reviews

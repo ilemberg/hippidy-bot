@@ -17,6 +17,7 @@ import type {
   Job,
   JobDetail,
   MyBrief,
+  Scorecard,
   Task,
   TaskDetail,
   Wait,
@@ -331,6 +332,21 @@ export const myBrief: MyBrief = {
   },
 };
 
+/** `GET /v1/scorecard` on Wednesday 25 November: this week from Monday the 23rd (slice 4.5). */
+export const scorecard: Scorecard = {
+  lastWeekStart: "2026-11-16T00:00:00.000Z",
+  thisWeekStart: "2026-11-23T00:00:00.000Z",
+  readAt: "2026-11-25T10:05:00.000Z",
+  counts: [
+    { kind: "decisions_made", thisWeek: 4, lastWeek: 2 },
+    { kind: "conflicts_settled", thisWeek: 1, lastWeek: 1 },
+    { kind: "waits_ended", thisWeek: 0, lastWeek: 3 },
+    { kind: "changes_started", thisWeek: 5, lastWeek: 2 },
+    { kind: "pull_requests_reviewed", thisWeek: 6, lastWeek: 4 },
+    { kind: "tickets_merged", thisWeek: 2, lastWeek: 0 },
+  ],
+};
+
 /** The capture job, active, $12.34 of its $40.00 spent this month (slices 4.1 and 4.2). */
 export const job: Job = {
   id: "2b3c4d5e-6f70-4a8b-9c0d-1e2f3a4b5c6d",
@@ -343,6 +359,7 @@ export const job: Job = {
   capCents: 4000,
   spentMicrosThisMonth: 12_340_000,
   lastWakeAt: "2026-11-25T11:58:00.000Z",
+  lastWakeOutcome: "silent",
   version: 3,
   createdAt: "2026-11-01T00:00:00.000Z",
 };
@@ -359,6 +376,7 @@ export const briefsJob: Job = {
   capCents: 100,
   spentMicrosThisMonth: 0,
   lastWakeAt: null,
+  lastWakeOutcome: null,
   version: 1,
 };
 

@@ -53,6 +53,7 @@ import {
   type ConversationDetail,
   type ConversationList,
   type MeResponse,
+  type Scorecard,
 } from "@hippidy/contracts";
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
@@ -87,6 +88,7 @@ import { myBrief } from "./briefs.ts";
 import { runJobs } from "./jobs.ts";
 import { editJob, findJob, jobHistory, jobWakes, listJobs } from "../store/jobs.ts";
 import { findGoal, goalView } from "../store/goals.ts";
+import { readScorecard } from "../store/scorecard.ts";
 import { setBriefs } from "../store/briefs.ts";
 import { createTaskSource, type TaskSource } from "../tasks/provider.ts";
 import {
@@ -1043,6 +1045,16 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
     );
     c.var.log.info("goal.edit", { jobId: jobId.data, status: result.status });
     const body: GoalActionResult = result;
+    return c.json(body);
+  });
+
+  // The team's scorecard (slice 4.5, decision 223): this week's counts against last week's,
+  // from the records alone. Read by the service and anyone signed in, for their workspace.
+  api.get("/v1/scorecard", readers, async (c) => {
+    const at = storage(c);
+    if (at === undefined)
+      return errorResponse(c, 503, "not_configured", "Storage is not configured");
+    const body: Scorecard = await readScorecard(at.db, at.place, new Date());
     return c.json(body);
   });
 
