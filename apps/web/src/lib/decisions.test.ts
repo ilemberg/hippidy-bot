@@ -121,9 +121,14 @@ describe("loadDecisions", () => {
         deps(api.fetch),
       );
     }
-    expect(api.calls.map((call) => call.url)).toEqual([
+    const urls = api.calls.map((call) => call.url);
+    expect(urls.slice(0, 2)).toEqual([
       "https://api.example.test/v1/decisions?q=postgres&status=rejected&limit=500",
       "https://api.example.test/v1/decisions?q=postgres&status=all&limit=500",
+    ]);
+    // An unknown status shows the default: active and proposed, asked for together, so in
+    // either order.
+    expect(urls.slice(2).sort()).toEqual([
       "https://api.example.test/v1/decisions?q=postgres&status=active&limit=500",
       "https://api.example.test/v1/decisions?q=postgres&status=proposed&limit=500",
     ]);
