@@ -1,6 +1,6 @@
 # Slice 4.5: the dashboard home
 
-Status: **built 2026-11-26, not merged (decision 223).** The wave is in `wave-4.md`.
+Status: **built 2026-11-26, reviewed 2026-11-27, not merged (decisions 223 and 224).** The wave is in `wave-4.md`.
 
 **Demo:** Ada signs in to the web app. The home page shows, from top to bottom: her brief for
 today (what is new for her, as the direct message of 3.4 would say it), the jobs with this
@@ -73,8 +73,10 @@ What the build decided that the plan did not say, or decided differently:
   from the decision log belong to no workspace; they are the team's, as on the decisions page,
   so they count for every workspace. Every other decision is its thread's workspace, or its
   decider's when it has no thread.
-- **Changes started** counts briefs started in the week, as the plan says, so a change whose
-  brief was revised and started again counts again.
+- **Changes started** counts each change once, in the week its first brief was started (by a
+  person or the start rule). A later brief of the same change is more work on it, not another
+  change, so it is not counted (changed after the review, decision 224; built first as one count
+  per brief started).
 - **Pull requests reviewed** counts reviews with status `posted`, by their `updated_at`: a posted
   review is never updated again, so that is when it was posted (said in `reviews.ts`). Reviews
   are of the deployment's repository, not of a thread, so they belong to the workspace whose
@@ -84,9 +86,18 @@ What the build decided that the plan did not say, or decided differently:
   job and its workspace.
 - **Indexes**: one partial index per count on its time column
   (`20261127191329_scorecard_indexes.sql`), additive only.
-- **A job's last wake's outcome** is new on the job (`lastWakeOutcome`, from its latest kept
-  wake; a wake still running reads as silent), so the home page shows it from `GET /v1/jobs`
-  without a call per job.
+- **A job's last wake's outcome** is new on the job (`lastWakeOutcome`; a wake still running
+  reads as silent), so the home page shows it from `GET /v1/jobs` without a call per job,
+  through the index on a job's wakes. It is the outcome of the wake at `lastWakeAt`, or null
+  when that wake is no longer kept (silent wakes are pruned after 14 days), never an older
+  wake's shown next to the last wake's time (from the review, decision 224).
+- **The review** (decision 224) also left some things as they are: imports from the decision
+  log count for every workspace, as the decisions page shows them to everyone; the decisions
+  page lists every decision, private channels' captures included, to anyone signed in, so the
+  narrower count shows nothing it hides; reviews count for the workspace with the checker job,
+  which is only the deployment's own (`SLACK_WORKSPACE_ID`), the only one that can sign in. The
+  jobs' schema is strict, so a web app older than the API (or newer) fails to read the jobs
+  until both have deployed, as at every change to a response; both deploy on merge.
 - **The home page** reads its four parts at once, each on its own: a part whose route fails or
   throws says "The API did not answer" with why, and the rest shows. Each count links to its
   page where there is one: decisions to `/decisions`, conflicts to `/conflicts`, waits to
